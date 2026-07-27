@@ -1,0 +1,10 @@
+# OS junk
+Thumbs.db
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Node (if a dev server gets added later)
+node_modules/

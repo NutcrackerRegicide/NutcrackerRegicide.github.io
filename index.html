@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<!-- v120 PWA: iOS Safari will NOT let a page hide its own URL bar. "Add to Home Screen" is the
+     only route to true fullscreen on iPhone, and these four lines are what make that launch
+     chrome-free. Android reads manifest.json for the same effect. -->
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Regicide">
+<meta name="theme-color" content="#1a2410">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="icon" href="assets/icon-192.png">
+<title>REGICIDE PVP — prototype</title>
+<script src="libs/three.min.js"></script>
+<script src="libs/CopyShader.js"></script>
+<script src="libs/LuminosityHighPassShader.js"></script>
+<script src="libs/EffectComposer.js"></script>
+<script src="libs/RenderPass.js"></script>
+<script src="libs/ShaderPass.js"></script>
+<script src="libs/UnrealBloomPass.js"></script>
+<script src="libs/GLTFLoader.js"></script>
+<script src="libs/peerjs.min.js"></script>
+<!-- baked Mixamo playback disabled (revert to procedural); re-enable by restoring this tag:
+<script src="assets/anims.js"></script> -->
+<script src="libs/SkeletonUtils.js"></script>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="resources" class="panel">
+  <span class="res"><span class="dot food"></span><span id="rfood">0</span></span>
+  <span class="res"><span class="dot gold"></span><span id="rgold">0</span></span>
+  <span class="res"><span class="dot stone"></span><span id="rstone">0</span></span>
+  <span class="res"><span class="dot wood"></span><span id="rwood">0</span></span>
+</div>
+<div id="roster" class="panel"></div>
+<div id="agebar" class="panel"></div>
+<div id="carry" class="panel">Carrying: <b id="carrytxt"></b> — deposit at Town Center</div>
+
+<div id="kings">
+  <div class="kingbox panel" id="kb0"><div class="lbl">♔ KING OSRIC (YOUR KING)</div><div class="bar"><i style="width:100%"></i></div></div>
+  <div class="kingbox panel" id="kb1"><div class="lbl">♚ KING VARGUS (SLAY HIM)</div><div class="bar"><i style="width:100%"></i></div></div>
+</div>
+
+<div id="objective" class="panel">⚔ Slay the enemy King before yours falls</div>
+
+<div id="playerhud" class="panel">
+  <div id="pclass">VILLAGER</div>
+  <div class="bar" id="phpbar"><i style="width:100%"></i></div>
+  <div id="ptip">E gather · B build · Space attack</div>
+</div>
+
+<div id="questhud" class="panel">
+  <div id="qlvl">⭐ LV 0 · 0 XP</div>
+  <div id="qtext">📜 No quest — E at the Town Board</div>
+  <div id="qbuffs" style="display:none"></div>
+</div>
+
+<div id="minimapwrap" class="panel"><canvas id="minimap" width="170" height="120"></canvas></div>
+<div id="feed"></div>
+<div id="crosshair"></div>
+<div id="lockhint" class="panel">Click to capture the mouse — Esc frees it</div>
+
+<div id="buildmenu" class="menu panel"></div>
+
+<div id="classmenu" class="menu panel"></div>
+
+<div id="smithmenu" class="menu panel"></div>
+
+<div id="help" class="panel">
+  <b>Click</b>capture mouse (Esc frees)<br>
+  <b>WASD</b>move &nbsp;<b>wheel</b>zoom<br>
+  <b>LMB</b>attack &nbsp;<b>RMB</b>block / aim<br>
+  <b>E</b>gather · build · barracks<br>
+  <b>B</b>build &nbsp;<b>R</b>class &nbsp;<b>G</b>rally &nbsp;<b>F</b>charge! &nbsp;<b>T</b>age up<br>
+  <b>V</b>respawn: TC⇄Castle &nbsp;<b>E</b>man towers · harvest corn<br>
+  <b>E</b>Town Board quests · Blacksmith buffs<br>
+  <b>P</b>pixel mode &nbsp;<b>H</b>hide panel
+</div>
+<div id="helptoggle" class="panel">H — controls</div>
+
+<div id="netstatus" class="panel"></div>
+<div id="scoreboard" class="panel"></div>
+
+<div class="overlay" id="namescreen">
+  <h1>REGICIDE <span class="pvp">PVP</span></h1>
+  <p class="tagline">Declare yourself, warrior — this name rides into every battle</p>
+  <div id="namerow">
+    <input id="playername" maxlength="14" placeholder="your name">
+    <button id="btnname">CONTINUE ⚔</button>
+  </div>
+</div>
+
+<div class="overlay" id="startmenu" style="display:none">
+  <h1>REGICIDE <span class="pvp">PVP</span></h1>
+  <p class="tagline">50v50 medieval war · every soldier is a player · slay the enemy King</p>
+  <div class="startbtns">
+    <button id="btnsolo">⚔ SOLO — vs 99 AI</button>
+    <div class="optline" id="solodiff">ENEMY AI
+      <button class="pick on" id="sdEasy">🌱 EASY</button>
+      <button class="pick" id="sdHard">🔥 HARD</button>
+    </div>
+    <button id="btnhost">⚑ HOST — open your own hall</button>
+    <button id="btnjoin">🛡 JOIN — browse halls or enter a code</button>
+    <button id="btnhow" class="howbtn">📜 HOW TO PLAY</button>
+    <button id="btnoptions" class="howbtn">⚙ AUDIO OPTIONS</button>
+  </div>
+  <div id="hostrow">
+    <div class="optline">MODE
+      <button class="pick on" id="hmPvp">⚔ PvP</button>
+      <button class="pick" id="hmCoop">🤝 CO-OP vs AI</button>
+    </div>
+    <div class="optline" id="hdiffline" style="display:none">ENEMY AI
+      <button class="pick on" id="hdEasy">🌱 EASY</button>
+      <button class="pick" id="hdHard">🔥 HARD</button>
+    </div>
+    <div class="optline">HALL
+      <button class="pick on" id="hvPub">🌐 PUBLIC</button>
+      <button class="pick" id="hvPriv">🔒 PRIVATE</button>
+      <input id="hostpw" maxlength="16" placeholder="password" style="display:none">
+    </div>
+    <button id="btnhostgo">⚑ OPEN THE GATES</button>
+  </div>
+  <div id="joinrow">
+    <select id="jointeam">
+      <option value="auto">AUTO</option>
+      <option value="blue">BLUE</option>
+      <option value="red">RED</option>
+    </select>
+    <input id="joincode" maxlength="13" placeholder="regicide-abcd">
+    <input id="joinpw" maxlength="16" placeholder="password (private halls)">
+    <button id="btnjoingo">RIDE</button>
+    <button id="btnbrowse">🔭 BROWSE</button>
+  </div>
+  <div id="serverlist" style="display:none"></div>
+  <p class="netnote">Multiplayer needs the game served over HTTP (not file://) —
+  host it free on Netlify Drop, or run <b>python -m http.server</b> in this folder.</p>
+  <p class="verstamp">v123</p>
+</div>
+
+<div class="overlay" id="howto">
+  <div id="howtobox">
+    <h2>📜 HOW TO PLAY</h2>
+    <div id="howtoscroll">
+      <div class="htsec"><h3>⚔ The Goal — Regicide</h3>
+        <p>Two kingdoms of 50. Kill the enemy <b>King</b> and the war is won (+500 pts to the slayer). If yours falls first, it's over — castles, walls and garrisons exist to keep him breathing. No priest can heal a king.</p></div>
+      <div class="htsec"><h3>🥾 You Are ONE Soldier</h3>
+        <p><span class="kbd">WASD</span> move · mouse steers the camera · <span class="kbd">LMB</span> attack · <span class="kbd">wheel</span> zoom. You're a single body among ~110 — the rest are AI (or your friends). Die and you respawn as a Villager at your Town Center (<span class="kbd">V</span> switches spawn to a forward castle; houses shorten the wait; your body lies where it fell).</p></div>
+      <div class="htsec"><h3>🌾 Economy — the Shared Warchest</h3>
+        <p>Walk to berries, trees, gold or stone and hold <span class="kbd">E</span> to gather (carry 20, deposit at the Town Center or a Storage Pit). Everything feeds ONE team stockpile that pays for troops, buildings and ages. Farms grow corn — work them or harvest ripe crop with <span class="kbd">E</span>. Stone is scarce: five piles on the whole map. Wood comes from chopping forests.</p></div>
+      <div class="htsec"><h3>⏳ The Six Ages</h3>
+        <p>Stone → Bronze → Iron → Classical → Medieval → Enlightenment. Bank food and press <span class="kbd">T</span> at your Town Center to advance. Each age unlocks buildings and upgrades every unit line's tier — and later-age troops are simply hardier.</p></div>
+      <div class="htsec"><h3>🏗 Building</h3>
+        <p><span class="kbd">B</span> opens the build menu; place a foundation and hold <span class="kbd">E</span> to swing the hammer. Houses speed respawns · Barracks/Archery Range/Stable/Temple/Siege Workshop train the lines · Walls & gates (yours open for you) · Watch/guard towers — climb in with <span class="kbd">E</span> and shoot from the deck · The Castle: forward spawn, drop-off, and a rain of arrows.</p></div>
+      <div class="htsec"><h3>🗡 Arms & the Wheel</h3>
+        <p>Press <span class="kbd">R</span> at a training building to re-arm (team resources pay). The wheel: <b>anti-cavalry</b> skewers horses ×3 · <b>ranged</b> outshoots spears · <b>melee & cavalry</b> run down archers. Melee: hold <span class="kbd">RMB</span> to block, tap it as a blow lands to PARRY. Ranged: hold <span class="kbd">RMB</span> to aim, <span class="kbd">LMB</span> for a hard skill shot. Catapults/trebuchets lob over walls with an aim ring — and their splash hits armies at FULL force, though arrows barely scratch the engines themselves (swords dismantle them). Cavalry dominates everything but spears. Dragoons carry a six-shot pistol (<span class="kbd">RMB</span>, no refills until you re-arm); the Musketeer fixes a BAYONET for anything at arm's length.</p></div>
+      <div class="htsec"><h3>⚑ Command — Rally & CHARGE</h3>
+        <p><span class="kbd">G</span> rallies your <b>five nearest</b> AI soldiers to your side (the <b>Bannerman</b> blacksmith buff adds one per stack — up to eight). Then <span class="kbd">F</span> sounds the <b>CHARGE</b>: they attack-move down your gaze — slaying units, razing buildings, storming even creep camps — and then HOLD that ground until you recall them with <span class="kbd">G</span> or re-aim with <span class="kbd">F</span>.</p></div>
+      <div class="htsec"><h3>✝ The Priest</h3>
+        <p>Trained at the Temple (Classical age). His aura mends nearby allies — and he can raise the dead: hold <span class="kbd">LMB</span> ~2s to channel (the orb turns gold), stand over a fallen ally, release to resurrect them at full health, keeping the class they died as. Ten seconds of faith between miracles. Cold iron stays dead — no siege engines.</p></div>
+      <div class="htsec"><h3>📜 Quests & the Blacksmith</h3>
+        <p>A <b>Town Board</b> stands beside each Town Center — press <span class="kbd">E</span> there for a random quest (25 different postings; E twice rerolls one you hate, on a 60s cooldown). Completing a quest earns <b>+1 Level and +1 XP</b> — the hardest pay 2. From the <b>Iron Age</b>, spend XP at the <b>Blacksmith</b> (100 wood, one per team, the AI builds one too) with <span class="kbd">E</span>: the smith lays out <b>THREE random buffs — you choose ONE</b> (1 XP; the same three wait until you pick, so no reroll-fishing) — sharper steel, thicker hide, faster feet, crits, lifesteal — stacking up to <b>×3 of a kind</b>. Your Level shines over your head for friend and foe alike. <b>Death wipes your level, XP and every buff</b> — glory is rented, never owned. Max level 20.</p></div>
+      <div class="htsec"><h3>🐴 Trade — the Kings Road</h3>
+        <p>Three neutral bazaars sit along the road between the thrones, evenly placed for both teams. Markets (max 5) send AI carts to haul gold — the deeper the route, the richer. Arm as a <b>Trader</b> to run routes yourself at 4× the pay. Scout-line cavalry trample farms and hunt carts: escort yours, plunder theirs.</p></div>
+      <div class="htsec"><h3>🐺 The Wilds — Creep Camps</h3>
+        <p>Six camps hide in pockets beyond the map's edge (corners + long-edge midpoints). Packs of 4-5 <b>wolves</b> guard a 300 FOOD chest; <b>barbarians</b> guard 300 GOLD. They leash to their camps and heal when left alone — and they will tear a lone soldier apart, so bring 2-3 allies. First boot on the chest takes it, <i>enemy boots included</i>. A new pack rises 3 minutes after a wipe and drags off unclaimed treasure.</p></div>
+      <div class="htsec"><h3>🛶 The Viking Shore</h3>
+        <p>A wrecked longship rots on a beach past the southern edge. At <b>15:00</b> a raid lands: a giant <b>Viking Chieftain</b> and ten raiders. Break the whole raid with a war party and TWIN chests drop — <b>500 food AND 500 gold</b> — each stealable separately. The next raid lands 15 minutes later and sweeps whatever nobody claimed.</p></div>
+      <div class="htsec"><h3>🏆 Scoring</h3>
+        <p>Deposits pay 1 pt per resource · kills pay the victim's cost (villagers 10) · healing pays per HP mended · resurrections 25 · chests pay their value · the regicide itself: 500. Hold <span class="kbd">TAB</span> for the scoreboard.</p></div>
+      <div class="htsec"><h3>🧠 The AI Marshals</h3>
+        <p>Every AI team rolls a <b>doctrine</b> at the horns — your scouts report it a minute in. <b>RUSH</b> throws early, relentless waves and hunts your villagers, carts and King. <b>BOOM</b> farms wide and races for the Enlightenment before crushing you with elite tiers. <b>TURTLE</b> raises walls, towers and twin castles, bleeds your attacks, then counterpunches with everything at once. <b>EXPANSIONIST</b> sprawls — pits, markets and endless fields. In SOLO and CO-OP the enemy AI has an <b>🌱 EASY / 🔥 HARD</b> dial: Hard thinks faster, counters your army's composition using the wheel, and runs its economy 20% hot.</p></div>
+      <div class="htsec"><h3>🌐 Multiplayer</h3>
+        <p>The host runs the war; guests' bodies answer instantly and the host's word is law. Hosts choose <b>⚔ PvP</b> (joiners pick BLUE or RED) or <b>🤝 Co-Op vs AI</b> (every joiner fights for BLUE against the Red AI), and open a <b>🌐 public</b> hall — visible in the JOIN screen's 🔭 server browser — or a <b>🔒 private</b> one, unlisted and guarded by a password (share the room code in Discord). Everyone must run the SAME version — hard-refresh after updates.</p></div>
+    </div>
+    <button id="btnhowback">⬅ BACK</button>
+  </div>
+</div>
+
+<div class="overlay" id="deathoverlay">
+  <h1>SLAIN</h1>
+  <p>You respawn as a Villager at your Town Center. Houses shorten this wait. Your gear is lost — re-arm at the Barracks (team resources). Your level, XP and blacksmith buffs die with you.</p>
+  <div id="deathtimer">10</div>
+</div>
+
+<div class="overlay" id="endoverlay">
+  <h1 id="endtitle">VICTORY</h1>
+  <p id="endtext"></p>
+  <button onclick="location.reload()">Fight again</button>
+</div>
+
+<div class="overlay" id="optionsscreen" style="display:none">
+  <div id="optbox" class="panel">
+    <h2>⚙ AUDIO</h2>
+    <div class="optrow"><label>Master</label><input type="range" id="volmaster" min="0" max="100" value="90"><span class="soon" id="volmasterv"></span></div>
+    <div class="optrow"><label>SFX</label><input type="range" id="volsfx" min="0" max="100" value="100"><span class="soon" id="volsfxv"></span></div>
+    <div class="optrow"><label>Ambience</label><input type="range" id="volambience" min="0" max="100" value="55"><span class="soon" id="volambiencev"></span></div>
+    <div class="optrow"><label>Music</label><input type="range" id="volmusic" min="0" max="100" value="30"><span class="soon" id="volmusicv"></span></div>
+    <div class="optrow dim"><label>Voice chat</label><input type="range" id="volvoip" min="0" max="100" value="100" disabled><span class="soon">soon</span></div>
+    <div class="optrow"><label>Mute</label><button id="btnmute">🔊 On</button><span class="soon">press M</span></div>
+    <button id="btnoptback">⬅ BACK</button>
+  </div>
+</div>
+<script src="js/00-data.js"></script>
+<script src="js/01-engine.js"></script>
+<script src="js/02-world.js"></script>
+<script src="js/03-buildings.js"></script>
+<script src="js/04-units.js"></script>
+<script src="js/05-combat.js"></script>
+<script src="js/06-input.js"></script>
+<script src="js/07-ai.js"></script>
+<script src="js/08-ui.js"></script>
+<script src="js/09-main.js"></script>
+<script src="js/10-net.js"></script>
+<script src="js/audio-data.js"></script>
+<script src="js/11-audio.js"></script>
+<script src="js/12-touch.js"></script>
+</body>
+</html>

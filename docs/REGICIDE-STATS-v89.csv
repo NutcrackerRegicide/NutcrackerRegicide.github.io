@@ -1,0 +1,233 @@
+### UNITS — one row per class. Edit numbers; leave id/name/line/rig columns alone.
+id,name,hp,dmg,spd,rng,cd_s,cost_food,cost_gold,cost_stone,cost_wood,ranged,mounted,bMult_vs_buildings,uMult_vs_units,splash_radius,heal_rng,heal_rate,line,age_unlock,tier
+villager,Villager,60,6,8.2,2.4,0.7,0,0,0,0,0,0,,,,,,civil,0,0
+king,King,320,13,8,2.6,0.8,0,0,0,0,0,0,,,,,,royal,0,0
+clubman,Club Man,100,10,8,2.4,0.8,40,0,0,0,0,0,1.5,,,,,melee,0,0
+shortsword,Short Swordsman,130,13,8,2.5,0.8,50,15,0,0,0,0,1.5,,,,,melee,1,1
+broadsword,Broad Swordsman,155,16,8,2.6,0.8,60,20,0,0,0,0,1.5,,,,,melee,2,2
+legionaire,Legionaire,185,19,8,2.6,0.8,70,30,0,0,0,0,1.5,,,,,melee,3,3
+vanguard,Vanguard,220,23,8,2.6,0.8,85,40,0,0,0,0,1.5,,,,,melee,4,4
+musketeer,Musketeer,110,30,7.6,26,2.2,70,90,0,0,1,0,,,,,,melee,5,5
+spearman,Spear Man,90,9,8,3.2,0.9,35,0,0,0,0,0,,,,,,anticav,0,0
+spearfighter,Spearfighter,115,11,8,3.2,0.9,45,0,0,10,0,0,,,,,,anticav,1,1
+impspear,Improved Spearfighter,135,13,8,3.3,0.9,55,0,0,15,0,0,,,,,,anticav,2,2
+hoplite,Hoplite,160,16,7.8,3.4,0.9,65,0,0,25,0,0,,,,,,anticav,3,3
+pikeman,Pikeman,190,19,7.6,3.5,0.9,75,0,0,35,0,0,,,,,,anticav,4,4
+halberdier,Halberdier,225,23,7.6,3.6,0.9,90,0,0,45,0,0,,,,,,anticav,5,5
+slinger,Slinger,70,8,8.2,16,1.2,0,10,0,30,1,0,,,,,,ranged,0,0
+archer,Archer,85,11,8,21,1.25,0,40,0,40,1,0,,,,,,ranged,1,1
+imparcher,Improved Archer,95,13,8,22,1.25,0,45,0,45,1,0,,,,,,ranged,2,2
+comparcher,Composite Archer,110,15,8,23,1.2,0,55,0,50,1,0,,,,,,ranged,3,3
+crossbowman,Crossbowman,125,19,7.8,24,1.5,0,65,0,60,1,0,,,,,,ranged,4,4
+skirmisher,Skirmisher,140,23,9,25,1.3,0,80,0,70,1,0,,,,,,ranged,5,5
+chariot,Chariot,150,13,11,2.8,0.85,90,40,0,0,0,1,,,,,,cavalry,1,1
+heavycav,Heavy Cavalry,180,16,12,2.8,0.85,105,55,0,0,0,1,,,,,,cavalry,2,2
+cataphract,Cataphract,215,19,13,2.8,0.85,120,70,0,0,0,1,,,,,,cavalry,3,3
+knight,Knight,250,23,13.5,2.8,0.85,135,85,0,0,0,1,,,,,,cavalry,4,4
+dragoon,Dragoon,270,26,14,2.8,0.85,150,100,0,0,0,1,,,,,,cavalry,5,5
+scout,Scout,125,9,14.5,2.8,0.7,80,0,0,0,0,1,,,,,,scoutline,1,1
+elitescout,Elite Scout Cavalry,170,13,15.5,2.8,0.7,100,20,0,0,0,1,,,,,,scoutline,4,4
+batteringram,Battering Ram,420,12,4.5,3,1.2,0,200,0,200,0,0,8,0.25,,,,meleesiege,2,2
+cannon,Cannon,180,65,5,30,4.2,0,300,0,300,1,0,3,,2.2,,,meleesiege,5,5
+catapult,Catapult,200,45,4.5,30,5,0,200,0,200,1,0,3,,3,,,rangedsiege,2,2
+trebuchet,Trebuchet,220,70,3.8,54,6.5,0,250,0,250,1,0,3.5,,3.5,,,rangedsiege,4,4
+culverin,Culverin,190,60,5.2,32,4,0,150,0,250,1,0,3,,2,,,rangedsiege,5,5
+tradecart,Trade Cart,80,0,7.5,2,1,0,0,0,0,0,0,,,,,,trade,3,0
+trader,Trader,130,0,9.5,2,1,25,100,0,0,0,0,,,,,,trade,3,0
+priest,Priest,90,0,8,2,1,60,100,0,0,0,0,,,,16,4,healer,3,3
+wolf,Wild Wolf,155,14,11,2.2,0.9,30,0,0,0,0,0,,,,,,wilds,0,0
+barbarian,Barbarian,155,18,8.5,2.5,0.95,0,40,0,0,0,0,,,,,,wilds,0,0
+viking,Viking Raider,160,20,8.5,2.5,0.9,20,20,0,0,0,0,,,,,,wilds,0,0
+vikingboss,Viking Chieftain,500,42,7.5,3.2,1.4,150,150,0,0,0,0,,,,,,wilds,0,0
+
+### BUILDINGS — build_hits is the build time (hammer swings to finish; ~0.5s a swing).
+id,name,hp,radius,build_hits,cost_food,cost_gold,cost_stone,cost_wood,atk_dmg,atk_rng,atk_cd,vision,heal_rng,heal_rate,age_unlock,is_wall,is_gate
+towncenter,Town Center,1500,11,0,0,0,0,0,,,,,,,0,0,0
+house,House,220,4.6,8,0,0,0,40,,,,,,,0,0,0
+barracks,Barracks,480,7.2,14,0,30,0,100,,,,,,,0,0,0
+tower,Guard Tower,400,4,10,0,0,250,100,9,18,1.1,,,,3,0,0
+storage_pit,Storage Pit,250,6.6,8,0,0,0,75,,,,,,,0,0,0
+archery_range,Archery Range,420,6.4,12,0,0,0,125,,,,,,,1,0,0
+stable,Stable,450,6.8,12,0,0,0,125,,,,,,,1,0,0
+temple,Temple,380,5.6,12,0,0,0,150,,,,,10,2,3,0,0
+farm,Farm,150,6.6,8,0,0,0,75,,,,,,,1,0,0
+market,Market,520,7.2,14,0,25,25,125,,,,,,,3,0,0
+siege_workshop,Siege Workshop,480,7.2,14,0,0,0,200,,,,,,,2,0,0
+watch_tower,Watch Tower,220,2.4,6,0,0,50,50,,,,80,,,1,0,0
+blacksmith,Blacksmith,420,5.6,12,0,0,0,100,,,,,,,2,0,0
+wood_wall,Wood Wall,650,5.5,6,0,0,0,55,,,,,,,2,1,0
+wood_gate,Wood Gate,560,5.8,7,0,0,0,85,,,,,,,2,1,1
+stone_wall,Stone Wall,1700,5.5,8,0,0,100,0,,,,,,,3,1,0
+stone_gate,Stone Gate,1400,5.8,8,0,0,75,0,,,,,,,3,1,1
+fort_wall,Fortified Wall,3400,5.5,10,0,0,200,0,,,,,,,4,1,0
+fort_gate,Fortified Gate,2800,5.8,10,0,0,75,0,,,,,,,4,1,1
+castle,Castle,3000,11,30,0,0,500,150,14,22,4.5,75,,,4,0,0
+
+### AGES — the cost to advance INTO each age (paid at the Town Center with T).
+index,name,cost_food,cost_gold
+0,Stone Age,0,0
+1,Bronze Age,600,0
+2,Iron Age,1200,150
+3,Classical Age,1800,300
+4,Medieval Age,2400,500
+5,Enlightenment Age,3000,1000
+
+### COMBAT RULES — the rock-paper-scissors wheel and global combat scalars.
+key,value,notes
+anticav_vs_mounted,3.8,"spears vs any mounted unit — scouts die in 3 hits, same-age cavalry in 4"
+ranged_vs_anticav,1.8,"archers vs the spear line"
+melee_vs_ranged,1.8,"swords run down archers (sword tiers only; the musket shot is a projectile)"
+melee_vs_anticav,1.25,"swords push through spear lines (v84)"
+melee_vs_siege,2,"swords DISMANTLE war engines (v84)"
+melee_bldg_mult,1.5,"sword tiers vs buildings — bMult in UNITS (v84)"
+cavalry_vs_ranged,1.8,"cavalry line vs archers"
+cavalry_vs_melee,1.5,"cavalry DOMINATES the sword line (v84)"
+cavalry_vs_siege,1.5,"and rides down war engines (v84)"
+projectile_vs_siege,0.15,"arrows & musket balls barely scratch siege engines (v84)"
+scout_vs_economy,4.85,"scout line vs villagers/traders/carts — trader dies in 3 hits (v84)"
+scout_vs_ranged,1.5,"scout line vs archers"
+scout_trample_farms,4,"scout-line damage multiplier vs farms (05-combat tryMeleeAttack)"
+ram_bldg_mult,per-unit,"see bMult_vs_buildings in UNITS"
+age_buff_per_age,0.06,"units are +6% hp/dmg per team age (00-data ageBuff)"
+enlightenment_bonus,0.15,"extra +15% at the final age"
+block_damage_mult,0.3,"raised shield takes 30% damage (05-combat dealDamage)"
+parry_window_s,0.28,"block within this window of the hit = parry (negate + stagger)"
+parry_stagger_s,1.2,"attacker cooldown after being parried"
+pistol_ammo,6,"dragoon sidearm rounds — NO regen since v84; re-arming reloads"
+pistol_dmg,55,"per pistol shot"
+castle_volley,5,"arrows per castle volley, 0.15s apart, then the atk_cd wind-down (v84)"
+pistol_rng,15,"pistol range, auto and manual (v84)"
+bayonet_dmg,14,"musketeer melee stab (v84) — carries the sword-line counters"
+bayonet_rng,2.6,""
+bayonet_cd_s,0.8,""
+
+### ECONOMY — gathering, hauling, farming, trade.
+key,value,notes
+carry_cap,20,"max carried per resource run (player and bots)"
+player_gather_tick_s,0.6,"seconds per +1 gathered by the player (09-main)"
+bot_gather_tick_s,0.75,"seconds per +1 gathered by AI villagers (07-ai)"
+crop_ripen_s,45,"farm corn regrowth time (09-main economyTick)"
+farm_passive_food_s,0.5,"passive food/sec per standing farm (09-main FARM_PASSIVE, halved v86)"
+farm_harvest_food,20,"food per ripe-corn harvest"
+trade_gold_linear,0.35,"cart pay = 0.35*d + 0.002*d^2 (00-data tradeGold)"
+trade_gold_quad,0.002,"the deep-route premium"
+trader_pay_mult,2.5,"a human Trader earns 2.5x the cart rate — host AND guest since v87 (guests wrongly got 4x before)"
+market_cap,5,"markets per team (06-input validFor)"
+respawn_base_s,30,"death timer = max(10, 30 - 1*houses) (03-buildings respawnDelay, v84)"
+respawn_per_house_s,1,"each house shortens the wait"
+respawn_min_s,10,"the floor"
+
+### CREEP CAMPS & THE VIKING BAY
+key,value,notes
+camp_radius,26,"normal camp pocket radius (doubled in v82)"
+camp_pack_size,4-5,"rolled per wave (07-ai)"
+camp_respawn_s,180,"wipe -> next pack; unclaimed chest swept"
+camp_chest,300,"300 food (wolves) or 300 gold (barbarians)"
+camp_regen_pct_per_s,8,"calm creeps heal 8%/s (07-ai updateCreep)"
+camp_aggro_margin,2.5,"aggro ring = pocket radius - this"
+boss_radius,52,"the Viking bay pocket"
+boss_raid_size,11,"1 chieftain + 10 raiders (unit stats in UNITS)"
+boss_respawn_s,900,"first raid AND the gap between raids"
+boss_chest,500,"TWIN chests: this much food AND gold"
+
+### PRIEST & COMMAND
+key,value,notes
+resurrect_charge_s,2.0,"hold LMB this long to channel (05-combat)"
+resurrect_cooldown_s,10,"faith between miracles"
+resurrect_reach,3.6,"how close the body must be"
+resurrect_points,25,"score for a resurrection"
+charge_distance,85,"how far F hurls the rallied line (07-ai)"
+
+### SCORING
+key,value,notes
+deposit_pts_per_resource,1,"banking pays 1 pt per resource"
+kill_pts,victim cost,"a kill pays the victim's total cost (see UNITS costs)"
+villager_kill_pts,10,"flat"
+heal_pts_per_hp,1,"priests score per HP mended"
+regicide_pts,500,"the king's head"
+
+### QUESTING & THE BLACKSMITH (v87) — the meta-progression dials.
+key,value,notes
+xp_max_level,20,"max player level; quests stop at the cap (00-data)"
+buff_max_stack,3,"copies of one buff a player may hold"
+quest_reroll_cd_s,60,"cooldown on rerolling a quest at the board"
+board_reach,5,"E range at the Town Board"
+quest_score_per_xp,25,"scoreboard points per XP a completed quest pays (09-main completeQuest)"
+buff_dmg_pct,5,"Honed Edge per stack (05-combat dealDamage)"
+buff_atkspd_s,0.1,"Quick Hands cooldown cut per stack, floor 0.2s (04-units applyBuffStats)"
+buff_crit_pct,5,"Keen Eye crit chance per stack; crits hit 2x"
+buff_shield_pct,5,"Raised Shield damage cut per stack"
+buff_hp_pct,5,"Stout Heart max-HP per stack"
+buff_dodge_pct,5,"Sixth Sense dodge chance per stack"
+buff_spd,0.5,"Fleet Foot move speed per stack"
+buff_carry,10,"Deep Satchel capacity per stack (base 20)"
+buff_gather_s,0.1,"Practiced Hands gather-tick cut per stack"
+buff_builder_hits,1,"Master Builder free hits per stack, once per site"
+buff_slayer_pct,15,"Wild Slayer vs creeps per stack"
+buff_captain_pct,1,"Captain's Banner ally damage per stack, 12u radius"
+buff_leech_hp,1,"Bloodthirst HP per landed hit per stack"
+buff_regen_hp_s,0.5,"Second Skin per stack after 5 quiet seconds"
+buff_bounty_pct,10,"Bounty Hunter score premium per stack"
+buff_zeal_s,1.5,"Zealotry resurrect-cooldown cut per stack, floor 3s"
+buff_trade_pct,10,"Deep Pockets trade payout per stack"
+buff_parry_s,0.07,"Duelist parry-window widening per stack"
+buff_siege_pct,10,"Siegewright crewed-siege damage per stack"
+buff_wreck_pct,10,"Wrecker vs buildings per stack"
+rally_cap,5,"G rallies this many nearest soldiers (06-input RALLY_CAP, v89)"
+buff_rally,1,"Bannerman: extra rallied troops per stack"
+
+### QUEST LIST — n is the target count, xp the levels+XP paid. Edit n/xp; leave id/ev alone.
+id,name,desc,ev,n,xp
+food200,"Provisioner","Bank 200 food",dep_food,200,1
+wood200,"Lumberjack","Bank 200 wood",dep_wood,200,1
+stone200,"Quarryman","Bank 200 stone",dep_stone,200,2
+gold200,"Prospector","Bank 200 gold",dep_gold,200,1
+farm5,"Green Thumb","Build 5 farms",build_farm,5,1
+house5,"Town Planner","Build 5 houses",build_house,5,1
+market1,"Merchant Prince","Build a Market",build_market,1,1
+castle1,"Castellan","Build a Castle",build_castle,1,2
+walls4,"Mason of the Line","Build 4 wall segments",build_wall,4,1
+burn3,"Crop Burner","Raze 3 enemy farms",raze_farm,3,1
+raze3,"Demolitionist","Raze 3 enemy buildings (farms aside)",raze_bld,3,2
+vil3,"Terror of the Fields","Kill 3 enemy villagers",kill_vil,3,1
+mil3,"Soldier's Work","Kill 3 enemy military units",kill_mil,3,1
+creep5,"Wolfsbane","Slay 5 wild creatures",kill_creep,5,1
+camp1,"Camp Breaker","Land the blow that wipes a wild camp",camp_wipe,1,2
+chest1,"Treasure Hunter","Claim a camp chest (steals count)",chest,1,1
+trade3s,"Peddler","Sell 3 loads from the NEAREST bazaar",trade_short,3,1
+trade2m,"Caravan Master","Sell 2 loads from the MIDDLE bazaar",trade_mid,2,2
+trade1l,"Silk Road","Sell a load from the FARTHEST bazaar",trade_long,1,2
+harv5,"Reaper","Harvest 5 ripe farm crops",harvest,5,1
+parry5,"Perfect Guard","Parry 5 attacks",parry,5,1
+train5,"Master-at-Arms","Take up arms 5 times (any class)",train,5,1
+res2,"Battlefield Medic","Resurrect 2 fallen allies (Priest)",res,2,1
+pistol1,"Last Shot","Kill an enemy with the dragoon pistol",pistol,1,1
+scout1,"Eyes on the Throne","Get within 25 of the enemy Town Center, then return home ALIVE",scout,1,2
+
+### BUFF LIST — names & text only (the scalars live in the QUESTING section above).
+id,name,desc
+dmg,"Honed Edge","+5% damage"
+atkspd,"Quick Hands","−0.1s attack cooldown"
+crit,"Keen Eye","+5% chance of a CRITICAL (2× damage)"
+shield,"Raised Shield","−5% damage taken"
+hp,"Stout Heart","+5% max HP"
+dodge,"Sixth Sense","5% chance to dodge any blow"
+spd,"Fleet Foot","+0.5 move speed"
+carry,"Deep Satchel","+10 carry capacity"
+gather,"Practiced Hands","−0.1s per gather swing"
+builder,"Master Builder","buildings need fewer hits from you"
+slayer,"Wild Slayer","+15% damage vs the wilds' creatures"
+captain,"Captain's Banner","+1% damage to allies fighting near you"
+leech,"Bloodthirst","heal 1 HP with every hit you land"
+regen,"Second Skin","+0.5 HP/s after 5s out of combat"
+bounty,"Bounty Hunter","+10% score points earned"
+zeal,"Zealotry","−1.5s priest resurrect cooldown"
+trade,"Deep Pockets","+10% trade-sell payout"
+parry,"Duelist","+0.07s parry window"
+siege,"Siegewright","+10% damage crewing siege engines"
+wreck,"Wrecker","+10% damage vs buildings"
+rally,"Bannerman","rally one additional troop"
+
+### STARTING STOCK — each team's opening warchest (00-data stock).
+food,gold,stone,wood
+150,50,0,75

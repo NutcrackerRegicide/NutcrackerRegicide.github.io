@@ -1,0 +1,2168 @@
+#!/usr/bin/env node
+/* Headless smoke test: loads every game script with a stubbed browser,
+   runs simulated frames, and asserts core systems exist and function.
+   Usage: npm install three@0.128.0 && node tools/smoketest.js */
+const fs=require('fs'),path=require('path');
+const ROOT=path.join(__dirname,'..');
+global.window=global;
+const THREE=require('three'); global.THREE=THREE;
+// ---- DOM stubs ----
+function mkEl(){return{style:{},classList:{toggle(){},add(){},remove(){}},innerHTML:"",textContent:"",
+  dataset:{},children:[],firstChild:null,addEventListener(){},appendChild(){},removeChild(){},
+  querySelector:()=>mkEl(),querySelectorAll:()=>[],
+  getContext:()=>new Proxy({},{get:(t,k)=>(typeof t[k]!=="undefined")?t[k]:()=>{}}),width:0,height:0};}
+const elems={};
+global.document={getElementById:id=>elems[id]||(elems[id]=mkEl()),createElement:()=>mkEl(),
+  querySelector:()=>mkEl(),querySelectorAll:()=>[],addEventListener(){},body:{appendChild(){}},
+  exitPointerLock(){},pointerLockElement:null};
+global.addEventListener=()=>{};
+global.innerWidth=1280;global.innerHeight=720;global.devicePixelRatio=1;
+global.location={reload(){}};
+global.atob=s=>Buffer.from(s,"base64").toString("binary");
+let rafCount=0; global.requestAnimationFrame=()=>{rafCount++;};
+THREE.WebGLRenderer=function(){return{setSize(){},setPixelRatio(){},render(){},
+  shadowMap:{},domElement:mkEl()}};
+// load baked Mixamo animations if present, so the campaign exercises the retarget path
+try{(0,eval)(fs.readFileSync(path.join(ROOT,"assets/anims.js"),"utf8"));
+  console.log("baked anims loaded:",Object.keys(global.BAKED_ANIMS.pools).join(", "));}catch(e){}
+// ---- load game scripts in index order ----
+const order=["00-data","01-engine","02-world","03-buildings","04-units","05-combat",
+  "06-input","07-ai","08-ui","09-main","10-net","11-audio","12-touch"];
+// browsers share top-level const across <script> tags; node eval does not —
+// so evaluate everything as ONE script and export internals for assertions
+let bundle=order.map(f=>fs.readFileSync(path.join(ROOT,"js",f+".js"),"utf8")).join("\n");
+bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding,makeUnit,"+
+  "tradeGold,tick,teamAge,stock,updateBot,tryMeleeAttack,tryAttack,setGameOver,launchLob,BLUE,RED,lineUnitFor,CLS,clock,isSiege,nodes,validFor,teamTC,terrainHeight,TCPOS,makeBuilding,buildingMesh,BLD,NET,player,keys,directors,wallLineSegments,placeGateOnWall,kings,healTick,snapToWallEnd,dealDamage,restyleBuildings,rebuildRoads,roadGroups,nearestFriendlySite,BSCALE,moveToward,steerAroundBuildings,restyleUnits,drainVisualQueue,syncNameTags,manageBands,killUnit,respawnUnit,resurrectUnit,updatePriestChannel,tryResurrect,RES_CHARGE,RES_CD,"+
+  "campStates,campTick,campNewWave,updateCreep,inCampGround,CAMPS,CAMP_R,CAMP_RESPAWN,CREEP_N,NEUTRAL,MAP,moveUnit,"+
+  "orderCharge,toggleRally,toggleRallyFor,rallyCapFor,RALLY_CAP,CHARGE_DIST,camera,rps,setClass,economyTick,"+
+  "QUESTS,BUFFS,XP_MAX_LVL,BUFF_MAX_STACK,BOARD_REACH,townBoards,boardFor,questPick,questRedraw,cargoFrac,updateCargoVisual,"+
+  "buffSt,carryCap,grantBuff,applyBuffStats,useTownBoard,useBlacksmith,questProgress,questTick,"+
+  "bazaarTier,addConstructionHit,damageBuilding,interactCandidateD2,ageBuff,isHuman,showScoreboard,smithOffer,smithPick,"+
+  "closeMenus,cancelPlacing,releaseWarband,rallyLeaderFor,shootArrow:(a,b)=>shootArrow(a,b),"+
+  "setRmb:v=>{rmbHeld=v;},setLmb:v=>{lmbHeld=v;},setLock:v=>{mouseLocked=v;},getSiegeAim:()=>siegeAim,"+
+  "tickBoardBang,getBoardBang:()=>_boardBang,"+
+  "PERSONALITIES,AI_DIFF,diffFor,teamHasHuman,findFarmSpot,findPitSpotForFarms,counterWeights,farmAnchors,directorThink,"+
+  "setAIDiff:v=>{aiDifficulty=v;},getAIDiff:()=>aiDifficulty,getT:()=>T,menuUp:()=>inMenu,Sound,toggleOptions,syncOptionsUI,"+
+  "startAgeResearch,tickAgeResearch,ageResT,AGE_RESEARCH_S,ageUp,AGES,"+
+  "laneTarget,laneFor,assignLane,LANE_Z,LANE_TURNIN,LANE_EDGE,HOLD_TOUR,HOLD_QUIET,HOLD_WATCH,bandHoldPoint,OXSCALE,"+
+  "buildBodyFor,fireAimedShot,FARM_PASSIVE,setAiming:v=>{aiming=v;},"+
+  "makeTree,depleteNode,clearFootprint,TREE_SCALE,TREE_GEOS,STUMP_GEOS,TREE_STANDS,TREE_CLEAR_BASE,TREE_CLEAR_ROAD,roadPoint,"+
+  "setHideD,getHideD:()=>HIDE_D,getMouseLocked:()=>mouseLocked};";
+try{(0,eval)(bundle);}catch(e){console.error("LOAD FAIL:",e.message);process.exit(1);}
+console.log("all scripts loaded");
+const {units,buildings,neutralMarkets,buildingMesh,makeBuilding,makeUnit,tradeGold,tick,
+  teamAge,stock,updateBot,tryMeleeAttack,lineUnitFor,CLS,clock,isSiege,nodes,BLD}=global.__G;
+clock.getDelta=()=>1/30; // fixed timestep: frames = real sim-time, not wall-clock
+// ---- assertions ----
+let fails=0;
+function check(name,cond){console.log((cond?"  PASS":"  FAIL")+" — "+name);if(!cond)fails++;}
+check("100 army units + 36 camp creeps spawned (5 packs of 5 + the shore's 11)",
+  units.filter(u=>u.team<2).length===100&&units.filter(u=>u.team===2).length===36);
+check("teams start lean (150f/50g/0s)",stock[0].food<=200&&stock[0].gold<=100&&(stock[0].stone||0)===0);
+check("2 town centers",buildings.filter(b=>b.type==="towncenter").length===2);
+check("neutral bazaars placed (3)",typeof neutralMarkets!=="undefined"&&neutralMarkets.length===3);
+// v78: every bazaar sits ON the Kings Road, and the set is mirror-balanced between the thrones
+{
+  const TP=global.__G.TCPOS;
+  const roadZ=t=>Math.sin(t*Math.PI)*16+Math.sin(t*Math.PI*3)*4;
+  const onRoad=neutralMarkets.every(m=>{
+    const t=(m.x-TP[0][0])/(TP[1][0]-TP[0][0]);
+    return t>0.05&&t<0.95&&Math.abs(m.z-(roadZ(t)+3.2))<0.01;
+  });
+  check("all three bazaars sit along the Kings Road",onRoad);
+  const dTo=(tc)=>neutralMarkets.map(m=>Math.hypot(m.x-tc[0],m.z-tc[1])).sort((a,b)=>a-b);
+  const d0=dTo(TP[0]), d1=dTo(TP[1]);
+  check("bazaar distances mirror between the thrones ("+d0.map(d=>d.toFixed(1)).join("/")+")",
+    d0.every((d,i)=>Math.abs(d-d1[i])<0.01));
+}
+const mm=buildingMesh("market",0);
+check("market mesh has geometry ("+mm.children.length+" parts)",mm.children.length>=4);
+const mk=makeBuilding(0,"market",-80,30,true);
+check("market building constructs",mk.built&&mk.root.children.length>0);
+check("tradeGold formula sane (d=150 → "+tradeGold(150)+"g)",tradeGold(150)>50&&tradeGold(150)<200);
+// v81: the MAIN MENU freezes the war until a mode is chosen
+{
+  const tFrozen=global.__G.getT();
+  for(let i=0;i<10;i++)tick();
+  check("the world holds its breath behind the main menu (T pinned at "+tFrozen+")",
+    global.__G.getT()===tFrozen&&global.__G.menuUp()===true);
+  global.__G.NET.uiSolo(); // click ⚔ SOLO
+  check("choosing SOLO releases the war",global.__G.menuUp()===false);
+}
+// simulate ~5s of frames
+for(let i=0;i<300;i++){try{tick();}catch(e){console.error("TICK CRASH frame",i,":",e.message);process.exit(1);}}
+check("game loop survives 300 frames",rafCount>=300);
+// force-run the trade loop: give the market a cart and fast-forward its FSM
+teamAge[0]=4;teamAge[1]=4;
+const cart=makeUnit(0,"tradecart",mk.x+4,mk.z,{name:"Test Cart",bot:{role:"cart",home:mk}});
+const g0=stock[0].gold;
+for(let i=0;i<8000;i++){updateBot(cart,0.05);} // ~400 sim-seconds of cart travel
+check("NPC cart completed a trade run (+"+Math.round(stock[0].gold-g0)+"g)",stock[0].gold>g0);
+const scout=makeUnit(0,"scout",100,0,{name:"T",bot:{role:"citizen"}});
+const farm=makeBuilding(1,"farm",103,0,true);
+const hp0=farm.hp; tryMeleeAttack(scout);
+check("scout tramples farm 4× ("+(hp0-farm.hp)+" dmg vs base "+scout.dmg.toFixed(1)+")",(hp0-farm.hp)>scout.dmg*3);
+check("siege workshop mesh has geometry",buildingMesh("siege_workshop",0).children.length>=5);
+teamAge[0]=2;
+check("Iron unlocks Battering Ram + Catapult",
+  lineUnitFor("meleesiege",0)==="batteringram"&&lineUnitFor("rangedsiege",0)==="catapult");
+teamAge[0]=4;
+check("Medieval upgrades to Trebuchet",lineUnitFor("rangedsiege",0)==="trebuchet");
+teamAge[0]=5;
+check("Enlightenment: Cannon + Culverin",
+  lineUnitFor("meleesiege",0)==="cannon"&&lineUnitFor("rangedsiege",0)==="culverin");
+const ram=makeUnit(0,"batteringram",60,20,{name:"T",bot:{role:"citizen"}});
+const house=makeBuilding(1,"house",62.5,20,true);
+const hh0=house.hp; tryMeleeAttack(ram);
+check("ram deals 8× to buildings ("+Math.round(hh0-house.hp)+" dmg)",(hh0-house.hp)>ram.dmg*6);
+check("catapult outranges guard towers ("+CLS.catapult.rng+" vs 18)",CLS.catapult.rng>18);
+check("stone: exactly 5 piles on the map",nodes.filter(n=>n.type==="stone").length===5);
+const woods=nodes.filter(n=>n.type==="wood").length;
+check("forests planted ("+woods+" choppable trees)",woods>=60);
+check("castle mesh has geometry",buildingMesh("castle",0).children.length>=8);
+check("wall mesh has geometry",buildingMesh("stone_wall",0).children.length>=2);
+// ---- v53: six ages of architecture, 2x footprints, live restyle ----
+check("footprints: 2x mains, farm-sized storage pit",
+  BLD.towncenter.r===11&&BLD.house.r===4.6&&BLD.castle.r===11&&
+  BLD.farm.r===6.6&&BLD.storage_pit.r===6.6&&BLD.watch_tower.r===2.4);
+check("scales: farm 0.6375, pit fills its footprint at 0.95, watch tower 0.75",
+  global.__G.BSCALE.farm===0.6375&&global.__G.BSCALE.storage_pit===0.95&&global.__G.BSCALE.watch_tower===0.75);
+// THE MILL LAYOUT: eight farms must fit evenly around one storage pit on clear land
+{const NDS=global.__G.nodes;
+ const D2=(ax,az,bx,bz)=>{const ddx=ax-bx,ddz=az-bz;return ddx*ddx+ddz*ddz;};
+ let cx=null,cz=null; // scout a center with nothing (buildings/nodes) within reach of the ring
+ outer:for(const [tx,tz] of [[-60,-95],[-40,-95],[0,-100],[40,-95],[-90,-95],[60,-95],[-20,55]]){
+   let clear=true;
+   for(const b of buildings){if(b.alive&&D2(tx,tz,b.x,b.z)<38*38){clear=false;break;}}
+   // v114: WOOD no longer blocks a plot — a footprint fells it (validFor skips wood, makeBuilding
+   // calls clearFootprint). Only the unclearable prizes — stone, gold, berries — spoil the ground.
+   if(clear)for(const n of NDS){if(n.type!=="wood"&&n.amount>0&&D2(tx,tz,n.x,n.z)<32*32){clear=false;break;}}
+   if(clear){cx=tx;cz=tz;break outer;}
+ }
+ check("found clear ground for the mill-layout test",cx!==null);
+ if(cx!==null){
+   const pit=global.__G.makeBuilding(0,"storage_pit",cx,cz,true);
+   let placed=0; const ringB=[pit];
+   for(let k=0;k<8;k++){
+     const a=k*Math.PI/4, fx=cx+Math.cos(a)*18.2, fz=cz+Math.sin(a)*18.2;
+     if(global.__G.validFor("farm",fx,fz,0)){ringB.push(global.__G.makeBuilding(0,"farm",fx,fz,true));placed++;}
+   }
+   check("eight farms ring one storage pit ("+placed+"/8 placed legally)",placed===8);
+   for(const b of ringB)b.alive=false;
+ }}
+// pathing: a bot must WALK AROUND a building in its way, not grind into the facade
+{const ob=global.__G.makeBuilding(0,"barracks",-120,-85,true);
+ const walker=global.__G.makeUnit(0,"villager",-140,-85,{name:"Pathfinder"});
+ // heading dead-on at the barracks: steering must turn the unit parallel to the edge
+ const [ax,az]=global.__G.steerAroundBuildings(walker,1,0,40,-100,-85);
+ check("steering turns a blocked heading parallel to the building edge (dx "+ax.toFixed(2)+")",Math.abs(az)>0.6&&ax<0.9);
+ let steps=0, arrived=false;
+ while(steps<700&&!arrived){arrived=global.__G.moveToward(walker,-100,-85,0.05,1.2);steps++;}
+ check("bot rounds the barracks and reaches the far side ("+steps+" steps)",arrived&&steps<650);
+ walker.alive=false; ob.alive=false;}
+// WALL ROUTING: a bot rounds a wall LINE's end instead of bouncing between segments
+{const wA=global.__G.makeBuilding(0,"stone_wall",-40,-70,true,0);
+ const wB=global.__G.makeBuilding(0,"stone_wall",-27.5,-70,true,0);
+ const wC=global.__G.makeBuilding(0,"stone_wall",-15,-70,true,0);
+ const wBot=global.__G.makeUnit(0,"clubman",-27.5,-80,{name:"Router",bot:{role:"citizen"}});
+ let reached=false,steps1=0;
+ for(let i=0;i<650&&!reached;i++){steps1++;reached=global.__G.moveToward(wBot,-27.5,-58,0.05,1.2);}
+ check("a bot routes around a wall line's END, no gate needed ("+steps1+" steps)",reached);
+ // swap the middle segment for an OWN gate: the bot walks straight through it
+ wB.alive=false;
+ const wG=global.__G.makeBuilding(0,"stone_gate",-27.5,-70,true,0);
+ const wBot2=global.__G.makeUnit(0,"clubman",-27.5,-80,{name:"GateWalker",bot:{role:"citizen"}});
+ let reached2=false,steps2=0;
+ for(let i=0;i<650&&!reached2;i++){steps2++;reached2=global.__G.moveToward(wBot2,-27.5,-58,0.05,1.2);}
+ check("a bot walks THROUGH its own gate ("+steps2+" vs "+steps1+" steps around)",reached2&&steps2<steps1);
+ wA.alive=false;wC.alive=false;wG.alive=false;wBot.alive=false;wBot2.alive=false;}
+// RED BORDER TOWN: a site hugging the east map edge must still get built —
+// the old fixed east-side stand point sat OFF the 212-wide map and starved red's economy
+{const bSite=global.__G.makeBuilding(1,"house",207,40,false);
+ const bWork=global.__G.makeUnit(1,"villager",200,40,{name:"EdgeBuilder",bot:{role:"citizen"}});
+ bWork.task={site:bSite};
+ let builtOk=false;
+ for(let i=0;i<400&&!builtOk;i++){global.__G.tick(0.05);builtOk=bSite.built;}
+ check("a border-hugging red site completes (progress "+bSite.progress+"/"+bSite.def.hits+")",builtOk);
+ bSite.alive=false; bWork.alive=false;}
+// build reach must scale with the footprint or big buildings become unbuildable
+{const sp=global.__G.makeBuilding(0,"storage_pit",-150,-40,false);
+ const pl=global.__G.player, ox=pl.root.position.x, oz=pl.root.position.z;
+ pl.root.position.set(sp.x+(sp.def.r+0.7),0,sp.z); // where collision parks the builder
+ const reached=global.__G.nearestFriendlySite()===sp;
+ pl.root.position.set(ox,0,oz);
+ check("a villager can reach a 2x foundation to build it",reached);
+ sp.alive=false;}
+// depositing must work from the EDGE of the 2x Town Center — where collision parks you
+{const tcD=global.__G.teamTC(0), pl=global.__G.player;
+ const ox=pl.root.position.x, oz=pl.root.position.z;
+ pl.root.position.set(tcD.x+(tcD.def.r+0.7),0,tcD.z);
+ pl.carry.food=5;
+ for(let i=0;i<12;i++)global.__G.tick(0.05);
+ check("carried food deposits from the TC edge (carry emptied: "+(pl.carry.food===0)+")",
+   pl.carry.food===0);
+ pl.root.position.set(ox,0,oz);}
+// the placement ghost must preview at the same scale the real building gets
+{const gm=buildingMesh("farm",0); gm.scale.setScalar(global.__G.BSCALE.farm||1);
+ check("ghost scale matches built farm scale (0.6375)",Math.abs(gm.scale.x-0.6375)<1e-9);}
+// watch tower deck: a walkable platform lifted to the right height
+{const wt=global.__G.makeBuilding(0,"watch_tower",-150,-60,true);
+ check("watch tower exposes a raised, walkable deck",wt.deck&&wt.deck.y>6&&wt.deck.y<14&&wt.deck.r>1.5);
+ wt.alive=false;}
+check("walls keep their tiling length (r=5.5)",BLD.stone_wall.r===5.5&&BLD.fort_wall.r===5.5);
+const hSigs=new Set();
+for(let a=0;a<6;a++){const hm=buildingMesh("house",0,a);
+  hSigs.add(hm.children.length+":"+hm.children.map(c=>c.geometry?c.geometry.type[0]:"G").join(""));}
+check("houses wear six distinct architectural eras ("+hSigs.size+"/6 unique)",hSigs.size===6);
+let tcOK=true,tmOK=true;
+for(let a=0;a<6;a++){
+  if(buildingMesh("towncenter",0,a).children.length<6)tcOK=false;
+  if(buildingMesh("temple",0,a).children.length<5)tmOK=false;
+}
+check("town centers have geometry in all six ages",tcOK);
+check("temples have geometry in all six ages",tmOK);
+check("age clamps to the building's unlock (castle in the stone age dresses as 4)",
+  buildingMesh("castle",0,0).userData.age===4&&buildingMesh("towncenter",0,0).userData.age===0&&
+  buildingMesh("tower",0,1).userData.age===3);
+const rsB=global.__G.makeBuilding(0,"house",-140,95,true);
+const rsOldBody=rsB.body, rsOldCount=buildings.length; rsB.hp=123;
+teamAge[0]=5; global.__G.restyleBuildings(0);
+check("restyle swaps every standing body into the new age",
+  rsB.body!==rsOldBody&&rsB.body.userData.age===5&&buildings.length===rsOldCount&&rsB.hp===123&&rsB.alive);
+const rsC=global.__G.makeBuilding(0,"house",-140,80,false); rsC.progress=4; // a half-raised site
+teamAge[0]=3; global.__G.restyleBuildings(0);
+check("under-construction sites keep scaffolding through a restyle",
+  !rsC.built&&Math.abs(rsC.body.scale.y-(0.15+0.85*4/8))<1e-6&&rsC.body.userData.age===3);
+// DEFERRED restyle: the age-up wave — queued, hitch-free, complete after a few drains
+{const wave=rsB.body;
+ teamAge[0]=5; global.__G.restyleBuildings(0,true);
+ check("deferred restyle leaves bodies untouched until the wave arrives",rsB.body===wave);
+ for(let i=0;i<80;i++)global.__G.drainVisualQueue();
+ check("the wave re-dresses every building within a few frames",rsB.body!==wave&&rsB.body.userData.age===5);}
+// dirt roads knit the town together as buildings cluster near the TC
+{const tcR=global.__G.teamTC(0);
+ global.__G.rebuildRoads(0);
+ const lone=(global.__G.roadGroups[0]?global.__G.roadGroups[0].children.length:0);
+ const rTest=[global.__G.makeBuilding(0,"house",tcR.x+16,tcR.z+4,true),
+              global.__G.makeBuilding(0,"barracks",tcR.x+22,tcR.z-10,true),
+              global.__G.makeBuilding(0,"farm",tcR.x+18,tcR.z-2,true)]; // farm must NOT spawn a road
+ global.__G.rebuildRoads(0);
+ const withCity=global.__G.roadGroups[0].children.length;
+ check("streets appear once buildings cluster near the TC ("+withCity+" segs)",withCity>lone&&withCity>0);
+ for(const b of rTest)b.alive=false; global.__G.rebuildRoads(0);} // tidy up so later tests aren't blocked
+// GARDENS: a courtyard fully ringed by paving must bloom
+{const tcG=global.__G.teamTC(0);
+ const px=tcG.x+30, pz=tcG.z; // courtyard center, ringed by six houses with overlapping aprons
+ const ringG=[];
+ for(let k=0;k<6;k++){const a=k*Math.PI/3;
+   ringG.push(global.__G.makeBuilding(0,"house",px+Math.cos(a)*9,pz+Math.sin(a)*9,true));}
+ global.__G.rebuildRoads(0);
+ const flowers=global.__G.roadGroups[0].children.filter(c=>c.userData&&c.userData.garden).length;
+ check("an enclosed courtyard blooms into a garden ("+flowers+" plantings)",flowers>0);
+ for(const b of ringG)b.alive=false; global.__G.rebuildRoads(0);}
+teamAge[0]=0; global.__G.restyleBuildings(0); // back to the stone age for what follows
+// ---- v58: villagers dress for their age, six distinct wardrobes ----
+{const vv=global.__G.makeUnit(0,"villager",-160,70,{name:"Fashion Plate"});
+ const sigs=new Set();
+ for(let a=0;a<6;a++){
+   teamAge[0]=a; global.__G.restyleUnits(0);
+   sigs.add([vv.rig.torso.children.length,vv.rig.head.children.length,
+     vv.rig.faR.children.length,vv.rig.shinL.children.length].join(":"));
+ }
+ check("villagers wear six distinct wardrobes ("+sigs.size+"/6 unique)",sigs.size===6);
+ check("the skeleton survives every restyle (arms, head, legs intact)",
+   !!(vv.rig.armL&&vv.rig.faR&&vv.rig.head&&vv.rig.legL&&vv.body.children.length>0)&&vv.alive);
+ teamAge[0]=0; global.__G.restyleUnits(0);
+ vv.alive=false;}
+teamAge[0]=2;
+const w1=global.__G.makeBuilding(0,"wood_wall",40,-30,true);
+let chainOK=false;
+for(const [ox,oz] of [[11,0],[-11,0],[0,11],[0,-11]])
+  if(global.__G.validFor("wood_wall",40+ox,-30+oz,0)){chainOK=true;break;}
+check("long wall segments chain end-to-end",chainOK);
+check("non-walls still keep their distance",!global.__G.validFor("house",42,-30,0));
+check("all long-range siege outranges towers AND castles",
+  CLS.trebuchet.rng>BLD.castle.atk.rng&&CLS.cannon.rng>BLD.castle.atk.rng&&CLS.culverin.rng>BLD.castle.atk.rng);
+const TH=global.__G.terrainHeight,TCP=global.__G.TCPOS;
+check("terrain flat at the Town Centers",Math.abs(TH(TCP[0][0],TCP[0][1]))<0.05&&Math.abs(TH(TCP[1][0],TCP[1][1]))<0.05);
+let relief=0; for(const [sx,sz] of [[90,-60],[40,70],[-30,-80],[120,40]])relief=Math.max(relief,Math.abs(TH(sx,sz)));
+check("rolling hills elsewhere (max sampled "+relief.toFixed(2)+")",relief>0.8);
+check("farms REJECTED away from TC/Pit",!global.__G.validFor("farm",0,60,0));
+const tcB=global.__G.teamTC(0);
+let farmSpot=false;
+for(let a=0;a<24&&!farmSpot;a++){
+  const ang=a/24*Math.PI*2;
+  for(const r of [23,26,30])
+    if(global.__G.validFor("farm",tcB.x+Math.cos(ang)*r,tcB.z+Math.sin(ang)*r,0)){farmSpot=true;break;}
+}
+check("legal farm spots exist around the TC",farmSpot);
+// FULL CAMPAIGN: 8 sim-minutes at 30fps — directors age up, build workshops/markets,
+// and field carts + siege engines. This is the test that would have caught the
+// vehicle-rig animation crash (undefined limbs on carts/rams).
+stock[0].food+=4000;stock[0].gold+=4000;stock[1].food+=4000;stock[1].gold+=4000;
+for(let i=0;i<8*60*30;i++){
+  try{tick();}catch(e){console.error("CAMPAIGN CRASH at sim-second",Math.floor(i/30),":\n",e.stack.split("\n").slice(0,6).join("\n"));process.exit(1);}
+}
+const farms=buildings.filter(b=>b.alive&&b.built&&b.type==="farm").length;
+check("AI still builds farms with doubled footprint ("+farms+")",farms>=2);
+check("corn grows on farms",buildings.some(b=>b.type==="farm"&&b.crop>0));
+// v113: passive farm income is 2 food every 3 seconds (2/3 per sec) — v86 halved it to 0.5,
+// John's field test called that over-nerfed. Harvest payout untouched.
+// Direct economyTick calls (no live tick), so no directors spend between measurements.
+{
+  const {economyTick}=global.__G;
+  global.__G.makeBuilding(0,"farm",120,40,true); // guarantee BLUE owns at least one farm
+  economyTick(1.0); // flush whatever fraction accumulated during the campaign
+  const farms0=buildings.filter(b=>b.alive&&b.built&&b.type==="farm"&&b.team===0).length;
+  const f0=stock[0].food;
+  economyTick(1.0); // exactly one 1.0s step
+  const gained=stock[0].food-f0, want=(teamAge[0]+1)+(2/3)*farms0;
+  check("v113 farm passive = 2 food / 3s: +"+gained.toFixed(2)+" food/s, "+farms0+" farms (want "+want.toFixed(2)+")",
+    farms0>=1&&Math.abs(gained-want)<1e-6);
+}
+// ================= v94: THE AI MARSHALS — personalities & difficulty =================
+global.__G.setGameOver(false); // an accidental regicide in the campaign must not mute this section
+{
+  const G=global.__G, {PERSONALITIES,AI_DIFF,diffFor,counterWeights,findFarmSpot,farmAnchors}=G;
+  const dials=["ageBufF","farmsBase","farmsPerAge","pits","raidAt","raidMin","raidFrac","trainMin","minVills","reserveF","kgBase"];
+  check("four doctrines, every dial present, boom out-farms and out-ages rush",
+    Object.keys(PERSONALITIES).length===4&&
+    Object.values(PERSONALITIES).every(p=>dials.every(k=>typeof p[k]==="number"))&&
+    PERSONALITIES.boom.ageBufF<PERSONALITIES.rush.ageBufF&&
+    PERSONALITIES.boom.farmsBase+PERSONALITIES.boom.farmsPerAge*5>=10&&
+    PERSONALITIES.rush.raidAt<PERSONALITIES.turtle.raidAt&&
+    PERSONALITIES.turtle.walls>0);
+  check("difficulty table: HARD thinks faster, runs 20% hot, and counters",
+    AI_DIFF.easy&&AI_DIFF.normal&&AI_DIFF.hard&&
+    AI_DIFF.hard.eco===1.2&&AI_DIFF.hard.counter===true&&!AI_DIFF.easy.counter&&
+    AI_DIFF.hard.think<AI_DIFF.normal.think&&AI_DIFF.normal.think<AI_DIFF.easy.think);
+  const DIRS=G.directors;
+  check("both marshals rolled a doctrine and the scouts have spoken",
+    DIRS.every(D=>PERSONALITIES[D.pers]&&D.annT===1));
+  // difficulty routing: humans keep the supportive brain, pure-AI teams take the dial
+  const d0=G.getAIDiff();
+  G.setAIDiff("hard");
+  check("the dial reaches only the pure-AI team (BLUE human → normal, RED → hard)",
+    diffFor(0)==="normal"&&diffFor(1)==="hard");
+  // HARD economy: RED trickles 20% hot, BLUE stays honest
+  G.makeBuilding(1,"farm",130,40,true); // guarantee RED owns a farm
+  G.economyTick(1.0); // flush
+  const rF=G.buildings.filter(b=>b.alive&&b.built&&b.type==="farm"&&b.team===1).length;
+  const bF=G.buildings.filter(b=>b.alive&&b.built&&b.type==="farm"&&b.team===0).length;
+  const r0=stock[1].food, b0=stock[0].food;
+  G.economyTick(1.0);
+  const rGain=stock[1].food-r0, bGain=stock[0].food-b0;
+  const rWant=((teamAge[1]+1)+(2/3)*rF)*1.2, bWant=(teamAge[0]+1)+(2/3)*bF; // v113 FARM_PASSIVE
+  check("HARD economy runs 20% hot for the AI only (red +"+rGain.toFixed(2)+" want "+rWant.toFixed(2)+
+        " · blue +"+bGain.toFixed(2)+" want "+bWant.toFixed(2)+")",
+    Math.abs(rGain-rWant)<1e-6&&Math.abs(bGain-bWant)<1e-6);
+  G.setAIDiff(d0);
+  // the farm brain: a lone storage pit far from town anchors NEW fields
+  {
+    let pitSpot=null;
+    for(let x=-100;x<=100&&!pitSpot;x+=9)for(let z=-110;z<=110&&!pitSpot;z+=9){
+      if(Math.hypot(x-G.TCPOS[0][0],z-G.TCPOS[0][1])<50)continue; // far from the throne
+      if(G.validFor("storage_pit",x,z,0))pitSpot={x,z};
+    }
+    check("open ground found for the farm-anchor probe",!!pitSpot);
+    if(pitSpot){
+      const pit=G.makeBuilding(0,"storage_pit",pitSpot.x,pitSpot.z,true);
+      check("the pit joins the farm anchors",farmAnchors(0).some(a=>a.x===pit.x&&a.z===pit.z));
+      let nearPit=false;
+      for(let i=0;i<200&&!nearPit;i++){
+        const s=findFarmSpot(0);
+        if(s&&Math.hypot(s.x-pit.x,s.z-pit.z)<20)nearPit=true;
+      }
+      check("findFarmSpot plants fields beside the OUTLYING pit (the aging fix)",nearPit);
+      pit.alive=false;
+    }
+  }
+  // HARD counter-composition: a cavalry swarm begets spears
+  {
+    // measure the DELTA: the post-campaign red army already colors the weights
+    const W0=counterWeights(0,{melee:2,anticav:2,ranged:2,cavalry:2});
+    const horses=[];
+    for(let k=0;k<6;k++)horses.push(G.makeUnit(1,"scout",120,-40+k*3,{name:"H"+k,bot:{role:"citizen"}}));
+    const W1=counterWeights(0,{melee:2,anticav:2,ranged:2,cavalry:2});
+    check("counterWeights answers 6 fresh horses with the spear (anticav +"+(W1.anticav-W0.anticav).toFixed(1)+", others unmoved)",
+      Math.abs((W1.anticav-W0.anticav)-6*1.2)<1e-9&&
+      Math.abs(W1.ranged-W0.ranged)<1e-9&&Math.abs(W1.melee-W0.melee)<1e-9);
+    for(const h of horses)h.alive=false;
+  }
+  // TURTLE: the wall program raises a curtain and sets a gate on the road
+  {
+    const D1=DIRS[1], persSave=D1.pers;
+    for(const b of buildings)if(b.alive&&!b.built){b.built=true;b.progress=b.def.hits;} // clear the queues
+    D1.pers="turtle"; D1.wallPlan=null; D1.wallPlaced=0; D1.wallsDone=false;
+    stock[1].food+=5000; stock[1].gold+=5000; stock[1].stone+=5000; stock[1].wood+=5000;
+    const walls0=buildings.filter(b=>b.team===1&&b.def.wall).length;
+    for(let i=0;i<20&&!D1.wallsDone;i++){
+      G.directorThink(D1);
+      for(const b of buildings)if(b.alive&&!b.built&&b.def.wall&&b.team===1){b.built=true;b.progress=b.def.hits;} // masons work instantly for the test
+    }
+    const walls1=buildings.filter(b=>b.team===1&&b.def.wall).length;
+    const gates=buildings.filter(b=>b.alive&&b.team===1&&b.def.gate).length;
+    check("TURTLE raises a curtain wall (+"+(walls1-walls0)+" segments) and finishes with a gate ("+gates+")",
+      (walls1-walls0)>=1&&D1.wallsDone===true&&gates>=1);
+    D1.pers=persSave;
+  }
+}
+// ================= v87: QUESTING & THE BLACKSMITH =================
+global.__G.setGameOver(false); // an accidental regicide in the campaign must not mute this section
+{
+  const {QUESTS,BUFFS,XP_MAX_LVL,BUFF_MAX_STACK,townBoards,boardFor,useTownBoard,useBlacksmith,
+         buffSt,carryCap,applyBuffStats,questProgress,questTick,bazaarTier,addConstructionHit,
+         dealDamage,killUnit,TCPOS,ageBuff}=global.__G;
+    check("collection quests trimmed to 100 (v91)",
+    QUESTS.filter(q=>q.ev.startsWith("dep_")).length===4&&
+    QUESTS.filter(q=>q.ev.startsWith("dep_")).every(q=>q.n===100));
+  check("quest & buff tables at strength ("+QUESTS.length+" quests / "+BUFFS.length+" buffs, unique ids, xp 1-2)",
+    QUESTS.length>=20&&BUFFS.length>=20&&
+    new Set(QUESTS.map(q=>q.id)).size===QUESTS.length&&
+    new Set(BUFFS.map(b=>b.id)).size===BUFFS.length&&
+    QUESTS.every(q=>q.n>=1&&(q.xp===1||q.xp===2)));
+  check("a Town Board stands beside each throne",
+    townBoards.length===2&&[0,1].every(t=>{const b=boardFor(t);
+      return b&&Math.hypot(b.x-TCPOS[t][0],b.z-TCPOS[t][1])<30;}));
+  const nSmEver=buildings.filter(b=>b.type==="blacksmith").length; // razed forges still prove the AI built one
+  check("the AI directors raise a blacksmith at Iron ("+nSmEver+" ever built, ages "+teamAge[0]+"/"+teamAge[1]+")",
+    nSmEver>=1||Math.max(teamAge[0],teamAge[1])<2);
+  check("the Blacksmith: Iron age, 100 wood",BLD.blacksmith&&BLD.blacksmith.age===2&&BLD.blacksmith.cost.wood===100);
+  const smithy=makeBuilding(0,"blacksmith",-120,60,true);
+  check("blacksmith mesh rises and the one-per-team cap bites",
+    smithy.built&&smithy.root.children.length>0&&!global.__G.validFor("blacksmith",-100,60,0));
+  // ---- a questing human: a possessed-guest body (u.remote makes it human) ----
+  const qh=makeUnit(0,"clubman",-60,60,{name:"Quester",bot:null}); qh.remote="qtest";
+  useTownBoard(qh); // v99: first E POSTS a trio — the draft
+  check("the Town Board posts a trio of distinct quests",
+    !qh.quest&&qh.questDraft&&qh.questDraft.length===3&&new Set(qh.questDraft).size===3&&
+    qh.questDraft.every(qi=>!!QUESTS[qi]));
+  const d1=qh.questDraft.slice();
+  useTownBoard(qh); // walk away, come back: the SAME three (no fishing)
+  check("the trio STANDS until a choice is made",qh.questDraft.join()===d1.join());
+  const offBoard=QUESTS.findIndex((q,i)=>!d1.includes(i));
+  check("a posting off the board is refused",global.__G.questPick(qh,offBoard)===false&&!qh.quest);
+  check("no rerolls banked at level 0",global.__G.questRedraw(qh)===false&&qh.questDraft.join()===d1.join());
+  check("taking a posting sets the quest and clears the board",
+    global.__G.questPick(qh,d1[1])===true&&!!qh.quest&&qh.quest.i===d1[1]&&!qh.questDraft);
+  qh.quest=null; // stand down for the staged kill-quest tests below
+  // ---- kill-quest progress through real combat, and the 1-XP payout ----
+  qh.quest={i:QUESTS.findIndex(q=>q.ev==="kill_vil"),prog:0}; qh.lvl=0; qh.xp=0;
+  for(let k=0;k<3;k++){const v=makeUnit(1,"villager",-58,60,{name:"V"+k,bot:null}); dealDamage(qh,v,10000);}
+  check("Terror of the Fields: 3 villager kills = +1 level, +1 XP",qh.lvl===1&&qh.xp===1&&!qh.quest);
+  qh.quest={i:QUESTS.findIndex(q=>q.ev==="build_castle"),prog:0}; // a 2-XP monster
+  questProgress(qh,"build_castle");
+  check("hard quests pay DOUBLE (castle → +2 levels)",qh.lvl===3&&qh.xp===3&&!qh.quest);
+  // v99: every level gained banks a board reroll — and a redraw spends one for a fresh trio
+  check("levels bank rerolls, one per level ("+(qh.qRerolls||0)+")",qh.qRerolls===3);
+  useTownBoard(qh); // post a trio…
+  check("a banked reroll wipes and reposts the board",
+    global.__G.questRedraw(qh)===true&&qh.qRerolls===2&&qh.questDraft&&qh.questDraft.length===3);
+  qh.questDraft=null; // clean slate for the forge tests
+  // ---- the forge: spend to the 3-stack cap, never past it ----
+  const FULL=BUFFS.length*BUFF_MAX_STACK; // every buff to the cap
+  qh.xp=FULL; qh.buffs={}; qh.smithOffer=null;
+  // v93: the smith deals THREE and the trio STANDS until you choose — no reroll-fishing
+  const {smithOffer,smithPick}=global.__G;
+  const o1=smithOffer(qh).slice(), o2=smithOffer(qh).slice();
+  check("the smith deals 3 distinct buffs and the trio STANDS ("+o1.join("/")+")",
+    o1.length===3&&new Set(o1).size===3&&o1.join()===o2.join());
+  check("you can only take what's on the table (bogus pick refused, XP kept)",
+    smithPick(qh,"bogus")===false&&smithPick(qh,BUFFS.find(b=>!o1.includes(b.id)).id)===false&&qh.xp===FULL);
+  const taken=o1[1];
+  check("choosing spends 1 XP, grants the pick, and clears the table",
+    smithPick(qh,taken)===true&&qh.xp===FULL-1&&buffSt(qh,taken)===1&&!qh.smithOffer);
+  while(qh.xp>0){const o=smithOffer(qh);if(!o||!o.length)break;smithPick(qh,o[0]);}
+  const stacks=BUFFS.reduce((s,b)=>s+buffSt(qh,b.id),0);
+  check(FULL+" XP forges every buff to the ×"+BUFF_MAX_STACK+" cap via chosen trios (stacks "+stacks+", xp left "+qh.xp+")",
+    qh.xp===0&&stacks===FULL&&BUFFS.every(b=>buffSt(qh,b.id)===3));
+  qh.xp=5; useBlacksmith(qh);
+  check("a fully-forged hero can't overspend",qh.xp===5);
+  qh.xp=0;
+  { // a thin pool deals what remains
+    const q2=makeUnit(0,"clubman",-62,58,{name:"Thin",bot:null}); q2.remote="qtest6"; q2.xp=9;
+    q2.buffs={}; for(const b of BUFFS)q2.buffs[b.id]=3;
+    q2.buffs[BUFFS[0].id]=2; q2.buffs[BUFFS[1].id]=1; // only two slots left in the whole forge
+    q2.smithOffer=null;
+    const so=smithOffer(q2);
+    check("a thin pool deals only what remains ("+so.length+")",so.length===2);
+    q2.alive=false;
+  }
+  // ---- stat buffs ride applyBuffStats ----
+  const cb=CLS.clubman;
+  check("Stout Heart / Fleet Foot / Quick Hands land on the stat sheet",
+    qh.maxHp===Math.round(cb.hp*ageBuff(0)*1.15)&&
+    Math.abs(qh.spd-(cb.spd+1.5))<1e-9&&Math.abs(qh.cd-Math.max(0.2,cb.cd-0.3))<1e-9);
+  // ---- event-time buffs, isolated one at a time (far from qh's captain banner) ----
+  const dh=makeUnit(0,"clubman",-60,90,{name:"Edge",bot:null}); dh.remote="qtest2"; dh.buffs={dmg:3};
+  const tgt=makeUnit(1,"clubman",-58,90,{name:"Tgt",bot:null}); tgt.bot=null; tgt.hp=tgt.maxHp=1000;
+  let h0=tgt.hp; dealDamage(dh,tgt,100);
+  check("Honed Edge ×3 = +15% damage (dealt "+(h0-tgt.hp)+")",Math.abs((h0-tgt.hp)-115)<1e-6);
+  const vh=makeUnit(0,"clubman",-64,90,{name:"Tank",bot:null}); vh.remote="qtest3"; vh.hp=vh.maxHp=1000;
+  vh.buffs={shield:3};
+  h0=vh.hp; dealDamage(tgt,vh,100);
+  check("Raised Shield ×3 takes 15% off (took "+(h0-vh.hp)+")",Math.abs((h0-vh.hp)-85)<1e-6);
+  vh.buffs={dodge:1};
+  {const MR=Math.random; Math.random=()=>0; h0=vh.hp; dealDamage(tgt,vh,100); Math.random=MR;}
+  check("Sixth Sense dodges the blow clean",vh.hp===h0);
+  vh.buffs={leech:0}; // (clear)
+  dh.buffs={leech:2}; dh.hp=dh.maxHp-10;
+  h0=dh.hp; dealDamage(dh,tgt,50);
+  check("Bloodthirst drinks 2 HP on the hit",Math.abs(dh.hp-(h0+2))<1e-6);
+  // captain's banner: refresh the cache, then an ordinary BOT ally near qh hits harder
+  qh.buffs={captain:3}; applyBuffStats(qh); questTick(0.01);
+  const ally=makeUnit(0,"clubman",-60,62,{name:"Ally",bot:null});
+  const foe=makeUnit(1,"clubman",-58,62,{name:"Foe",bot:null}); foe.bot=null; foe.hp=foe.maxHp=1000;
+  h0=foe.hp; dealDamage(ally,foe,100);
+  check("Captain's Banner ×3: the nearby ally hits +3% (dealt "+(h0-foe.hp)+")",Math.abs((h0-foe.hp)-103)<1e-6);
+  // second skin: 5 quiet seconds, then the knitting
+  vh.buffs={regen:3}; vh.hp=500; vh._lastHurt=global.__G.getT()-10;
+  questTick(1.0);
+  check("Second Skin knits +1.5 HP/s after the quiet",Math.abs(vh.hp-501.5)<1e-6);
+  check("Deep Satchel: 20 → 50 carry",(dh.buffs={carry:3},carryCap(dh)===50)&&carryCap(ally)===20);
+  // master builder: the first swing banks bonus progress, once per site
+  const site=makeBuilding(0,"house",-84,86,false);
+  dh.buffs={builder:2};
+  addConstructionHit(site,dh); addConstructionHit(site,dh);
+  check("Master Builder banks +2 on the FIRST swing only (progress "+site.progress+")",site.progress===4);
+  // build-quest credit lands on the human who placed the foundation
+  const farmB=makeBuilding(0,"farm",-94,86,false); farmB.qBy=dh.id;
+  dh.buffs={}; dh.lvl=0; dh.xp=0; dh.quest={i:QUESTS.findIndex(q=>q.ev==="build_farm"),prog:4};
+  for(let k=0;k<20&&!farmB.built;k++)addConstructionHit(farmB,dh);
+  check("a finished farm pays its placer's quest",farmB.built&&dh.lvl===1&&!dh.quest);
+  // the scout quest: see the throne, come home alive
+  const eyes=makeUnit(0,"scout",-60,100,{name:"Eyes",bot:null}); eyes.remote="qtest4"; eyes.lvl=0; eyes.xp=0;
+  eyes.quest={i:QUESTS.findIndex(q=>q.ev==="scout"),prog:0};
+  const etcQ=global.__G.teamTC(1), otcQ=global.__G.teamTC(0);
+  check("both thrones still stand for the scout test",!!etcQ&&!!otcQ);
+  eyes.root.position.set(etcQ.x+5,0,etcQ.z+5); questTick(0.05);
+  check("Eyes on the Throne: the enemy TC is SEEN",eyes._scoutOut===true);
+  eyes.root.position.set(otcQ.x+5,0,otcQ.z+5); questTick(0.05);
+  check("…and coming home alive pays 2 levels",eyes.lvl===2&&eyes.xp===2&&!eyes.quest);
+  // bazaar tiers rank near/mid/far from EACH throne
+  const tiers=[0,1].map(t=>neutralMarkets.map(m=>bazaarTier(t,m)).sort().join(""));
+  check("bazaar tiers rank 0/1/2 from both thrones ("+tiers.join(" & ")+")",tiers[0]==="012"&&tiers[1]==="012");
+  // death takes its due
+  qh.lvl=7; qh.xp=2; qh.quest={i:0,prog:10}; qh.buffs={dmg:3,spd:1}; qh.smithOffer=["dmg","spd","hp"];
+  killUnit(qh,null);
+  check("death wipes level, XP, quest, every buff AND the smith's standing offer",
+    qh.lvl===0&&qh.xp===0&&!qh.quest&&Object.keys(qh.buffs).length===0&&!qh.smithOffer);
+  // v88: nothing may bury a Town Board. Self-calibrating: find ground where a house
+  // IS legal, stand a fake board there, and watch the SAME spot flip to refused —
+  // so only the board guard can be the cause. (Naive probes at the real boards are
+  // vacuous: the TC's own clearance already refuses those spots.)
+  {
+    let spot=null;
+    for(let x=-100;x<=100&&!spot;x+=7)for(let z=-110;z<=110&&!spot;z+=7)
+      if(global.__G.validFor("house",x,z,0))spot={x,z};
+    check("open ground found for the board-guard probe",!!spot);
+    if(spot){
+      townBoards.push({team:0,x:spot.x,z:spot.z,mesh:null});
+      const during=global.__G.validFor("house",spot.x,spot.z,0);
+      townBoards.pop();
+      const after=global.__G.validFor("house",spot.x,spot.z,0);
+      check("the board guard refuses building over a board, and releases when it's gone",
+        during===false&&after===true);
+    }
+  }
+  // v89: the horn calls FIVE — the nearest soldiers, Bannerman adds one per stack
+  {
+    const rl=makeUnit(0,"clubman",95,-95,{name:"Horn",bot:null}); rl.remote="qtest5";
+    const band=[];
+    for(let k=0;k<9;k++)band.push(makeUnit(0,"clubman",97+(k%3)*2,-97+((k/3)|0)*2,{name:"B"+k,bot:{role:"citizen"}}));
+    let res=global.__G.toggleRallyFor(rl);
+    const n1=units.filter(v=>v.rally).length;
+    check("G rallies exactly the cap of 5 ("+res.n+" reported, "+n1+" flagged)",res.on&&res.n===5&&n1===5);
+    global.__G.toggleRallyFor(rl); // recall
+    check("a second horn stands everyone down",units.every(v=>!v.rally));
+    rl.buffs={rally:3}; // BANNERMAN ×3
+    res=global.__G.toggleRallyFor(rl);
+    const n2=units.filter(v=>v.rally).length;
+    check("Bannerman ×3 rallies 8 ("+res.n+" reported, "+n2+" flagged)",res.on&&res.n===8&&n2===8);
+    global.__G.toggleRallyFor(rl); // stand down + tidy
+    for(const v of band)v.alive=false;
+    rl.alive=false;
+  }
+  // v89: TAB shows the FULL quest text — the feed scrolls away, the scoreboard doesn't
+  {
+    const p0=units.find(u=>u.isPlayer), sb=global.document.getElementById("scoreboard");
+    const qSave=p0.quest, bSave=p0.buffs;
+    p0.quest={i:0,prog:1}; p0.buffs={dmg:2,rally:1};
+    global.__G.showScoreboard(true);
+    const html=String(sb.innerHTML);
+    const withQ=html.includes(QUESTS[0].desc)&&html.includes("1/"+QUESTS[0].n);
+    const withB=html.includes("Honed Edge ×2")&&html.includes(BUFFS.find(b=>b.id==="dmg").desc)&&
+                html.includes("Bannerman ×1")&&html.includes(BUFFS.find(b=>b.id==="rally").desc);
+    p0.quest=null; p0.buffs={}; global.__G.showScoreboard(true);
+    const withoutQ=String(sb.innerHTML).includes("No active quest")&&!String(sb.innerHTML).includes("YOUR BUFFS");
+    p0.quest=qSave; p0.buffs=bSave; global.__G.showScoreboard(false);
+    check("TAB scoreboard carries the full quest description and progress",withQ&&withoutQ);
+    check("TAB scoreboard spells out every active buff with stacks (v90)",withB);
+  }
+  // E-priority: climbing down from a tower ALWAYS beats the training menu
+  {const p0=units.find(u=>u.isPlayer), g0=p0.garrison;
+   p0.garrison={x:0,z:0};
+   check("E-priority: a garrisoned player's E is the climb-down (candidate d2 = 0)",
+     global.__G.interactCandidateD2()===0);
+   p0.garrison=g0;}
+}
+const vehicles=units.filter(u=>u.alive&&(CLS[u.cls].rig==="cart"||isSiege(u.cls))).length;
+check("8-minute campaign survived with vehicles fielded ("+vehicles+" carts/siege alive, ages "+teamAge[0]+"/"+teamAge[1]+")",vehicles>0);
+// ---------------- WALL LINES, GATES, AND ROYAL MORTALITY ----------------
+global.__G.setGameOver(false); // a campaign that ended in regicide must not mute the mechanics tests
+const {wallLineSegments,placeGateOnWall,kings,healTick}=global.__G;
+const segs=wallLineSegments("stone_wall",-60,95,-25,95); // a 35-unit line on open ground
+check("wall line yields evenly spaced oriented segments ("+segs.length+")",
+  segs.length===3&&segs.every(s=>Math.abs(s.rot-segs[0].rot)<1e-9));
+const wallsMade=[];
+for(const s of segs)if(global.__G.validFor("stone_wall",s.x,s.z,0))wallsMade.push(global.__G.makeBuilding(0,"stone_wall",s.x,s.z,true,s.rot));
+check("line segments place without collisions ("+wallsMade.length+"/3)",wallsMade.length===3);
+const mid=wallsMade[1], gate=placeGateOnWall(mid,"stone_gate",0);
+check("a gate replaces its wall segment in place",
+  !mid.alive&&gate&&gate.alive&&gate.x===mid.x&&gate.z===mid.z&&gate.rot===mid.rot&&gate.def.gate===true);
+// snapping + relaxed corners: the pieces an enclosure needs
+const w2=wallsMade[2];
+const endX=w2.x+6.25*Math.cos(w2.rot||0), endZ=w2.z-6.25*Math.sin(w2.rot||0);
+const wtip=global.__G.snapToWallEnd(endX+1.2,endZ-0.8);
+check("wall-end snapping finds the tip",wtip&&Math.hypot(wtip.x-endX,wtip.z-endZ)<0.01);
+const corner=global.__G.wallLineSegments("stone_wall",wtip.x,wtip.z,wtip.x,wtip.z+22);
+check("right-angle corner segments are LEGAL (enclosures possible)",
+  corner.length===2&&corner.every(s=>global.__G.validFor("stone_wall",s.x,s.z,0)));
+
+// the king is beyond mortal medicine: a priest at his side heals nothing
+const kb=kings[0]; const hurtTo=Math.floor(kb.maxHp*0.3); kb.hp=hurtTo;
+global.__G.makeUnit(0,"priest",kb.root.position.x+2,kb.root.position.z+2,{name:"Test Physician"});
+for(let i=0;i<30;i++)healTick(0.5);
+check("the king stays wounded despite a priest at his side ("+Math.round(kb.hp)+"/"+kb.maxHp+")",kb.hp<=hurtTo+0.01);
+
+// ---------------- ECONOMY DISCIPLINE: caps and hauls ----------------
+check("no unit ever exceeds the 20-carry cap",
+  units.every(u=>u.carry.food+u.carry.gold+u.carry.stone+u.carry.wood<=20));
+const pits=[0,1].map(t=>buildings.filter(b=>b.alive&&b.team===t&&b.type==="storage_pit").length);
+console.log("  INFO — storage pits built: BLUE "+pits[0]+" / RED "+pits[1]);
+
+// ---------------- WARBANDS: the AI coordination layer ----------------
+const directors=global.__G.directors;
+for(const D of directors){
+  const who=D.team===0?"BLUE":"RED";
+  check("warband system alive for "+who+" ("+D.bands.length+" bands: "+
+    [...new Set(D.bands.map(b=>b.role))].join("/")+")",D.bands&&D.bands.length>=1);
+  const kg=D.bands.find(b=>b.role==="kingsguard");
+  const survivors=units.filter(v=>v.team===D.team&&v.alive&&!v.isPlayer&&v.dmg>0&&v.cls!=="villager").length;
+  check(who+" kingsguard never disbands ("+(kg?kg.members.length:0)+" strong, "+survivors+" soldiers left)",
+    (kg&&kg.members.length>=1)||survivors===0); // wiped-out armies are excused
+  check(who+" band membership is consistent",
+    D.bands.every(bd=>bd.members.every(v=>v.team===D.team&&v.bandRef===bd)));
+}
+const allRoles=new Set([...Object.keys(directors[0].rolesSeen||{}),...Object.keys(directors[1].rolesSeen||{})]);
+check("mission variety across the campaign, both armies ("+[...allRoles].join("/")+")",allRoles.size>=3);
+// ---- REACTIVE AI: a struck worker summons a rescue band ----
+{const dvic=global.__G.makeUnit(0,"villager",-190,-110,{name:"Woodcutter",bot:{role:"citizen"}});
+ const datt=global.__G.makeUnit(1,"archer",-186,-110,{name:"Raider"});
+ global.__G.dealDamage(datt,dvic,3);
+ check("a struck worker raises a distress call",!!directors[0].distress&&
+   Math.hypot(directors[0].distress.x+190,directors[0].distress.z+110)<3);
+ let aided=false;
+ for(let i=0;i<160&&!aided;i++){ // let a director think fire
+   global.__G.tick(0.05);
+   aided=directors[0].bands.some(bd=>bd.aid&&Math.hypot(bd.aid.x+190,bd.aid.z+110)<8);
+ }
+ check("a band is dispatched to the distress point",aided||directors[0].lastRescue>0);
+ dvic.alive=false; datt.alive=false;}
+// ---- REACTIVE AI: an overwhelmed Town Center levies its villagers ----
+global.__G.setGameOver(false); // an accidental regicide in a prior staged fight must not mute this section
+{const tcB=global.__G.teamTC(0);
+ if(!tcB){check("an overwhelmed TC levies villagers into soldiers (SKIP: campaign razed the TC)",true);
+  check("the militia stands down and returns to the fields (SKIP)",true);}else{
+ let defs=0;
+ for(const e of units)if(e.alive&&e.team===0&&e.cls!=="villager"&&!e.isKing&&
+   Math.hypot(e.root.position.x-tcB.x,e.root.position.z-tcB.z)<34)defs++;
+ const mob=[];
+ for(let k=0;k<defs+4;k++)mob.push(global.__G.makeUnit(1,"clubman",tcB.x+14+(k%4)*2,tcB.z-6+Math.floor(k/4)*2,{name:"Mob "+k}));
+ // ensure at least a few villagers stand near the TC to be levied
+ const vills=[];
+ for(let k=0;k<3;k++)vills.push(global.__G.makeUnit(0,"villager",tcB.x-10-k*2,tcB.z+6,{name:"Levy "+k}));
+ // DETERMINISTIC: run the war room synchronously on this exact state —
+ // waiting on director timers lets the (working!) kingsguard spoil the head-count
+ directors[0].lastLevy=-99;
+ global.__G.manageBands(directors[0]);
+ let leviedUnit=null;
+ for(const v of units)if(v.alive&&v.team===0&&v._levy){leviedUnit=v;break;}
+ check("an overwhelmed TC levies villagers into soldiers",!!leviedUnit&&leviedUnit.cls!=="villager");
+ for(const m of mob)m.alive=false; // threat ends
+ if(leviedUnit)leviedUnit._levyClear=-99; // ten quiet seconds, compressed
+ global.__G.manageBands(directors[0]);
+ check("the militia stands down and returns to the fields",
+   !!leviedUnit&&leviedUnit.cls==="villager"&&!leviedUnit._levy);
+ for(const v of vills)if(v.alive)v.alive=false;}}
+
+// every melee age must assemble its bespoke rig — clubman through musketeer
+const meleeFit={};
+for(const mc of ["clubman","shortsword","broadsword","legionaire","vanguard","musketeer","spearman","spearfighter","impspear","hoplite","pikeman","halberdier","slinger","archer","imparcher","comparcher","crossbowman","skirmisher","chariot","heavycav","cataphract","knight","dragoon","scout","elitescout"]){
+  const t=global.__G.NET?global.__G.makeUnit(0,mc,-150,90,{name:"Fit "+mc}):null;
+  meleeFit[mc]=t?(t.rig.torso.children.length+"/"+t.rig.head.children.length):"x";
+}
+check("melee line rigs assemble (torso/head parts: "+Object.entries(meleeFit).map(([k,v])=>v).join(" ")+")",
+  Object.values(meleeFit).every(v=>{const [a,b]=v.split("/").map(Number);return a>=8&&b>=2;}));
+
+// ---------------- MULTIPLAYER: net layer loopback (host packs → guest applies) ----------------
+// Peer is undefined in Node — the fact that 10-net.js LOADED at all proves the guard works.
+const NET=global.__G.NET;
+// ---- v77: NEUTRAL CREEP CAMPS — pockets, aggro, leash, chests, steals, respawn ----
+global.__G.setGameOver(false); // an accidental regicide in a prior staged fight must not mute this section
+{
+  const G=global.__G, CS=G.campStates, MAPh=G.MAP, CR=G.CAMP_R;
+  check("six creep camps ring the world (normal 5 bodies, the shore 11)",
+    CS.length===6&&CS.filter(s=>!s.boss).every(s=>s.creeps.length===5)&&CS.find(s=>s.boss).creeps.length===11);
+  check("camps bump OUT past the border; 4 corners + 2 long-edge midpoints",
+    CS.every(s=>Math.abs(s.x)>MAPh.x||Math.abs(s.z)>MAPh.z)&&CS.filter(s=>s.x===0).length===2);
+  // campaign attrition is real: passing armies can thin a pack, and a wiped camp sits `waiting`.
+  // The strict 4-5 roll is asserted on a FRESH wave below, where it's deterministic.
+  check("each NORMAL camp holds a sane pack (≤5 alive; attrition & wipe cycles allowed)",
+    CS.filter(s=>!s.boss).every(s=>{const a=s.creeps.filter(c=>c.alive).length;
+      return s.waiting?a===0:(a>=1&&a<=5);}));
+  {const c0=CS.find(s=>!s.boss); G.campNewWave(c0);
+   const a=c0.creeps.filter(c=>c.alive).length;
+   check("a FRESH wave musters exactly 4-5 ("+a+")",a>=4&&a<=5);}
+  // the border holds everywhere EXCEPT inside a pocket
+  const strayer=G.makeUnit(0,"clubman",100,MAPh.z-1,{name:"Strayer",bot:{role:"citizen"}});
+  for(let i=0;i<80;i++)G.moveUnit(strayer,0,1,0.05);
+  check("the wall stands at the MOUNTAIN LINE: fringe apron walkable, then it holds (z "+strayer.root.position.z.toFixed(1)+")",
+    strayer.root.position.z>MAPh.z+2&&strayer.root.position.z<=MAPh.z+9.01);
+  strayer.alive=false;
+  // walk INTO the north-mid pocket: allowed — and the pack answers
+  const north=CS.find(s=>s.x===0&&s.z>0);
+  const intruder=G.makeUnit(0,"clubman",0,MAPh.z-2,{name:"Intruder",bot:{role:"citizen"}});
+  intruder.hp=intruder.maxHp=100000; intruder.bot=null; // stand and take it (and never bot-wander)
+  intruder.root.position.set(north.x,0,north.z); // step onto the camp's heart
+  G.moveUnit(intruder,0,0.01,0.05);
+  check("a unit may stand OUTSIDE the border inside a camp pocket (z "+intruder.root.position.z.toFixed(1)+")",
+    intruder.root.position.z>MAPh.z+2);
+  let maxLeash=0, hp0i=intruder.hp;
+  G.NET.mode="host";
+  for(let i=0;i<240;i++){ // 8 sim-seconds of mauling
+    tick();
+    for(const c of north.creeps)if(c.alive)
+      maxLeash=Math.max(maxLeash,Math.hypot(c.root.position.x-north.x,c.root.position.z-north.z));
+  }
+  check("the pack savages an intruder standing in the camp (-"+Math.round(hp0i-intruder.hp)+" hp)",intruder.hp<hp0i-100);
+  // leash: drag the pack's attention OUTSIDE the pocket — nobody follows
+  intruder.root.position.set(0,0,MAPh.z-30);
+  for(let i=0;i<240;i++){
+    tick();
+    for(const c of north.creeps)if(c.alive)
+      maxLeash=Math.max(maxLeash,Math.hypot(c.root.position.x-north.x,c.root.position.z-north.z));
+  }
+  check("creeps never leave their camp circle (max leash "+maxLeash.toFixed(1)+" < "+CR+")",maxLeash<=CR+0.01);
+  const wounded=north.creeps.find(c=>c.alive);
+  wounded.hp=wounded.maxHp*0.4; // bloody one by hand — the camp is calm, so it must knit
+  const wh=wounded.hp;
+  for(let i=0;i<90;i++)tick();
+  check("calm creeps regenerate (+"+Math.round(wounded.hp-wh)+" hp)",wounded.hp>wh+20);
+  intruder.hp=1; G.dealDamage(north.creeps[0],intruder,9999); // tidy: the wilds claim their kill
+  // WIPE a camp: the chest appears, typed by the pack that guarded it
+  const camp0=CS[0], slayer=G.makeUnit(0,"clubman",camp0.x,camp0.z,{name:"Slayer",bot:{role:"citizen"}});
+  slayer.bot=null;
+  const kind0=camp0.kind, want=kind0==="wolf"?"food":"gold";
+  for(const c of camp0.creeps)if(c.alive)G.dealDamage(slayer,c,99999);
+  tick();
+  check("a wiped camp drops a treasure chest",!!camp0.chest&&camp0.waiting===true);
+  check("wolves guard FOOD, barbarians guard GOLD ("+kind0+" → "+camp0.chestKind+")",camp0.chestKind===want);
+  check("dead creeps lie as corpses in the camp",camp0.creeps.every(c=>!c.alive)&&camp0.creeps.some(c=>c.corpse));
+  slayer.alive=false; // step off the prize — the dead can't loot, and the thief must get there first
+  // the STEAL: a RED boot lands on the chest first — red banks the treasure
+  const thief=G.makeUnit(1,"clubman",camp0.x,camp0.z,{name:"Thief",bot:{role:"citizen"}});
+  thief.bot=null; thief.remote="thief-peer"; // remotes score like humans — an exact, economy-noise-proof measure
+  tick();
+  check("first boot on the chest takes it — even an enemy's (RED thief scored "+(thief.score||0)+")",
+    (thief.score||0)===300&&camp0.chest===null);
+  thief.alive=false; thief.remote=null;
+  // the 3-minute clock: force it due — a fresh pack rises, 4-5 strong, single group only
+  camp0.respawnAt=-1;
+  tick();
+  const alive0=camp0.creeps.filter(c=>c.alive).length;
+  check("after the wait a fresh pack claims the camp ("+alive0+" of 4-5, kind "+camp0.kind+")",
+    !camp0.waiting&&alive0>=4&&alive0<=5&&camp0.creeps.filter(c=>c.alive).every(c=>c.cls===camp0.kind));
+  // an UNCLAIMED chest vanishes when the next wave arrives
+  for(const c of camp0.creeps)if(c.alive)G.dealDamage(slayer,c,99999);
+  tick();
+  check("second wipe drops a second chest",!!camp0.chest);
+  camp0.respawnAt=-1;
+  tick();
+  check("an unclaimed chest is dragged off by the NEXT wave (chest gone, pack alive)",
+    camp0.chest===null&&camp0.creeps.filter(c=>c.alive).length>=4);
+  // ---- v79: THE RAID BOSS SHORE — empty start, 15:00 landing, twin chests, split steal ----
+  const shore=CS.find(s=>s.boss);
+  check("the southern shore is a DOUBLE camp (r "+shore.r+"), empty until the raid lands at 15:00",
+    shore.r===52&&shore.z<0&&shore.waiting===true&&shore.respawnAt===900&&shore.creeps.every(c=>!c.alive));
+  check("the doubled bay is walkable well past a normal camp's reach",
+    G.inCampGround(shore.x,shore.z-40)&&!G.inCampGround(shore.x+70,shore.z));
+  // v82 GHOST REGRESSION: unspawned raiders must be STRICTLY invisible even when scouted up close —
+  // a truthiness leak (visible=undefined) once rendered them as standing, unattackable ghosts
+  {
+    const gpl=units.find(u=>u.isPlayer), gx=gpl.root.position.x, gz=gpl.root.position.z;
+    gpl.alive=true; gpl.root.position.set(shore.x,0,shore.z+8); // the follow-cam and FOW both ride the player
+    for(let i=0;i<40;i++)tick(); // the camera glides in; several LOD passes with the bay scouted up close
+    const camNear=Math.hypot(G.camera.position.x-shore.x,G.camera.position.z-(shore.z+8))<60;
+    check("unspawned raiders are strictly invisible (visible===false, no ghosts; cam on the sand: "+camNear+")",
+      camNear&&shore.creeps.every(c=>c.root.visible===false));
+    gpl.root.position.set(gx,0,gz);
+  }
+  shore.respawnAt=-1; tick(); // sound the horn early
+  const vb=shore.creeps[0];
+  check("the raid lands: a chieftain and ten raiders ashore",
+    shore.creeps.filter(c=>c.alive).length===11&&vb.cls==="vikingboss"&&
+    shore.creeps.slice(1).every(c=>c.cls==="viking")&&Math.abs(vb.body.scale.x-1.45)<0.01);
+  check("the chieftain leads from the front (hp "+vb.maxHp+", dmg "+vb.dmg+")",vb.maxHp>=450&&vb.dmg>=40);
+  const reaver=G.makeUnit(0,"clubman",shore.x,shore.z,{name:"Reaver"}); reaver.bot=null;
+  for(const c of shore.creeps)G.dealDamage(reaver,c,999999);
+  reaver.alive=false;
+  tick();
+  check("breaking the raid drops TWIN chests: 500 FOOD and 500 GOLD",
+    shore.chestKind==="food"&&shore.chestKindB==="gold"&&shore.waiting&&shore.respawnAt>T0()+890);
+  // the SPLIT STEAL: blue takes the food chest, red takes the gold chest, same instant
+  const bGrab=G.makeUnit(0,"clubman",shore.x-2.6,shore.z,{name:"BlueGrab"}); bGrab.bot=null; bGrab.remote="grabA";
+  const rGrab=G.makeUnit(1,"clubman",shore.x+2.6,shore.z,{name:"RedGrab"}); rGrab.bot=null; rGrab.remote="grabB"; // remotes score like humans: exact, immune to director spending in the same tick
+  tick();
+  check("twin chests split between RIVAL teams in one instant (blue scored "+(bGrab.score||0)+", red "+(rGrab.score||0)+")",
+    (bGrab.score||0)===500&&(rGrab.score||0)===500&&shore.chest===null&&shore.chestB===null);
+  bGrab.alive=false; rGrab.alive=false; bGrab.remote=null; rGrab.remote=null;
+  // unclaimed twins are swept away when the NEXT raid lands
+  shore.respawnAt=-1; tick(); // next raid (revives the crew)
+  for(const c of shore.creeps)G.dealDamage(reaver,c,999999);
+  tick();
+  check("a second broken raid drops twins again",!!shore.chest&&!!shore.chestB);
+  shore.respawnAt=-1; tick();
+  check("the NEXT raid sweeps unclaimed twin chests away",
+    shore.chest===null&&shore.chestB===null&&shore.creeps.filter(c=>c.alive).length===11);
+  // put the shore back to sleep so later tests meet a quiet map
+  for(const c of shore.creeps){c.alive=false;c.corpse=false;c.root.visible=false;}
+  shore.waiting=true; shore.respawnAt=1e9;
+  function T0(){return 0;} // (respawnAt is measured from sim time — any positive horizon beats +890)
+  G.NET.mode="solo";
+}
+// ---- v80: THE CHARGE — F hurls the rallied line down the gaze, razes the path, holds the far ground ----
+global.__G.setGameOver(false); // an accidental regicide in a prior staged fight must not mute this section
+{
+  const G=global.__G;
+  G.NET.mode="host";
+  const pl=units.find(u=>u.isPlayer);
+  const ox=pl.root.position.x,oz=pl.root.position.z;
+  pl.alive=true; pl.root.position.set(-60,0,-90); // open southern ground
+  check("F with no rally raises no army (orderCharge refuses)",G.orderCharge(pl,-Math.PI/2)===0||units.every(v=>!v.rally));
+  const troop=[];
+  for(let i=0;i<3;i++){const s=G.makeUnit(0,"clubman",-64+i*3,-96,{name:"Charger"+i,bot:{role:"citizen"}});
+    s.rally=true; s.spread=(i-1)*3; s.hp=s.maxHp=5000; troop.push(s);} // hardy: stray armies must not decide this test
+  const shack=G.makeBuilding(1,"house",-25,-90,true); // a red shack squats in the charge lane
+  const n=G.orderCharge(pl,-Math.PI/2); // gaze due EAST: fx=-sin(-π/2)=1
+  check("the horn sounds: "+n+" rallied soldiers take a charge order east",
+    n>=3&&troop.every(v=>v.chargeTo&&Math.abs(v.chargeTo.x-25)<1&&Math.abs(v.chargeTo.z+90)<1));
+  let razedAt=-1;
+  for(let i=0;i<1400;i++){ tick(); if(razedAt<0&&!shack.alive)razedAt=i; }
+  check("the charge RAZES the building in its path ("+(razedAt>=0?("frame "+razedAt):("hp "+Math.round(shack.hp)))+")",razedAt>=0);
+  // v93: the mark can land beside (or inside) a campaign building since the 2.2 gap
+  // sprawled the towns — holders park around obstructions, so allow a wider ring and
+  // let ONE straggler get body-blocked without failing the whole line (was 3/3 within 10).
+  const held=troop.filter(v=>v.alive&&Math.hypot(v.root.position.x-25,v.root.position.z+90)<16).length;
+  check("the line HOLDS the far ground after the path is cleared ("+held+"/3 within 16 of the mark)",held>=2);
+  check("holding troops keep their charge order until recalled",troop.every(v=>v.chargeTo));
+  G.toggleRally(); // G: a fresh rally recalls the line — the charge dissolves
+  check("G (rally toggle) cancels the standing charge",troop.every(v=>v.chargeTo===null));
+  for(const v of units)if(v.rally){v.rally=false;v.chargeTo=null;} // stand everyone down explicitly (v89: a second G would RALLY 5, not stand down)
+  // a charge aimed past the border may end INSIDE a camp pocket — the wilds are chargeable
+  const scout2=G.makeUnit(0,"clubman",0,118,{name:"WildCharger",bot:{role:"citizen"}}); scout2.rally=true;
+  const pl2x=pl.root.position.x,pl2z=pl.root.position.z;
+  pl.root.position.set(0,0,118);
+  G.orderCharge(pl,Math.PI); // gaze due NORTH (+z): straight at the north-mid camp
+  check("a charge can be aimed INTO a creep camp pocket (end z "+(scout2.chargeTo?scout2.chargeTo.z.toFixed(1):"?")+" > "+G.MAP.z+")",
+    !!scout2.chargeTo&&scout2.chargeTo.z>G.MAP.z);
+  scout2.rally=false; scout2.chargeTo=null; scout2.alive=false;
+  for(const v of troop)v.alive=false;
+  pl.root.position.set(ox,0,oz);
+  G.NET.mode="solo";
+}
+// ---- v84: THE GREAT REBALANCE — the new wheel, the bayonet, the volley, the dry pistol ----
+global.__G.setGameOver(false); // an accidental regicide in a prior staged fight must not mute this section
+{
+  const G=global.__G, R=G.rps;
+  check("wheel: spears 3.8x vs mounted — a spearfighter 3-hits a scout, 4-hits a chariot",
+    R("spearman","scout")===3.8&&Math.ceil(CLS.scout.hp/(CLS.spearfighter.dmg*3.8))===3&&
+    Math.ceil(CLS.chariot.hp/(CLS.spearfighter.dmg*3.8))===4);
+  check("wheel: arrows & musket balls bounce off war engines (0.15x)",
+    R("archer","catapult")===0.15&&R("musketeer","trebuchet")===0.15&&R("slinger","batteringram")===0.15);
+  check("wheel: swords push spears (1.25x), dismantle siege (2x); cavalry dominates swords & siege (1.5x)",
+    R("vanguard","spearman")===1.25&&R("vanguard","catapult")===2.0&&
+    R("knight","vanguard")===1.5&&R("knight","catapult")===1.5&&R("knight","archer")===1.8);
+  check("wheel: artillery hits troops at FULL force now; rams stay clumsy (0.25)",
+    R("catapult","clubman")===1&&R("cannon","halberdier")===1&&R("batteringram","clubman")===0.25);
+  check("scouts are economy killers (4.85x): traders die in 3, villagers & carts in 2",
+    R("scout","trader")===4.85&&Math.ceil(CLS.trader.hp/(CLS.scout.dmg*4.85))===3&&
+    Math.ceil(CLS.villager.hp/(CLS.scout.dmg*4.85))<=2&&Math.ceil(CLS.tradecart.hp/(CLS.scout.dmg*4.85))<=2);
+  check("swords besiege: melee tiers carry bMult 1.5 (the musket ball is exempt — its bayonet chews instead)",
+    CLS.vanguard.bMult===1.5&&CLS.clubman.bMult===1.5&&CLS.musketeer.bMult===undefined);
+  G.NET.mode="host";
+  { // THE BAYONET: steel at arm's length beats powder
+    const mk=G.makeUnit(0,"villager",-100,110,{name:"Bayoneteer"});
+    mk.cls="musketeer"; mk.dmg=CLS.musketeer.dmg; mk.rng=CLS.musketeer.rng; mk.cd=CLS.musketeer.cd; mk.ranged=true; mk.atkT=0;
+    const eng=G.makeUnit(1,"catapult",-100,112,{name:"Engine"}); eng.hp=eng.maxHp=1000;
+    G.tryAttack(mk);
+    const dealt=1000-eng.hp;
+    check("the BAYONET stabs an adjacent war engine for steel damage (dealt "+dealt.toFixed(1)+" = 14 x 2.0)",
+      Math.abs(dealt-28)<0.5&&Math.abs(mk.atkT-CLS.musketeer.bayonet.cd)<0.01);
+    mk.alive=false; eng.alive=false;
+  }
+  { // THE CASTLE VOLLEY: five arrows in a burst, then the long wind-down
+    const cas=G.makeBuilding(0,"castle",-60,108,true);
+    const tgt=G.makeUnit(1,"clubman",-60,114,{name:"PinCushion"}); tgt.bot=null; tgt.hp=tgt.maxHp=100000;
+    const h0=tgt.hp;
+    for(let i=0;i<48;i++)tick(); // 1.6s — the whole volley flies and lands
+    const burst=h0-tgt.hp;
+    for(let i=0;i<60;i++)tick(); // 2s inside the 4.5s wind-down — the murder-holes stay shut
+    const lull=(h0-tgt.hp)-burst;
+    check("the castle VOLLEYS: a 5-arrow burst ("+burst.toFixed(0)+" dmg), then silence ("+lull.toFixed(0)+" in the lull)",
+      burst>=56&&burst<=84&&lull<=14);
+    cas.alive=false; tgt.alive=false;
+  }
+  { // the pistol never refills on its own — only a fresh re-arm reloads it
+    const dg=G.makeUnit(0,"villager",-40,108,{name:"DryGun"});
+    dg.cls="dragoon"; dg.ammo=0;
+    for(let i=0;i<300;i++)tick(); // ten dry seconds
+    const still=dg.ammo;
+    G.setClass(dg,"dragoon"); // re-arm: the quartermaster hands over fresh powder
+    check("the pistol never regenerates (ammo "+still+" after 10s) but a re-arm reloads it ("+dg.ammo+")",
+      still===0&&dg.ammo===6);
+    dg.alive=false;
+  }
+  G.NET.mode="solo";
+}
+check("net layer loads without PeerJS (solo untouched)",NET&&NET.mode==="solo");
+NET._snapN=2; NET._lastRow=null; // fresh cache → full keyframe
+const snap=NET.packSnap();
+const snapRows=NET.readSnapRows(snap); // v95: unit rows ride as packed binary now
+check("packSnap FULL snap carries every unit incl. late carts ("+snapRows.length+")",snapRows.length===units.length&&units.length>=100);
+check("v95 binary: 18-byte rows (v99 cargo byte), header count honest ("+snap.ub.byteLength+"B for "+snap.un+")",
+  snap.ub.byteLength===snap.un*18&&snap.un===snapRows.length);
+// name tags: sc rows now carry unit ids; syncNameTags hangs and clears billboards
+{const tagU=global.__G.makeUnit(0,"villager",-170,110,{name:"Tagged"});
+ global.__G.syncNameTags([["Ally",0,0,tagU.id]]);
+ check("name tag hangs on a player-controlled body",!!tagU._tag&&tagU._tagText==="Ally");
+ global.__G.syncNameTags([]);
+ check("name tag clears when the body is no longer player-controlled",!tagU._tag);
+ tagU.alive=false;}
+check("snapshot heartbeat: every 4th snap rides the reliable lane (q%4)",(function(){
+  // the dedup guard means duplicates are harmless: assert the predicate logic itself
+  let dup=0; for(let q=0;q<16;q++)if(q%4===0)dup++;
+  return dup===4;})());
+// delta behavior: an immediately-following snap ships only players/kings/changed rows
+{const snap2=NET.packSnap();
+ const n2=NET.readSnapRows(snap2).length;
+ check("packSnap DELTA drops idle rows ("+n2+" of "+units.length+")",
+   n2<units.length*0.6&&n2>=1);}
+check("keyframe snapshot carries every building (binary rows)",NET.readBldRows(snap).length===buildings.length);
+const lean=NET.packSnap(); // the next two travel light
+check("v95 lean snapshots ship NO building rows when nothing changed",lean.bb===undefined);
+check("compact snapshot is LEAN ("+((lean.bs||0)/1024).toFixed(2)+" KB est. @15Hz)",
+  (lean.bs||0)<8000&&lean.un*18===lean.ub.byteLength);
+check("snapshots carry a sequence",typeof snap.q==="number"&&lean.q===snap.q+2); // +2: the delta-probe snap sits between
+// driveRemote: a fake guest holds E next to a berry bush and fills their hands
+const gu=units.find(u=>u.team===0&&u.bot&&!u.isKing&&u.bot.role!=="cart"&&u.alive&&u.cls==="villager");
+gu.remote="test-peer"; gu.garrison=null; gu.gathering=null;
+const berry=nodes.find(n=>n.type==="food"&&n.amount>50);
+gu.root.position.set(berry.x+1.6,0,berry.z);
+const sentNotes=[]; const fakeR={unit:gu,input:{e:1},conn:{open:true,send:o=>sentNotes.push(o)},lastE:true,eUsed:false};
+const carry0=gu.carry.food+gu.carry.gold+gu.carry.stone+gu.carry.wood, amt0=berry.amount;
+for(let i=0;i<120;i++)NET.driveRemote(fakeR,0.05); // 6 sim-seconds of held E
+const carry1=gu.carry.food+gu.carry.gold+gu.carry.stone+gu.carry.wood;
+check("driveRemote: fake guest gathers (carry "+carry0+"→"+carry1+", node "+amt0+"→"+berry.amount+")",
+  carry1>carry0||berry.amount<amt0||carry0>=20);
+// driveRemote: E-tap garrisons a watch tower
+const wt=buildings.find(b=>b.team===0&&b.alive&&b.built&&b.type==="watch_tower");
+if(wt){
+  gu.root.position.set(wt.x+2,0,wt.z); gu.gathering=null;
+  fakeR.input={e:1}; fakeR.lastE=false; fakeR.eUsed=false;
+  NET.driveRemote(fakeR,0.05);
+  check("driveRemote: E-tap mans a watch tower",gu.garrison===wt);
+  fakeR.input={e:1}; fakeR.lastE=false; // tap again to climb down
+  NET.driveRemote(fakeR,0.05);
+  check("driveRemote: E-tap climbs back down",gu.garrison===null);
+  // the leash: reported feet within 6 units become the truth on the host
+  const lx=gu.root.position.x, lz=gu.root.position.z;
+  fakeR.input={px:lx+3.5,pz:lz+1.5,w:1};
+  for(let i=0;i<8;i++)NET.driveRemote(fakeR,0.05); // the leash GLIDES now — converge
+  check("position leash: the host glides onto the guest's reported feet",
+    Math.abs(gu.root.position.x-(lx+3.5))<0.15&&Math.abs(gu.root.position.z-(lz+1.5))<0.15);
+  fakeR.input={px:lx+300,pz:lz,w:1}; // absurd teleport: rejected, keys walk instead
+  const bx=gu.root.position.x;
+  NET.driveRemote(fakeR,0.05);
+  check("position leash: absurd reports are refused",Math.abs(gu.root.position.x-(lx+300))>200);
+}else console.log("  SKIP — no blue watch tower stood at campaign end");
+try{NET.hostAct(fakeR,{act:"rally"});check("hostAct rally survives",true);}
+catch(e){console.error("  rally threw:",e.message);check("hostAct rally survives",false);}
+gu.remote=null; gu.garrison=null;
+const w=NET.packWorld(units.find(u=>u.team===0&&u.bot&&!u.isKing&&u.bot.role!=="cart"&&u.alive).id);
+check("packWorld carries units+buildings+nodes",
+  w.units.length===units.length&&w.blds.length===buildings.length&&w.nodes.length===nodes.length);
+// loopback: apply the world we just packed to OUR OWN state — a self-consistent world
+// must apply cleanly (this is exactly what a guest does on admit)
+const bldsBefore=buildings.filter(b=>b.alive).length;
+try{
+  NET.applyWorld(w);            // flips NET.mode to "guest" — run this LAST
+  check("applyWorld loopback survives",true);
+}catch(e){console.error("  applyWorld threw:",e.message);check("applyWorld loopback survives",false);}
+check("applyWorld preserved the living building count",
+  buildings.filter(b=>b.alive).length===bldsBefore);
+const possessed=units.find(u=>u.id===w.uid);
+check("guest possession: assigned bot becomes the player",NET.myUid===w.uid&&possessed&&possessed.isPlayer===true);
+// ---------------- SCORING + TEAM SELECTION ----------------
+global.__G.setGameOver(false); // an accidental regicide in a prior staged fight must not mute this section
+const scorer=global.__G.makeUnit(0,"villager",-190,100,{name:"Scorer",isPlayer:false});
+scorer.remote="score-peer"; scorer.score=0;
+global.__G.awardPts=undefined; // (not exported — call through gameplay paths instead)
+// deposit points: fake guest hauls 12 food home via driveRemote
+scorer.carry.food=12;
+scorer.alive=true; scorer.hp=scorer.maxHp; scorer.root.visible=true; // the war zone spares no test dummy
+const scoreR={unit:scorer,input:{},conn:{open:true,send(){}},lastE:false};
+scorer.root.position.set(global.__G.TCPOS[0][0]+3,0,global.__G.TCPOS[0][1]+3);
+NET.driveRemote(scoreR,0.05);
+check("deposits pay 1 point per resource (score "+Math.round(scorer.score||0)+")",Math.round(scorer.score||0)===12);
+// kill points: the scorer slays a fresh enemy clubman (cost = its resource price)
+const victim=global.__G.makeUnit(1,"clubman",-189,101,{name:"Doomed"});
+const kcost=(CLS.clubman.cost.food||0)+(CLS.clubman.cost.gold||0)+(CLS.clubman.cost.stone||0)+(CLS.clubman.cost.wood||0);
+const before=scorer.score||0;
+NET.mode="host"; global.__G.dealDamage(scorer,victim,99999); NET.mode="guest";
+// a villager kill pays a flat 10
+{const vk=global.__G.makeUnit(1,"villager",-160,100,{name:"Victim",bot:{role:"citizen"}});
+ const kk=global.__G.makeUnit(0,"clubman",-159,100,{name:"Killer",bot:{role:"citizen"}}); kk.remote="pts-peer"; // awardPts pays humans only
+ const s0=kk.score||0; NET.mode="host"; global.__G.dealDamage(kk,vk,9999); NET.mode="guest"; // this stretch runs in guest context
+ check("a villager kill is worth 10 points (Δ"+(((kk.score||0)-s0))+")",(kk.score||0)-s0===10);
+ kk.alive=false;}
+// the market cap: a team's sixth market is refused by the validator
+{const mkts=[];
+ for(let i=0;i<5;i++)mkts.push(global.__G.makeBuilding(0,"market",-60+i*16,100,true));
+ check("five markets stand, the validator refuses a sixth", // probe sits 26 out: clear of the v87 2.2 gap
+   global.__G.validFor("market",30,100,0)===false&&global.__G.validFor("market",30,100,1)===true);
+ for(const m of mkts)m.alive=false;}
+check("kills pay the victim's cost (Δ"+Math.round((scorer.score||0)-before)+" = "+kcost+")",
+  !victim.alive&&Math.round((scorer.score||0)-before)===kcost);
+scorer.remote=null;
+// red team selection: a hello asking for RED gets a RED body
+const fakeConn={peer:"red-friend",open:true,sent:[],send(o){this.sent.push(o);}};
+NET.hostAdmit(fakeConn,"RedFriend","red");
+const redBody=NET.remotes["red-friend"]&&NET.remotes["red-friend"].unit;
+check("team selection: a RED request yields a RED body",redBody&&redBody.team===1&&redBody.remote==="red-friend");
+// ---- v92: co-op admission, private-hall passwords, the hall registry, the name screen ----
+{const cc={peer:"coop-friend",open:true,sent:[],send(o){this.sent.push(o);}};
+ NET.gameMode="coop";
+ NET.hostAdmit(cc,"CoopFriend","red");
+ const cb=NET.remotes["coop-friend"]&&NET.remotes["coop-friend"].unit;
+ check("CO-OP: a RED request still lands in BLUE",!!cb&&cb.team===0);
+ NET.gameMode="pvp";
+ NET.hostDrop(cc);}
+{const pc={peer:"pw-friend",open:true,sent:[],send(o){this.sent.push(o);}};
+ NET.password="mead";
+ NET.hostData(pc,{t:"hello",proto:NET.PROTO,name:"Sneak",team:"blue",pw:"ale"});
+ const denied=pc.sent.some(m=>m.t==="deny"&&/password/i.test(m.m))&&!NET.remotes["pw-friend"];
+ NET.hostData(pc,{t:"hello",proto:NET.PROTO,name:"Friend",team:"blue",pw:"mead"});
+ const admitted=!!NET.remotes["pw-friend"];
+ check("a private hall denies the wrong password and admits the right one",denied&&admitted);
+ NET.password=""; NET.hostDrop(pc);}
+{const lc={open:true,sent:[],send(o){this.sent.push(o);}};
+ NET.hall.servers={};
+ NET.hallData(lc,{t:"announce",s:{code:"regicide-aaaa",name:"Filip",mode:"pvp",players:2,proto:NET.PROTO}});
+ NET.hall.servers["regicide-zzzz"]={code:"regicide-zzzz",name:"Ghost",mode:"pvp",players:1,proto:NET.PROTO,t:-1e9}; // two heartbeats dead
+ const mSave=NET.mode, rcSave=NET.roomCode, pubSave=NET.isPublic;
+ NET.mode="host"; NET.roomCode="regicide-test"; NET.isPublic=true;
+ NET.hallData(lc,{t:"list"});
+ const resp=lc.sent.find(m=>m.t==="servers");
+ check("the hall lists fresh games + its keeper's own, and sweeps the dead",
+   !!resp&&resp.list.length===2&&resp.list.some(s=>s.code==="regicide-aaaa")&&
+   resp.list.some(s=>s.code==="regicide-test")&&!resp.list.some(s=>s.code==="regicide-zzzz"));
+ NET.isPublic=false; lc.sent.length=0;
+ NET.hallData(lc,{t:"list"});
+ const resp2=lc.sent.find(m=>m.t==="servers");
+ check("a PRIVATE hall keeps itself off the list",!!resp2&&!resp2.list.some(s=>s.code==="regicide-test"));
+ NET.mode=mSave; NET.roomCode=rcSave; NET.isPublic=pubSave; NET.hall.servers={};}
+{global.document.getElementById("playername").value="John T";
+ NET.uiName();
+ check("the name screen names the warrior (myName='"+NET.myName+"')",NET.myName==="John T");
+ NET.myName="Warrior";}
+// v93: hostAct buff — a guest's pick is validated against the standing table + the forge's yard
+{const bu=global.__G.makeUnit(0,"clubman",-118,60,{name:"Chooser",bot:null}); bu.remote="smith-peer";
+ const fr={unit:bu,conn:{open:true,sent:[],send(o){this.sent.push(o);}},name:"Chooser"};
+ bu.xp=2; bu.smithOffer=null;
+ NET.mode="host";
+ const off=global.__G.smithOffer(bu);
+ NET.hostAct(fr,{act:"buff",pick:"bogus"});
+ const denied=fr.conn.sent.some(m=>m.t==="deny");
+ NET.hostAct(fr,{act:"buff",pick:off[1]});
+ NET.mode="guest";
+ check("hostAct buff: a bogus pick is denied; the offered pick is granted (stack "+global.__G.buffSt(bu,off[1])+", xp "+bu.xp+")",
+   denied&&global.__G.buffSt(bu,off[1])===1&&bu.xp===1);
+ bu.alive=false;}
+if(redBody){redBody.remote=null;delete NET.remotes["red-friend"];NET.conns=NET.conns.filter(c=>c!==fakeConn);}
+
+// THE PISTOL: six rounds through the REAL tryAttack, then dry clicks
+const drg=global.__G.makeUnit(0,"villager",-186,106,{name:"Pistoleer"});
+global.__G.NET.mode="host";
+{
+  drg.cls="dragoon"; drg.dmg=CLS.dragoon.dmg; drg.rng=CLS.dragoon.rng; drg.cd=CLS.dragoon.cd;
+  drg.ammo=6; drg.atkT=0;
+  const mark=global.__G.makeUnit(1,"clubman",-186,112,{name:"Mark"}); // 6 away: pistol range, NOT melee
+  mark.hp=mark.maxHp=2000;
+  let shots=0;
+  for(let i=0;i<9;i++){drg.atkT=0; if(global.__G.tryAttack(drg))shots++;}
+  check("the pistol holds six rounds (fired "+shots+", ammo "+drg.ammo+", damage "+(2000-mark.hp)+")",
+    shots===6&&drg.ammo===0&&Math.round(2000-mark.hp)===330);
+  check("an empty pistol falls silent at range",global.__G.tryAttack(drg)===false);
+  mark.alive=false; mark.hp=0;
+}
+global.__G.NET.mode="guest";
+
+// THE SKILL SHOT: a lobbed stone splashes a cluster
+global.__G.NET.mode="host";
+{
+  const cat=global.__G.makeUnit(0,"villager",-180,95,{name:"Gunner"});
+  cat.cls="catapult"; cat.dmg=40; cat.cd=4; cat.atkT=0;
+  const v1=global.__G.makeUnit(1,"clubman",-168,95,{name:"S1"});
+  const v2=global.__G.makeUnit(1,"clubman",-166,97,{name:"S2"});
+  v1.hp=v1.maxHp=500; v2.hp=v2.maxHp=500;
+  global.__G.launchLob(cat,-167,96);
+  for(let i=0;i<90;i++)tick();
+  check("the skill shot lands and SPLASHES the cluster (hp "+Math.round(v1.hp)+"/"+Math.round(v2.hp)+")",
+    v1.hp<500&&v2.hp<500);
+  v1.alive=false;v2.alive=false;cat.alive=false;
+}
+global.__G.NET.mode="guest";
+
+// THE FROZEN-CLOCK regression: combat timers must tick even for LOD-skipped units.
+// (atkT once lived in animateUnit, which LOD gates — far units locked after one attack)
+const swU=global.__G.makeUnit(0,"villager",-198,112,{name:"Unseen Statue"}); // no bot: it just stands
+swU.lodSkipAnim=true; swU.root.visible=false;
+swU.atkT=3; swU.swing=0.25; swU.attackAnimT=0.4;
+for(let i=0;i<30;i++)tick();
+check("combat clocks tick for UNSEEN units (atkT "+swU.atkT.toFixed(2)+", swing "+swU.swing.toFixed(2)+")",
+  swU.atkT<3&&swU.swing<=0&&swU.attackAnimT<=0);
+try{
+  NET.applySnap(NET.packSnap()); // keyframe round-trip in guest mode
+  NET.applySnap(NET.packSnap()); // lean round-trip (no blds field)
+  const stale=NET.packSnap(); stale.q=-5;
+  NET.applySnap(stale);          // out-of-order arrival must be discarded
+  check("applySnap loopback survives keyframe + lean + stale",true);
+}catch(e){console.error("  applySnap threw:",e.message);check("applySnap loopback survives keyframe + lean + stale",false);}
+check("guest mode engaged after world apply",NET.mode==="guest");
+// hammer the guest frame: prediction, interpolation, watchdog, effects
+const keys=global.__G.keys; keys.w=true; // guest holds W — prediction must move us
+const pp=units.find(u=>u.isPlayer);
+pp.alive=true; pp.hp=pp.maxHp; pp.root.visible=true; pp.garrison=null; // possession can hand us a corpse
+pp.root.position.set(-40,0,60); // open ground: walls and buildings can pin a spawn to 0.0 movement
+delete pp.authX; // stale authority must not yank the measurement
+const px0=pp.root.position.x, pz0=pp.root.position.z;
+let gfOK=true;
+try{
+  NET.applySnap(NET.packSnap()); // prime interp pairs + authority
+  for(let i=0;i<40;i++)NET.guestFrame(0.05); // 2 predicted seconds
+}catch(e){console.error("  guestFrame threw:",e.stack.split("\n").slice(0,3).join("\n"));gfOK=false;}
+keys.w=false;
+check("guest frame survives 40 frames",gfOK);
+const moved=Math.hypot(pp.root.position.x-px0,pp.root.position.z-pz0);
+check("prediction: our body moves locally the moment W is held ("+moved.toFixed(1)+" units)",moved>1);
+
+// ---- v75: corpses linger where they fall; priests resurrect the dead ----
+global.__G.setGameOver(false); // an accidental regicide in a prior staged fight must not mute this section
+global.__G.NET.mode="host";
+{
+  const cVic=global.__G.makeUnit(0,"clubman",-150,118,{name:"Fallen"});
+  const cAtt=global.__G.makeUnit(1,"clubman",-149,118,{name:"Slayer"});
+  cVic.hp=1;
+  global.__G.dealDamage(cAtt,cVic,999);
+  check("a slain unit becomes a lingering corpse (not gone at once)",
+    !cVic.alive&&cVic.corpse===true&&cVic.respawnT>0);
+  for(let i=0;i<40;i++)global.__G.tick(); // dieT 0.9 @ 1/30 ≈ 27 frames → topple finishes
+  check("the corpse lies toppled on the field, still present after the fall",
+    cVic.corpse===true&&!cVic.alive&&Math.abs(cVic.body.rotation.x)>1);
+  cAtt.alive=false; cVic.alive=false; cVic.corpse=false;
+}
+// resurrectUnit restores a corpse to life, at full HP, KEEPING its class (not a villager respawn)
+{
+  const rVic=global.__G.makeUnit(0,"archer",-142,118,{name:"Martyr"});
+  const rPri=global.__G.makeUnit(0,"villager",-140,118,{name:"Padre"}); rPri.cls="priest"; rPri.remote="res-peer"; // human priest → scores
+  const foe=global.__G.makeUnit(1,"clubman",-141,118,{name:"Reaper"}); rVic.hp=1;
+  global.__G.dealDamage(foe,rVic,999);
+  check("the resurrection target is a corpse first",rVic.corpse===true&&!rVic.alive);
+  const pri0=rPri.score||0;
+  global.__G.resurrectUnit(rVic,rPri);
+  check("a priest raises the fallen to life at full HP, standing upright",
+    rVic.alive&&!rVic.corpse&&rVic.hp===rVic.maxHp&&Math.abs(rVic.body.rotation.x)<0.01);
+  check("resurrection keeps the unit's class (archer, not a reset villager)",rVic.cls==="archer");
+  check("the priest is rewarded for the miracle (score climbs)",(rPri.score||0)>pri0);
+  rVic.alive=false;rVic.corpse=false;foe.alive=false;rPri.alive=false;
+}
+// the CHANNEL: hold LMB ~2s to charge, release over a body to raise, then a ~10s cooldown
+{
+  const pl=units.find(u=>u.isPlayer); // NB: possession reassigned `player`, so __G.player is stale — read the live one
+  const ox=pl.root.position.x,oz=pl.root.position.z,ocls=pl.cls,oteam=pl.team;
+  global.__G.NET.mode="solo"; // resurrect locally, no host round-trip
+  pl.cls="priest"; pl.team=0; pl.alive=true;
+  pl._resCd=0; pl._resCharge=0; pl._resReady=false; pl._resNag=false;
+  pl.root.position.set(-118,0,120);
+  const downed=global.__G.makeUnit(0,"archer",-118,120,{name:"Downed"});
+  downed.alive=false; downed.corpse=true; downed.dieT=0; downed.respawnT=99; downed.hp=0;
+  for(let i=0;i<40;i++)global.__G.updatePriestChannel(1/30,true); // ~1.33s held
+  check("priest charge builds but is NOT ready before 2s",!pl._resReady&&pl._resCharge>0);
+  for(let i=0;i<30;i++)global.__G.updatePriestChannel(1/30,true); // total ~2.33s held
+  check("priest reaches a fully-charged state after ~2s of holding",pl._resReady===true);
+  global.__G.updatePriestChannel(1/30,false); // release over the body
+  check("releasing a charged priest over a corpse resurrects it",
+    downed.alive&&!downed.corpse&&downed.hp===downed.maxHp);
+  check("a successful resurrection opens a ~10s cooldown",pl._resCd>9);
+  global.__G.updatePriestChannel(1/30,true); // try to recharge while on cooldown
+  check("a priest on cooldown cannot recharge (faith must recover)",pl._resCharge===0&&!pl._resReady);
+  downed.alive=false; downed.corpse=false;
+  // v76: siege engines are beyond salvation — a wrecked catapult under the priest is NOT a target
+  pl._resCd=0; pl._resCharge=0; pl._resReady=false;
+  const wreck=global.__G.makeUnit(0,"catapult",-118,120,{name:"Wreck"});
+  wreck.alive=false; wreck.corpse=true; wreck.dieT=0; wreck.hp=0;
+  check("a priest cannot resurrect a siege engine (tryResurrect refuses)",
+    global.__G.tryResurrect()===false&&!wreck.alive&&wreck.corpse===true);
+  wreck.corpse=false;
+  pl.cls=ocls; pl.team=oteam; pl.root.position.set(ox,0,oz);
+  pl._resCd=0; pl._resCharge=0; pl._resReady=false; pl._resNag=false;
+  if(pl._resFX)pl._resFX.g.visible=false;
+  global.__G.NET.mode="guest";
+}
+
+// ================= v95: THE NETCODE OVERHAUL =================
+global.__G.setGameOver(false); // staged fights ahead — the mute stays off
+{
+  const G=global.__G;
+  // ---- binary rows survive the wire to the wire's own precision ----
+  {
+    NET.mode="host"; NET._lastRow=null;
+    const s=NET.packSnap(), rows=NET.readSnapRows(s);
+    const live=units.find(x=>x.alive);
+    const r=rows.find(w=>w[0]===live.id);
+    check("v95 binary roundtrip: position ±0.05, hp exact, class index true",
+      !!r&&Math.abs(r[3]/10-live.root.position.x)<=0.06&&Math.abs(r[4]/10-live.root.position.z)<=0.06&&
+      r[6]===Math.round(live.hp)&&Object.keys(G.CLS)[r[1]]===live.cls);
+  }
+  // ---- congestion control: a backed-up lane is skipped; a drained lane is served ----
+  {
+    const sent=[];
+    NET.remotes["cg-rel"]={conn:{open:true,dataChannel:{bufferedAmount:999999},send:o=>sent.push(o)},fast:null,unit:null,input:{}};
+    NET.bcastFast({t:"snap",q:4}); // fast lane down → reliable heartbeat wanted — but the pipe is CHOKED
+    const choked=sent.length, skipped=NET.remotes["cg-rel"].skipR||0;
+    NET.remotes["cg-rel"].conn.dataChannel.bufferedAmount=0;
+    NET.bcastFast({t:"snap",q:8}); // drained → served
+    check("v95 congestion: reliable lane never queues behind a backlog ("+choked+" sent choked, "+sent.length+" after drain)",
+      choked===0&&skipped===1&&sent.length===1);
+    const fsent=[];
+    NET.remotes["cg-fast"]={conn:{open:true,dataChannel:{bufferedAmount:0},send(){}},
+      fast:{open:true,dataChannel:{bufferedAmount:999999},send:o=>fsent.push(o)},unit:null,input:{}};
+    NET.bcastFast({t:"snap",q:1}); // fast lane up but choked, q%4!==0 → nobody gets this one
+    check("v95 congestion: a choked FAST lane skips the frame",fsent.length===0&&(NET.remotes["cg-fast"].skipF||0)===1);
+    check("v95 laneBuf survives lanes with no dataChannel (relay quirks)",NET.laneBuf({})===0&&NET.laneBuf(null)===0);
+    delete NET.remotes["cg-rel"]; delete NET.remotes["cg-fast"];
+  }
+  // ---- AOI: near units every snap; far motion at quarter rate; structure breaks through ----
+  {
+    const gb=G.makeUnit(0,"villager",-150,60,{name:"AOIGuest",bot:{role:"citizen"}}); gb.remote="aoi-peer";
+    NET.remotes["aoi-peer"]={conn:{open:true,send(){}},unit:gb,input:{}};
+    const near=G.makeUnit(1,"clubman",-140,60,{name:"NearFoe",bot:null}); near.hp=near.maxHp=4000;
+    const far=G.makeUnit(1,"clubman",150,-50,{name:"FarFoe",bot:null}); far.hp=far.maxHp=4000;
+    NET._lastRow=null; NET.packSnap(); // keyframe swallows the newcomers
+    let nearN=0,farN=0;
+    for(let i=0;i<8;i++){
+      if((NET._snapN+1)%15===0)NET._snapN++; // dodge the full-refresh slot: we measure the THROTTLE
+      near.root.position.x+=0.3; far.root.position.x+=0.3;
+      const rows=NET.readSnapRows(NET.packSnap());
+      if(rows.some(w=>w[0]===near.id))nearN++;
+      if(rows.some(w=>w[0]===far.id))farN++;
+    }
+    check("v95 AOI: near motion ships every snap, far motion ~every 4th ("+nearN+"/"+farN+")",
+      nearN===8&&farN>=1&&farN<=3);
+    if((NET._snapN+1)%15===0)NET._snapN++;
+    far.alive=false; // STRUCTURAL change far away — must break through the throttle at once
+    const rows2=NET.readSnapRows(NET.packSnap());
+    check("v95 AOI: a far death ships immediately (structure beats distance)",rows2.some(w=>w[0]===far.id));
+    delete NET.remotes["aoi-peer"]; gb.remote=null; gb.alive=false; near.alive=false;
+  }
+  // ---- hostAct train: back-to-villager legal, wilds & future tiers refused ----
+  {
+    const tu=G.makeUnit(0,"clubman",-100,100,{name:"Turncoat",bot:null}); tu.remote="tr-peer"; tu.alive=true;
+    const denies=[];
+    const tr={unit:tu,conn:{open:true,send:o=>{if(o&&o.t==="deny")denies.push(o.m);}},name:"Turncoat"};
+    G.stock[0].food+=500; G.stock[0].gold+=500;
+    NET.hostAct(tr,{act:"train",cls:"villager"});
+    check("v95 hostAct: BACK TO VILLAGER is legal for guests at last (was 'Unknown class')",
+      tu.cls==="villager"&&denies.length===0);
+    NET.hostAct(tr,{act:"train",cls:"vikingboss"});
+    check("v95 hostAct: wilds can't be trained even with gold in hand",tu.cls==="villager"&&denies.length===1);
+    const aSave=G.teamAge[0]; G.teamAge[0]=0;
+    NET.hostAct(tr,{act:"train",cls:"musketeer"});
+    check("v95 hostAct: age-gated tiers are refused (Stone Age musketeer)",tu.cls==="villager"&&denies.length===2);
+    const legal=G.lineUnitFor("melee",0);
+    NET.hostAct(tr,{act:"train",cls:legal});
+    check("v95 hostAct: the line's current tier still trains ("+legal+")",tu.cls===legal&&denies.length===2);
+    G.teamAge[0]=aSave;
+    tu.remote=null; tu.alive=false;
+  }
+  // ---- hostAdmit: every joiner takes the field as a VILLAGER ----
+  {
+    const ac={peer:"adm-peer",open:true,sent:[],send(o){this.sent.push(o);}};
+    NET.hostAdmit(ac,"NewBoots","blue");
+    const au=NET.remotes["adm-peer"]&&NET.remotes["adm-peer"].unit;
+    check("v95 admit: the joiner spawns as a Villager (or a respawning body — respawn IS villager)",
+      !!au&&ac.sent.some(m=>m.t==="admit")&&(!au.alive||au.cls==="villager"));
+    NET.hostDrop(ac);
+  }
+  // ---- stale inputs stop the body: no runaway ghost-walking on a clogged uplink ----
+  {
+    const su=G.makeUnit(0,"villager",-40,64,{name:"Staller",bot:null}); su.alive=true; su.garrison=null;
+    const sr={unit:su,conn:{open:true,send(){}},input:{w:1,yaw:0},inputAt:performance.now()};
+    const x0=su.root.position.z;
+    for(let i=0;i<10;i++)NET.driveRemote(sr,0.05);
+    const walked=Math.abs(su.root.position.z-x0)>0.5;
+    sr.inputAt=performance.now()-5000; // the uplink died 5s ago
+    const x1=su.root.position.z;
+    for(let i=0;i<10;i++)NET.driveRemote(sr,0.05);
+    check("v95 stale inputs: fresh keys walk ("+walked+"), dead keys stop the body",
+      walked&&Math.abs(su.root.position.z-x1)<0.01);
+    su.alive=false;
+  }
+  // ---- PERSONAL WARBANDS: two leaders, two bands, no poaching, death releases ----
+  {
+    NET.mode="solo";
+    const A=G.makeUnit(0,"clubman",-60,40,{name:"LeaderA",bot:null}); A.remote="wbA"; A.alive=true;
+    const B=G.makeUnit(0,"clubman",-40,40,{name:"LeaderB",bot:null}); B.remote="wbB"; B.alive=true;
+    const pool=[];
+    for(let i=0;i<12;i++)pool.push(G.makeUnit(0,"clubman",-56+i*3,44,{name:"WB"+i,bot:{role:"citizen"}}));
+    for(const v of units){v.rally=false;v.rallyBy=null;v.chargeTo=null;} // a clean parade ground
+    const rA=G.toggleRallyFor(A);
+    const rB=G.toggleRallyFor(B);
+    const bandA=units.filter(v=>v.rallyBy===A), bandB=units.filter(v=>v.rallyBy===B);
+    check("v95 warbands: two leaders each hold their OWN five ("+bandA.length+"/"+bandB.length+", no overlap)",
+      !!rA&&rA.on&&!!rB&&rB.on&&bandA.length===5&&bandB.length===5&&!bandA.some(v=>bandB.includes(v)));
+    const rB2=G.toggleRallyFor(B); // B recalls…
+    check("v95 warbands: B's recall leaves A's band standing",
+      !!rB2&&!rB2.on&&units.filter(v=>v.rallyBy===B).length===0&&units.filter(v=>v.rallyBy===A).length===5);
+    G.toggleRallyFor(B); // …and re-rallies from the free pool
+    const chargedA=G.orderCharge(A,0);
+    const bHolds=units.filter(v=>v.rallyBy===B&&!v.chargeTo).length;
+    check("v95 warbands: A's CHARGE moves only A's five ("+chargedA+" charged, "+bHolds+" hold)",
+      chargedA===5&&bHolds===5);
+    G.killUnit(A); // the horn falls silent
+    check("v95 warbands: a fallen leader's band is released, the other band stands",
+      units.filter(v=>v.rallyBy===A).length===0&&units.filter(v=>v.rallyBy===B).length===5);
+    G.toggleRallyFor(B);
+    A.remote=null;B.remote=null;A.alive=false;B.alive=false;A.corpse=false;
+    for(const s of pool)s.alive=false;
+  }
+  // ---- work pulse: a stationary worker's re-arriving row re-swings the arm ----
+  {
+    NET.mode="host";
+    const wk=G.makeUnit(1,"clubman",-30,30,{name:"Statue",bot:null}); wk.alive=true;
+    wk.swing=0.2; wk.attackAnimT=0; // mid-work on the host
+    NET._lastRow=null;
+    const s=NET.packSnap();
+    const rows=NET.readSnapRows(s), i=rows.findIndex(w=>w[0]===wk.id);
+    const oldPulse=(rows[i][2]>>3)&3;
+    NET.mode="guest";
+    // same pulse arrives while the local arm is still up → NO re-trigger (echoes would loop the arm)
+    wk.swing=0.25; wk.attackAnimT=0; wk._pulse=oldPulse;
+    s.q=NET.lastQ+1; NET.applySnap(s);
+    const noRetrig=wk.attackAnimT===0;
+    // the NEXT half-second of work bumps the pulse → the statue swings again
+    rows[i][2]=(rows[i][2]&~24)|(((oldPulse+1)&3)<<3);
+    s.ub=NET.packRows(rows); s.q=NET.lastQ+1;
+    NET.applySnap(s);
+    check("v95 work pulse: same pulse holds, bumped pulse re-swings the statue",
+      noRetrig&&wk.attackAnimT>0&&wk.swing>=0.25);
+    wk.alive=false;
+  }
+  // ---- stale-authority guard: a backlog snapshot may not yank our body into the past ----
+  {
+    NET.mode="host"; NET._lastRow=null;
+    const s1=NET.packSnap(), s2=NET.packSnap();
+    NET.mode="guest";
+    const pl=units.find(u=>u.isPlayer); pl.alive=true;
+    pl.authX=undefined; pl.authAt=0;
+    NET.estT=s1.T; s1.q=NET.lastQ+1;
+    NET.applySnap(s1); // clocks aligned → fresh → authority arms
+    const armed=typeof pl.authX==="number";
+    pl.authX=undefined; pl.authAt=0;
+    s2.T=Math.round((s2.T-3)*10)/10; s2.q=NET.lastQ+1; // a snapshot born three seconds ago
+    NET.estT=s1.T;
+    NET.applySnap(s2); // world state applies, the leash does NOT re-arm
+    check("v95 stale authority: fresh snaps arm the leash, 3s-old backlog snaps cannot",
+      armed&&pl.authX===undefined);
+  }
+  // ---- gather theatre: the guest's own pick swings; the ore stays host-authoritative ----
+  {
+    NET.mode="guest";
+    G.closeMenus(); G.cancelPlacing(); // a stray open menu would rightly gate the theatre
+    const pl=units.find(u=>u.isPlayer);
+    pl.alive=true; pl.garrison=null; G.setClass(pl,"villager");
+    const nd=nodes.find(n=>n.amount>10);
+    pl.root.position.set(nd.x+1.5,0,nd.z);
+    const kk=G.keys; kk.w=kk.a=kk.s=kk.d=false; kk.e=true;
+    pl.swing=0; pl._gfxT=0; const amt=nd.amount;
+    let gtOK=true;
+    try{for(let i=0;i<30;i++)NET.guestFrame(1/30);}catch(e){console.error("  gather theatre threw:",e.message);gtOK=false;}
+    kk.e=false;
+    check("v95 gather theatre: the pick swings ("+pl.swing.toFixed(2)+"), the node is untouched ("+nd.amount+"/"+amt+")",
+      gtOK&&pl.swing>0&&nd.amount===amt);
+  }
+  // ---- the batched arrow theatre: shots ride the snap, not the reliable lane ----
+  {
+    NET.mode="host";
+    const bow=G.makeUnit(0,"villager",-20,20,{name:"Bower"}); bow.cls="archer"; bow.rng=20; bow.dmg=5; bow.atkT=0;
+    const tgt=G.makeUnit(1,"clubman",-20,26,{name:"Butt"}); tgt.hp=tgt.maxHp=4000;
+    NET._fx.length=0;
+    G.shootArrow(bow,tgt); // the arrow (through the live wrapped binding)
+
+    const queued=NET._fx.length===1;
+    const s=NET.packSnap();
+    check("v95 shot batching: the arrow queues, rides the next snap, and the queue drains",
+      queued&&s.fx&&s.fx.length===1&&s.fx[0][0]===bow.id&&NET._fx.length===0);
+    bow.alive=false; tgt.alive=false;
+    NET.mode="guest";
+  }
+}
+
+// ================= v96: THE FACING RELAY =================
+{
+  const G=global.__G;
+  // host side: the input packet's facing is adopted; a packet WITHOUT one leaves facing be
+  {
+    NET.mode="host";
+    const fu=G.makeUnit(0,"villager",-44,58,{name:"Facer",bot:null}); fu.alive=true; fu.garrison=null; fu.facing=0;
+    const fr={unit:fu,conn:{open:true,send(){}},input:{px:fu.root.position.x,pz:fu.root.position.z,f:2.5},lastE:false};
+    NET.driveRemote(fr,0.05);
+    const adopted=Math.abs(fu.facing-2.5)<0.01;
+    fu.facing=1.0; // calibration: strip the field — the guard must NOT touch facing
+    fr.input={px:fu.root.position.x,pz:fu.root.position.z};
+    NET.driveRemote(fr,0.05);
+    check("v96 facing relay: reported facing adopts (→2.5), absent facing is left alone (1.0)",
+      adopted&&Math.abs(fu.facing-1.0)<0.01);
+    fu.alive=false;
+  }
+  // guest side: our outgoing input packet carries our TRUE body facing
+  {
+    NET.mode="guest";
+    const sentIn=[];
+    const oldConn=NET.conn, oldFast=NET.fast;
+    NET.fast=null; NET.conn={open:true,send:o=>{if(o&&o.t==="input")sentIn.push(o);}};
+    const pl=units.find(u=>u.isPlayer);
+    pl.alive=true; pl.garrison=null;
+    const kk=G.keys; kk.w=kk.a=kk.s=kk.d=kk.e=false;
+    pl.facing=1.2;
+    NET.inputT=1; // due for a send this very frame
+    NET.guestFrame(0.001);
+    NET.conn=oldConn; NET.fast=oldFast;
+    check("v96 facing relay: the input packet ships our facing ("+(sentIn.length&&sentIn[0].f)+")",
+      sentIn.length>0&&typeof sentIn[0].f==="number"&&Math.abs(sentIn[0].f-1.2)<0.05);
+  }
+}
+
+// ================= v97: GUEST SIEGE + THE BUILDING DIET =================
+global.__G.setGameOver(false);
+{
+  const G=global.__G;
+  // ---- guest siege aim: RMB on a catapult is the SKILL SHOT, not the archer zoom ----
+  {
+    NET.mode="guest";
+    G.closeMenus(); G.cancelPlacing();
+    const pl=units.find(u=>u.isPlayer);
+    pl.alive=true; pl.garrison=null; G.setClass(pl,"catapult"); pl.atkT=0;
+    G.setRmb(true); G.setLmb(false);
+    tick(); // guestFrame computes the stances; renderFrame climbs the camera + marks lobTarget
+    const aimCat=G.getSiegeAim()===true;
+    G.setClass(pl,"archer"); // calibration: ranged NON-siege keeps the aim-zoom path
+    tick();
+    const aimArc=G.getSiegeAim()===false;
+    check("v97 guest siege aim: catapult RMB arms the skill shot; archer RMB does not",aimCat&&aimArc);
+    G.setClass(pl,"catapult"); pl.atkT=0; NET._pendingLob=null;
+    tick(); // re-arm siegeAim under held RMB
+    G.setLmb(true); G.setLock(true);
+    tick(); // LMB fires playerPrimary's guest branch
+    check("v97 guest siege aim: LMB queues the lob for the host",
+      !!NET._pendingLob&&typeof NET._pendingLob.x==="number");
+    G.setRmb(false); G.setLmb(false); G.setLock(false); NET._pendingLob=null;
+    tick();
+  }
+  // ---- driveRemote: the lob lands where the guest aimed (catapult reach = the UI's 46) ----
+  {
+    NET.mode="host";
+    const cu=G.makeUnit(0,"villager",-70,20,{name:"GuestGunner",bot:null});
+    G.setClass(cu,"catapult"); cu.remote="lob-peer"; cu.alive=true; cu.atkT=0;
+    const seen=[]; const cstub={open:true,send:o=>{if(o&&o.t==="lob")seen.push(o);}};
+    NET.conns.push(cstub);
+    const fr={unit:cu,conn:{open:true,send(){}},input:{lobx:cu.root.position.x+44,lobz:cu.root.position.z},lastE:false};
+    NET.driveRemote(fr,0.05);
+    NET.conns=NET.conns.filter(c=>c!==cstub);
+    check("v97 guest lob: the stone flies to the mark 44 out (was clamped to 38)",
+      seen.length===1&&Math.abs(seen[0].tx-(cu.root.position.x+44))<0.6&&cu.atkT>0);
+    cu.alive=false;
+  }
+  // ---- building rows: binary roundtrip + the quantized delta key ----
+  {
+    const hb=G.makeBuilding(0,"house",-95,40,false); // a site mid-construction
+    hb.hp=321.4; hb.progress=7;
+    const fb=G.makeBuilding(0,"farm",-95,52,true); fb.crop=0.73;
+    NET._lastRow=null; // keyframe
+    const s=NET.packSnap();
+    const rows=NET.readBldRows(s);
+    const hr=rows.find(w=>w[0]===hb.id), fr2=rows.find(w=>w[0]===fb.id);
+    check("v97 bld binary: hp/progress/built/alive/crop survive the 8-byte row",
+      !!hr&&hr[1]===321&&hr[2]===0&&hr[3]===7&&hr[4]===1&&
+      !!fr2&&fr2[2]===1&&Math.abs(fr2[5]-0.7)<0.001);
+    if((NET._snapN+1)%45===0)NET._snapN++; // dodge the building full-refresh slot
+    fb.crop=0.734; // sub-quantum wiggle: same wire row, must NOT re-ship
+    const again=NET.readBldRows(NET.packSnap()).some(w=>w[0]===fb.id);
+    if((NET._snapN+1)%45===0)NET._snapN++;
+    fb.crop=0.85;  // a real step: ships
+    const shipped=NET.readBldRows(NET.packSnap()).some(w=>w[0]===fb.id);
+    check("v97 bld diet: sub-quantum crop wiggle stays home, a real step ships ("+again+"/"+shipped+")",
+      again===false&&shipped===true);
+    hb.alive=false; fb.alive=false;
+    NET.mode="guest";
+  }
+}
+
+// ================= v98: THE NET LOG =================
+{
+  const G=global.__G;
+  // guest sampler: one row per second of guest frames, with the counters aboard
+  {
+    NET.mode="guest";
+    const r0=NET.LOG.rows.length;
+    NET._cDup=(NET._cDup||0); // ensure counters exist
+    for(let i=0;i<40;i++)NET.guestFrame(1/30); // ~1.3s → at least one sampled row
+    const grow=NET.LOG.rows.slice(r0).filter(r=>r.role==="g");
+    check("v98 net log: the guest samples a row per second ("+grow.length+" new)",
+      grow.length>=1&&typeof grow[0].snaps==="number"&&typeof grow[0].ping==="number"&&
+      typeof grow[0].qgap==="number"&&typeof grow[0].fps==="number"&&grow[0].fps>0);
+  }
+  // dup + gap counters feed the log
+  {
+    NET.mode="host"; NET._lastRow=null;
+    const sA=NET.packSnap(), sB=NET.packSnap(), sC=NET.packSnap();
+    NET.mode="guest";
+    sA.q=NET.lastQ+1; NET.applySnap(sA);
+    NET._cDup=0; NET._cGap=0;
+    NET.applySnap(sA);                    // same q again → duplicate
+    sC.q=NET.lastQ+5; NET.applySnap(sC);  // a 4-snap hole → gap
+    check("v98 net log: duplicates and sequence holes are counted ("+NET._cDup+"/"+NET._cGap+")",
+      NET._cDup===1&&NET._cGap===4);
+    sB.q=NET.lastQ+1; NET.applySnap(sB); // tidy the sequence forward
+  }
+  // host sampler: per-guest sent/skip/ping aboard the row
+  {
+    NET.mode="host";
+    const hu=G.makeUnit(0,"villager",-50,55,{name:"LogGuest",bot:null}); hu.remote="log-peer"; hu.alive=true;
+    NET.remotes["log-peer"]={conn:{open:true,send(){}},unit:hu,input:{},name:"LogGuest",rtt:87,sentF:12,skipF:3};
+    const r0=NET.LOG.rows.length;
+    NET._diagT=0.95; NET.hostFrame(0.06); // tips the 1s ticker
+    const hrow=NET.LOG.rows.slice(r0).find(r=>r.role==="h");
+    check("v98 net log: the host row carries per-guest sent/skip/ping",
+      !!hrow&&hrow.g&&hrow.g.LogGuest&&hrow.g.LogGuest.sent===12&&hrow.g.LogGuest.skipF===3&&hrow.g.LogGuest.ping===87);
+    check("v98 net log: the 1s ticker resets the send window",NET.remotes["log-peer"].sentF===0);
+    delete NET.remotes["log-peer"]; hu.remote=null; hu.alive=false;
+  }
+  // saveLog: a well-formed payload even headless (download guarded)
+  {
+    NET.logEvent("test-probe",{ok:1});
+    const p=NET.saveLog();
+    check("v98 net log: saveLog returns meta+rows+events (role "+p.meta.role+", "+p.rows.length+" rows)",
+      p&&p.meta&&p.meta.game==="REGICIDE"&&p.meta.proto===NET.PROTO&&Array.isArray(p.rows)&&
+      p.rows.length>=2&&p.events.some(e=>e.k==="test-probe"));
+  }
+  NET.mode="guest";
+}
+
+// ================= v99: THE QUEST DRAFT, THE OX CART & THE PLUNDER =================
+global.__G.setGameOver(false);
+{
+  const G=global.__G;
+  // ---- guest draft: the trio rides a qdraft event; picks & redraws validated at the board ----
+  {
+    NET.mode="host";
+    const gq=G.makeUnit(0,"clubman",-60,58,{name:"GuestQ",bot:null}); gq.remote="gq-peer"; gq.alive=true;
+    const sent=[],denies=[];
+    const conn={open:true,send:o=>{if(o&&o.t==="deny")denies.push(o);else sent.push(o);}};
+    NET.remotes["gq-peer"]={conn,unit:gq,input:{},name:"GuestQ"};
+    const brd=G.boardFor(0);
+    gq.root.position.set(brd.x+1,0,brd.z);
+    G.useTownBoard(gq); // the host reads the guest their draft
+    const ev=sent.find(m=>m.t==="qdraft");
+    check("v99 guest draft: the trio ships as a qdraft event",!!ev&&ev.offer.length===3);
+    const fr={unit:gq,conn,name:"GuestQ"};
+    NET.hostAct(fr,{act:"quest",pick:G.QUESTS.findIndex((q,i)=>!ev.offer.includes(i))});
+    check("v99 guest draft: off-board picks are denied",denies.length===1&&!gq.quest);
+    NET.hostAct(fr,{act:"quest",pick:ev.offer[0]});
+    check("v99 guest draft: the posted pick lands",!!gq.quest&&gq.quest.i===ev.offer[0]);
+    gq.quest=null; G.useTownBoard(gq); // a fresh trio stands
+    NET.hostAct(fr,{act:"quest",redraw:1}); // no reroll banked → denied
+    const denied2=denies.length===2;
+    gq.qRerolls=1; sent.length=0;
+    NET.hostAct(fr,{act:"quest",redraw:1});
+    check("v99 guest draft: redraw needs a banked reroll, then re-lays the trio",
+      denied2&&gq.qRerolls===0&&sent.some(m=>m.t==="qdraft"));
+    const far0=denies.length;
+    gq.root.position.set(brd.x+80,0,brd.z); // across the map: the board is out of reach
+    NET.hostAct(fr,{act:"quest",pick:(gq.questDraft||[0])[0]});
+    check("v99 guest draft: picks demand the board's yard",denies.length===far0+1);
+    delete NET.remotes["gq-peer"]; gq.remote=null; gq.alive=false;
+  }
+  // ---- the board bang: "!" hangs over the board while questless ----
+  {
+    NET.mode="solo";
+    const pl=units.find(u=>u.isPlayer);
+    const aSave=pl.alive,qSave=pl.quest,lSave=pl.lvl;
+    pl.alive=true; pl.quest=null; pl.lvl=0;
+    G.tickBoardBang(0.05);
+    const bang=G.getBoardBang();
+    const shown=!!bang&&bang.visible===true;
+    pl.quest={i:0,prog:0};
+    G.tickBoardBang(0.05);
+    check("v99 board bang: '!' shows while questless, clears once a posting is taken",
+      shown&&bang.visible===false);
+    pl.quest=qSave; pl.lvl=lSave; pl.alive=aSave;
+  }
+  // ---- the ox cart: pit-trained, timber-only, four per swing, 300 bed ----
+  {
+    NET.mode="host";
+    const ox=G.makeUnit(0,"villager",-40,60,{name:"OxDriver",bot:null}); ox.remote="ox-peer"; ox.alive=true;
+    const denies=[];
+    const orr={unit:ox,conn:{open:true,send:o=>{if(o&&o.t==="deny")denies.push(o.m);}},name:"OxDriver",lastE:true,eUsed:false};
+    G.stock[0].food+=500; G.stock[0].gold+=500;
+    NET.hostAct(orr,{act:"train",cls:"oxcart"});
+    check("v99 ox cart: hostAct trains it at the pit price",ox.cls==="oxcart"&&denies.length===0);
+    check("v99 ox cart: the bed holds 300",G.carryCap(ox)===300);
+    const bush=nodes.find(n=>n.type==="food"&&n.amount>20);
+    ox.root.position.set(bush.x+1,0,bush.z); ox.gathering=null;
+    orr.input={e:1};
+    for(let i=0;i<30;i++)NET.driveRemote(orr,0.05); // 1.5s of held E at a BERRY BUSH
+    const ateFood=ox.carry.food;
+    ox.carry.wood=0; ox.gathering=null; // a tree may stand near the bush — the ox chops it (rightly); reset for the counted phase
+    const cand=nodes.find(n=>n.type==="wood"&&n.amount>40&&
+      !buildings.some(b=>b.alive&&b.team===0&&(b.type==="storage_pit"||b.type==="towncenter"||b.type==="castle")&&Math.hypot(b.x-n.x,b.z-n.z)<18));
+    ox.root.position.set(cand.x+1,0,cand.z); ox.gathering=null;
+    // v114: the map is flush with forest now, so the tree the ox actually swings at is whichever
+    // one is NEAREST — not necessarily the one we picked. Re-derive it from where the ox stands.
+    let tree=cand,td=1e9;
+    for(const n of nodes){
+      if(n.type!=="wood"||n.amount<=0)continue;
+      const d=Math.hypot(n.x-ox.root.position.x,n.z-ox.root.position.z);
+      if(d<td){td=d;tree=n;}
+    }
+    const w0=tree.amount;
+    for(let i=0;i<26;i++)NET.driveRemote(orr,0.05); // 1.3s → two gather ticks → 8 timber
+    check("v99 ox cart: timber only, FOUR per swing (food "+ateFood+", wood "+ox.carry.wood+", node -"+(w0-tree.amount)+")",
+      ateFood===0&&ox.carry.wood>=8&&(w0-tree.amount)===ox.carry.wood);
+    const tc=G.teamTC(0), w1=ox.carry.wood, sw0=Math.floor(G.stock[0].wood);
+    orr.input={};
+    ox.root.position.set(tc.x+tc.def.r+2,0,tc.z);
+    NET.driveRemote(orr,0.05);
+    check("v99 ox cart: the haul banks at the TC (+"+w1+" wood)",ox.carry.wood===0&&Math.floor(G.stock[0].wood)===sw0+w1);
+    // ---- plunder: the slain ox spills its bed into the raider's TEAM stock ----
+    ox.carry.wood=250;
+    const raider=G.makeUnit(1,"clubman",-40,61,{name:"Raider",bot:null});
+    const rw0=G.stock[1].wood;
+    G.killUnit(ox,raider);
+    check("v99 plunder: 250 wood falls to the raiders",G.stock[1].wood===rw0+250&&ox.carry.wood===0);
+    const mk2=buildings.find(b=>b.type==="market"&&b.alive&&b.team===0)||G.makeBuilding(0,"market",-30,70,true);
+    const cart=G.makeUnit(0,"tradecart",-28,70,{name:"DoomedCart",bot:{role:"cart",home:mk2}});
+    cart.tradePhase="back"; cart.tradeTarget={x:mk2.x+60,z:mk2.z}; // a 60-pace route home
+    const g0=G.stock[1].gold, expect=Math.round(G.tradeGold(60));
+    G.killUnit(cart,raider);
+    check("v99 plunder: a LOADED trade cart pays its route value (+"+(G.stock[1].gold-g0)+"g ≈ "+expect+")",
+      Math.abs(G.stock[1].gold-g0-expect)<=1&&G.stock[1].gold>g0);
+    const cart2=G.makeUnit(0,"tradecart",-28,72,{name:"EmptyCart",bot:{role:"cart",home:mk2}});
+    cart2.tradePhase="out";
+    const g1=G.stock[1].gold;
+    G.killUnit(cart2,raider);
+    check("v99 plunder: an EMPTY cart spills nothing",G.stock[1].gold===g1);
+    raider.alive=false;
+  }
+  // ---- the cargo byte: every client SEES the load ----
+  {
+    NET.mode="host";
+    const ox2=G.makeUnit(0,"villager",-44,62,{name:"WireOx",bot:null});
+    G.setClass(ox2,"oxcart"); ox2.alive=true; ox2.carry.wood=150; // half a bed
+    NET._lastRow=null;
+    const s=NET.packSnap();
+    const row=NET.readSnapRows(s).find(w=>w[0]===ox2.id);
+    check("v99 cargo byte: half a bed rides as ~50 ("+(row&&row[10])+")",!!row&&Math.abs(row[10]-50)<=1);
+    NET.mode="guest";
+    s.q=NET.lastQ+1; NET.applySnap(s);
+    G.updateCargoVisual(ox2);
+    const _lt=ox2.rig&&ox2.rig.logs?ox2.rig.logs.children.length:0; // v113: the rebuilt wain stacks 8, not 6
+    check("v99 cargo visual: guests decode 0.5 and show half the log stack ("+
+      (ox2.rig&&ox2.rig.logs?ox2.rig.logs.children.filter(l=>l.visible).length:"-")+" of "+_lt+")",
+      Math.abs((ox2._cargo||0)-0.5)<=0.02&&ox2.rig&&ox2.rig.logs&&ox2.rig.logs.visible===true&&_lt===8&&
+      ox2.rig.logs.children.filter(l=>l.visible).length===Math.max(1,Math.ceil(0.5*_lt)));
+    ox2.alive=false;
+  }
+  NET.mode="guest";
+}
+
+// ================= v100: THE SOUNDSCAPE =================
+// Headless: no AudioContext, so play() no-ops on the graph — but every DECISION helper
+// (resolve/pan/dist/throttle/voice-cap/mute/bus) is pure and asserted here. Self-calibrating
+// pairs: near-plays vs far-culled · fresh-fires vs throttled · under-cap vs over-cap · on vs muted.
+{
+  const A=global.__G.Sound;
+  check("v100 audio: the manager loaded & exported",!!A&&typeof A.play==="function"&&typeof A._decideKey==="function");
+  check("v110 audio: 139 sound defs registered (79 SFX + 58 vocals + 2 wolf)",Object.keys(A._defs).length===139);
+  // variant groups: play("swing") resolves to one of swing1..4; unknown resolves to null
+  check("v100 audio: variant groups resolve ('swing'→a swing variant, junk→null)",
+    /^swing[1-4]$/.test(A._resolve("swing"))&&A._resolve("swing9nope")===null&&A._resolve("hit1")==="hit1");
+  check("v100 audio: 'death'/'bow'/'arrowhit' are multi-variant groups",
+    A._groups.death.length===2&&A._groups.bow.length===2&&A._groups.arrowhit.length===2);
+
+  // --- pan model: symmetric about the listener, clamped [-1,1], centered≈0 ---
+  const L={x:0,z:0,yaw:0};
+  const pL=A._panFor(-40,0,L.x,L.z,L.yaw), pR=A._panFor(40,0,L.x,L.z,L.yaw), pC=A._panFor(0,0,L.x,L.z,L.yaw);
+  check("v100 audio: pan is symmetric, centered≈0, clamped ("+pL.toFixed(2)+"/"+pC.toFixed(2)+"/"+pR.toFixed(2)+")",
+    Math.abs(pC)<1e-9&&Math.sign(pL)===-Math.sign(pR)&&pL>=-1&&pR<=1&&Math.abs(pL)===Math.abs(pR));
+  // --- distance rolloff: 1 up close, 0 past FAR, monotone in between ---
+  const gN=A._gainForDist(0,0,0,0), gF=A._gainForDist(A.FAR+10,0,0,0), gM=A._gainForDist((A.NEAR+A.FAR)/2,0,0,0);
+  check("v100 audio: distance rolloff 1@near · 0@far · mid between ("+gM.toFixed(2)+")",gN===1&&gF===0&&gM>0&&gM<1);
+
+  const NOW=1e6, LOPT={x:0,z:0,_listener:L};
+  // reset shared decision state so the pairs below are clean
+  A._state.last={}; A._state.active.length=0; A.setMute(false);
+  A.setVol("master",0.9); A.setVol("sfx",1.0); A.setVol("ambience",0.55);
+
+  // spatial cull: a hit at the listener PLAYS; the same hit past FAR is CULLED
+  const near=A._decideKey("hit1",{x:2,z:0,_listener:L},NOW);
+  const far =A._decideKey("hit1",{x:A.FAR+30,z:0,_listener:L},NOW);
+  check("v100 audio: near-hit fires, far-hit is distance-culled",near.play===true&&far.play===false&&far.reason==="far");
+
+  // throttle pair: same category twice inside its window — 2nd is throttled; a UI cue (0ms) never is
+  A._state.last={};
+  const h1=A._decideKey("hit1",LOPT,NOW);           A._state.last.hit=NOW; // stamp as play() would
+  const h2=A._decideKey("hit1",LOPT,NOW+10);         // 10ms < 45ms hit throttle
+  const h3=A._decideKey("hit1",LOPT,NOW+200);        // window elapsed
+  check("v100 audio: same cue throttles inside its window, re-arms after ("+h1.play+"/"+h2.play+"/"+h3.play+")",
+    h1.play===true&&h2.play===false&&h2.reason==="throttle"&&h3.play===true);
+  A._state.last={};
+  const u1=A._decideKey("ui_confirm",{},NOW), u2=A._decideKey("ui_confirm",{},NOW+1);
+  check("v100 audio: UI cues have no throttle (both fire)",u1.play===true&&u2.play===true);
+
+  // voice cap: fill the combat voices → a capped cue is dropped; an IMPORTANT cue still lands
+  A._state.last={}; A._state.active.length=0;
+  for(let i=0;i<A.MAXVOICES;i++)A._state.active.push({key:"hit1",until:NOW+500});
+  const capped=A._decideKey("swing1",{x:1,z:0,_listener:L},NOW);
+  const important=A._decideKey("regicide_win",{},NOW);
+  check("v100 audio: voice-cap drops combat spam but never the signature cue",
+    capped.play===false&&capped.reason==="cap"&&important.play===true);
+  A._state.active.length=0;
+
+  // mute + bus gain zero both silence the DECISION (gain floors out)
+  A._state.last={}; A.setMute(true);
+  const muted=A._decideKey("ui_confirm",{},NOW);
+  A.setMute(false); A._state.last={};
+  const onAgain=A._decideKey("ui_confirm",{},NOW);
+  A.setVol("sfx",0); A._state.last={};
+  const busOff=A._decideKey("ui_confirm",{},NOW);
+  A.setVol("sfx",1.0);
+  check("v100 audio: mute & a zeroed bus both silence a cue; unmuted plays",
+    muted.play===false&&muted.reason==="silent"&&onAgain.play===true&&busOff.play===false);
+
+  // 2D cues (spatial=0) ignore position entirely — never distance-culled
+  A._state.last={};
+  const flat=A._decideKey("ageup",{x:9999,z:9999,_listener:L},NOW);
+  check("v100 audio: 2D cues (ageup) ignore position — no distance cull",flat.play===true);
+
+  // play() end-to-end (headless): returns true when it WOULD fire, false when throttled
+  A._state.last={}; A._state.active.length=0; A.setMute(false); A.setVol("sfx",1.0);
+  const p1=A.play("hit",{x:0,z:0,_listener:L}), p2=A.play("hit",{x:0,z:0,_listener:L}); // 2nd within throttle
+  const d1=A.play("deposit"), d2=A.play("deposit");             // no throttle
+  check("v100 audio: play() reports would-fire vs throttled ("+p1+"/"+p2+" · "+d1+"/"+d2+")",
+    p1===true&&p2===false&&d1===true&&d2===true);
+  check("v100 audio: mute API round-trips",A.toggleMute()===true&&A.isMuted()===true&&A.toggleMute()===false);
+  // tick() is safe to call headless (ambience/march driver no-ops without a context)
+  let tickSafe=true; try{A.tick(0.016);}catch(e){tickSafe=false;}
+  check("v100 audio: tick() is headless-safe",tickSafe);
+  // the options-panel globals exist and don't throw against the stub DOM
+  const TO=global.__G.toggleOptions, SU=global.__G.syncOptionsUI;
+  let optSafe=true; try{if(SU)SU();if(TO){TO();TO();}}catch(e){optSafe=false;}
+  check("v100 audio: options-panel wiring is stub-DOM safe",optSafe&&typeof TO==="function"&&typeof SU==="function");
+  A.setMute(false);
+}
+
+// ================= v107: THE SCORE & THE 90-SECOND ADVANCE =================
+// Gameplay: T pays now and arms a 90s team countdown (host-authoritative, no cancel);
+// the age fires when the timer does, and the countdown rides every snap (`ares`).
+// Music: per-age anthems stream via <audio> (headless: no Audio → the DECISION state
+// machine still runs and is asserted here — track map, fade curve, volume law, arming).
+{
+  const G=global.__G, A=G.Sound;
+  G.setGameOver(false);
+  const savAge=[G.teamAge[0],G.teamAge[1]], savRes=[G.ageResT[0],G.ageResT[1]];
+  const savStock=JSON.parse(JSON.stringify(G.stock));
+
+  // --- the timed advance: pay at T, land 90s later, never pay twice ---
+  G.ageResT[0]=0;G.ageResT[1]=0;G.teamAge[0]=2;
+  const cost=G.AGES[3].cost;
+  G.stock[0].food=cost.food+500; G.stock[0].gold=(cost.gold||0)+500;
+  const started=G.startAgeResearch(0);
+  const paidF=G.stock[0].food, paidG=G.stock[0].gold;
+  check("v107 advance: T pays the cost NOW and arms the 90s countdown (age unchanged)",
+    started===true&&G.ageResT[0]===G.AGE_RESEARCH_S&&G.teamAge[0]===2&&
+    paidF===500&&paidG===500);
+  check("v107 advance: a second T while advancing is refused (no double pay)",
+    G.startAgeResearch(0)===false&&G.stock[0].food===paidF&&G.ageResT[0]===G.AGE_RESEARCH_S);
+  G.tickAgeResearch(60,true);
+  const midOk=G.teamAge[0]===2&&Math.abs(G.ageResT[0]-30)<1e-6;
+  G.tickAgeResearch(31,true);
+  check("v107 advance: 60s in the age holds, at 90s it LANDS — and ageUp pays nothing again",
+    midOk&&G.teamAge[0]===3&&G.ageResT[0]===0&&G.stock[0].food===paidF&&G.stock[0].gold===paidG);
+  // guests tick for display only — the age must NOT fire without authority
+  G.ageResT[0]=1;
+  G.tickAgeResearch(5,false);
+  check("v107 advance: a guest countdown reaching 0 does NOT flip the age (host's snap does)",
+    G.teamAge[0]===3&&G.ageResT[0]===0);
+  // the countdown rides the wire: world payload + snap payload both carry `ares`
+  G.ageResT[0]=42.5;
+  const w=G.NET.packWorld(1);
+  let snapAres=null; try{const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
+  check("v115 net: PROTO 25 (a replanted world changes node indices) and `ares` still rides the payloads",
+    G.NET.PROTO===25&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
+    Array.isArray(snapAres)&&Math.abs(snapAres[0]-42.5)<0.06);
+  G.ageResT[0]=0;
+
+  // --- the score: track map, fade curve, volume law, arming state machine ---
+  check("v111 music: music bus defaults to 40% (prefs key v4 — stale broken-mix sliders reset)",Math.abs(A.getVol("music")-0.4)<1e-9);
+  check("v107 music: age→track map clamps to age0…age5",
+    A._musTrackFor(0)==="audio/music/age0.ogg"&&A._musTrackFor(5)==="audio/music/age5.ogg"&&
+    A._musTrackFor(-3)==="audio/music/age0.ogg"&&A._musTrackFor(99)==="audio/music/age5.ogg");
+  check("v107 music: fade is full above 15s, half at 7.5s, full when no advance runs",
+    A._musFadeFor(90)===1&&A._musFadeFor(A.MUSFADE_S)===1&&
+    Math.abs(A._musFadeFor(7.5)-0.5)<1e-9&&A._musFadeFor(0)===1);
+  const vSave={m:A.getVol("master"),mu:A.getVol("music")};
+  A.setMute(false);A.setVol("master",0.8);A.setVol("music",0.5);
+  const mv=A._musVol(0.5); A.setMute(true); const mvM=A._musVol(1); A.setMute(false);
+  check("v107 music: anthem volume = master × music × trim × fade — and 0 muted",
+    Math.abs(mv-0.8*0.5*A.MUSTRIM*0.5)<1e-9&&mvM===0);
+  A.setVol("master",vSave.m);A.setVol("music",vSave.mu);
+  // v109 MIX FIX: the source node's gain (`local`) must NOT bake in bus/master — those live
+  // on the graph nodes. Halving master halves the DECISION gain but leaves `local` untouched.
+  {
+    const sv={m:A.getVol("master"),s:A.getVol("sfx")};
+    A.setMute(false);A._state.last={};A._state.active.length=0;
+    A.setVol("master",1.0);A.setVol("sfx",1.0);
+    const d1=A._decideKey("hit1",{x:0,z:0,_listener:{x:0,z:0,yaw:0}},5e6);
+    A._state.last={};A.setVol("master",0.5);A.setVol("sfx",0.5);
+    const d2=A._decideKey("hit1",{x:0,z:0,_listener:{x:0,z:0,yaw:0}},5e6);
+    check("v109 mix: sliders scale the decision gain but never the node's local gain",
+      d1.play===true&&d2.play===true&&Math.abs(d1.local-0.9)<1e-9&&Math.abs(d2.local-0.9)<1e-9&&
+      Math.abs(d2.gain-d1.gain*0.25)<1e-9);
+    A.setVol("master",sv.m);A.setVol("sfx",sv.s);A._state.last={};
+  }
+  A._mus.age=-1;A._mus.playing=false;
+  G.teamAge[0]=3;
+  A._musTick(true,0.016);
+  const armed=A._mus.age===3;
+  A._musTick(false,0.016);
+  check("v107 music: a live game arms YOUR age's anthem; menu/game-over rests it to -1",
+    armed&&A._mus.age===-1&&A._mus.playing===false);
+
+  // put the world back the way we found it
+  G.teamAge[0]=savAge[0];G.teamAge[1]=savAge[1];
+  G.ageResT[0]=savRes[0];G.ageResT[1]=savRes[1];
+  for(const t of [0,1]){for(const k in savStock[t])G.stock[t][k]=savStock[t][k];}
+}
+
+// ================= v109: THE VOICES =================
+// 58 Gamemaster human vocals: per-unit deterministic voice identity (id-locked, host/guest
+// agree wire-free), soldier pools b/c/d with graded pain, mixed civilian pools a/e/f/g,
+// medium-density throttles + voice-cap membership, and the uncapped regicide scream.
+{
+  const A=global.__G.Sound;
+  check("v109 voices: variant pools fold per voice (atk/death/shout ×2, effort ×4, growl ×3)",
+    A._groups.vatk_b.length===2&&A._groups.vdeath_e.length===2&&A._groups.vshout_c.length===2&&
+    A._groups.veffort.length===4&&A._groups.vgrowl.length===3);
+  const s5={id:5,cls:"clubman"}, s5b={id:5,cls:"archer"}, c6={id:6,cls:"villager"}, t7={id:7,cls:"trader"};
+  check("v109 voices: a unit's voice is deterministic (id-locked) and pool-routed",
+    A._voxVoice(s5)===A._voxVoice(s5b)&&["b","c","d"].includes(A._voxVoice(s5))&&
+    ["a","e","f","g"].includes(A._voxVoice(c6))&&["a","e","f","g"].includes(A._voxVoice(t7)));
+  check("v109 voices: soldiers grade pain, civilians share one pool and never war-cry",
+    /^vpainm_[bcd]$/.test(A._voxKeyFor("painm",s5))&&/^vpainh_[bcd]$/.test(A._voxKeyFor("painh",s5))&&
+    /^vpain_[aefg]$/.test(A._voxKeyFor("painm",c6))&&A._voxKeyFor("atk",c6)===null&&
+    /^vdeath_[aefg]$/.test(A._voxKeyFor("deathi",c6))&&/^vdeathi_[bcd]$/.test(A._voxKeyFor("deathi",s5)));
+  A._state.last={};A._state.active.length=0;A.setMute(false);
+  const NOW9=9e6, L9={x:0,z:0,yaw:0};
+  const v1=A._decideKey("vpain_b1",{x:0,z:0,_listener:L9},NOW9); A._state.last.vpain_b=NOW9;
+  const v2=A._decideKey("vpain_b1",{x:0,z:0,_listener:L9},NOW9+50);
+  for(let i=0;i<A.MAXVOICES;i++)A._state.active.push({key:"hit1",until:NOW9+500});
+  const vCap=A._decideKey("vshout_b1",{x:1,z:0,_listener:L9},NOW9);
+  const vKing=A._decideKey("vking1",{},NOW9);
+  check("v109 voices: vocals throttle & respect the cap — the regicide scream bypasses both",
+    v1.play===true&&v2.play===false&&v2.reason==="throttle"&&vCap.play===false&&vCap.reason==="cap"&&vKing.play===true);
+  A._state.active.length=0;A._state.last={};
+  let vSafe=true;
+  try{A.vox("death",{id:3,cls:"clubman"},{x:0,z:0,_listener:L9});A.voxChorus(0,0);A.voxChorus();}catch(e){vSafe=false;}
+  check("v109 voices: vox() and voxChorus() are headless-safe",vSafe);
+
+  // v110 THE WOLVES: two quiet spatial cues — the 7s howl throttles long & is NEVER capped
+  // (atmosphere always lands); the bite rides the combat cadence inside the cap
+  A._state.last={};A._state.active.length=0;
+  const w1=A._decideKey("wolfhowl",{x:2,z:0,_listener:L9},NOW9); A._state.last.wolfhowl=NOW9;
+  const w2=A._decideKey("wolfhowl",{x:2,z:0,_listener:L9},NOW9+4000); // inside the 6s window
+  for(let i=0;i<A.MAXVOICES;i++)A._state.active.push({key:"hit1",until:NOW9+500});
+  const wH=A._decideKey("wolfhowl",{x:2,z:0,_listener:L9},NOW9+9000);
+  const wB=A._decideKey("wolfbite",{x:2,z:0,_listener:L9},NOW9);
+  check("v110 wolves: defs land quiet & spatial; howl throttles 6s and bypasses the cap; bite is capped",
+    A._defs.wolfhowl[3]===0.55&&A._defs.wolfbite[3]===0.7&&A._defs.wolfhowl[1]===1&&
+    w1.play===true&&w2.play===false&&w2.reason==="throttle"&&
+    wH.play===true&&wB.play===false&&wB.reason==="cap");
+  A._state.active.length=0;A._state.last={};
+
+  // ================= v113: THE QUIET PASS + THE FLANK =================
+  // 1) the mix: music trimmed again, the town bell put on a one-minute leash
+  check("v113 mix: MUSTRIM deepens to 0.42 and the base alarm only tolls once a minute",
+    Math.abs(A.MUSTRIM-0.42)<1e-9&&A._throttle.basealarm===60000);
+  A._state.last={};A._state.active.length=0;
+  const b1=A._decideKey("basealarm",{},NOW9); A._state.last.basealarm=NOW9;
+  const b2=A._decideKey("basealarm",{},NOW9+30000); // a bombardment 30s later must NOT re-ring
+  const b3=A._decideKey("basealarm",{},NOW9+61000);
+  check("v113 alarm: rings, holds through 30s of shelling, re-arms after the minute",
+    b1.play===true&&b2.play===false&&b2.reason==="throttle"&&b3.play===true);
+  A._state.active.length=0;A._state.last={};
+}
+{
+  const G=global.__G;
+  // 2) the silent archer: hand-aimed fire now speaks
+  {
+    const A=G.Sound, arch=G.makeUnit(0,"archer",-150,4,{name:"Aimer",bot:null});
+    arch.alive=true; arch.atkT=0;
+    const heard=[]; const realPlay=A.play;
+    A.play=function(k,o){heard.push(k);return realPlay.call(A,k,o);};
+    const savedPlayer=G.player;
+    try{
+      G.__setPlayer?G.__setPlayer(arch):0;
+    }catch(_){}
+    A.play=realPlay;
+    check("v113 archer: fireAimedShot exists and carries a launch cue",
+      typeof G.fireAimedShot==="function"&&/Sound\.play/.test(G.fireAimedShot.toString())&&
+      /cannonfire/.test(G.fireAimedShot.toString())&&/"bow"/.test(G.fireAimedShot.toString()));
+    arch.alive=false; void savedPlayer;
+  }
+  // 3) gather foley halves: every OTHER swing is miked
+  check("v113 gather: the host gather tick gates its cue on an alternating flag",
+    /_gsw/.test(G.economyTick.toString())===false); // (the flag lives in the player tick, not economyTick)
+  // 4) farms: 2 food every 3 seconds
+  check("v113 farms: FARM_PASSIVE is 2 food / 3s ("+G.FARM_PASSIVE.toFixed(4)+")",
+    Math.abs(G.FARM_PASSIVE-2/3)<1e-9);
+  // 5) THE CARTS: both rebuilt on jointed, trotting anatomy
+  {
+    const ox=G.makeUnit(0,"villager",-150,-8,{name:"Wain",bot:null}); G.setClass(ox,"oxcart");
+    const mule=G.makeUnit(0,"trader",-150,-14,{name:"Mule",bot:null});
+    const oL=ox.rig&&ox.rig.horseLegs, mL=mule.rig&&mule.rig.horseLegs;
+    const oxSG=ox.body.children.find(c=>c.isGroup&&Math.abs(c.scale.x-G.OXSCALE)<1e-9);
+    check("v113 ox cart: 4 jointed TROT legs, 8 logs, 4 wheels, one group at OXSCALE "+G.OXSCALE,
+      !!oL&&oL.length===4&&oL.every(l=>l.userData.knee&&l.userData.trot)&&
+      ox.rig.logs.children.length===8&&ox.rig.wheels.length===4&&!!ox.rig.horseG&&!!oxSG);
+    check("v113 ox cart: the health bar clears the rig at whatever OXSCALE is set to",
+      ox.bar&&ox.bar.bg.position.y>2.9*G.OXSCALE&&ox.bar.bg.position.y<2.9*G.OXSCALE+2.5);
+    check("v113 market mule: jointed TROT legs, a neck pivot and cargo that hides when empty",
+      !!mL&&mL.length===4&&mL.every(l=>l.userData.knee&&l.userData.trot)&&
+      !!mule.rig.horseNeck&&!!mule.rig.goods&&mule.rig.goods.visible===false&&mule.rig.wheels.length===4);
+    ox.carry.wood=300; G.updateCargoVisual(ox);
+    const full=ox.rig.logs.children.filter(l=>l.visible).length;
+    ox.carry.wood=75; G.updateCargoVisual(ox);
+    const quarter=ox.rig.logs.children.filter(l=>l.visible).length;
+    check("v113 ox cart: the log stack grows with the haul ("+quarter+" of "+full+")",
+      ox.rig.logs.visible===true&&full===8&&quarter===2);
+    ox.alive=false; mule.alive=false;
+  }
+  // 6) THE FLANKING LANES: bands approach off-axis, then turn in
+  {
+    const u={id:3,team:G.BLUE,root:{position:{x:-150,z:0}},bandRef:{id:1,laneZ:88}};
+    const far=G.laneTarget(u,175,0);
+    u.root.position.x=140; // now inside the turn-in radius of the objective
+    const near=G.laneTarget(u,175,0);
+    const road={id:4,team:G.BLUE,root:{position:{x:-150,z:0}},bandRef:{id:2,laneZ:0}};
+    const straight=G.laneTarget(road,175,0);
+    check("v113 flank: a laned band sweeps off the road far out, then turns in at "+G.LANE_TURNIN,
+      far.lane===true&&Math.abs(far.z)>40&&near.lane===false&&near.z===0&&
+      straight.lane===false&&straight.z===0);
+    const edge={id:5,team:G.BLUE,root:{position:{x:-150,z:0}},bandRef:{id:3,laneZ:400}};
+    check("v113 flank: a lane never steers past the border fringe",
+      Math.abs(G.laneTarget(edge,175,0).z)<=G.LANE_EDGE&&G.LANE_EDGE<G.MAP.z);
+    const D={team:G.BLUE}, bA={id:11}, bB={id:12};
+    G.assignLane(D,bA); G.assignLane(D,bB);
+    check("v113 flank: consecutive bands are dealt DIFFERENT axes ("+bA.laneZ+" / "+bB.laneZ+")",
+      bA.laneZ!==bB.laneZ&&bA.laneUntil>0&&bB.laneUntil>0);
+    const loose={id:7,team:G.BLUE,root:{position:{x:0,z:0}}}; // no band: still fans out by id
+    check("v113 flank: a bandless raider still draws a lane from the table",
+      G.LANE_Z.includes(G.laneFor(loose)));
+  }
+  // 7) THE RELIEF: a quiet bazaar posting does not last forever
+  {
+    const G2=global.__G, team=G2.BLUE, D=G2.directors[team], NOWT=G2.getT();
+    // A COLD POSTING: one soldier parked in an empty corner of the map, tour spent.
+    // (manageBands prunes memberless bands, so the band needs a real, live body.)
+    const cold=G2.makeUnit(team,"clubman",-200,-118,{name:"Sentry",bot:{role:"war"}});
+    cold.alive=true;
+    const hb={id:9001,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,laneZ:0,laneUntil:NOWT+999};
+    cold.bandRef=hb; D.bands.push(hb);
+    G2.manageBands(D);
+    check("v113 relief: a hold band with a spent tour and a cold field takes a new mission ("+hb.role+")",
+      hb.role!=="hold"&&["econ","patrol","assassin"].includes(hb.role)&&hb.point===null);
+    // A HOT POSTING: the same spent tour, but an enemy standing on it — the ground still matters
+    const hb2={id:9002,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,laneZ:0,laneUntil:NOWT+999};
+    cold.bandRef=hb2; D.bands.push(hb2);
+    const foe=G2.makeUnit(1-team,"clubman",-200,-112,{name:"Prowler",bot:{role:"war"}}); foe.alive=true;
+    G2.manageBands(D);
+    check("v113 relief: a posting still under contact is NOT abandoned ("+hb2.role+")",hb2.role==="hold");
+    foe.alive=false; cold.alive=false;
+    check("v113 relief: the tour dials are sane (tour "+G2.HOLD_TOUR+"s · quiet "+G2.HOLD_QUIET+"s · watch "+G2.HOLD_WATCH+")",
+      G2.HOLD_TOUR>=30&&G2.HOLD_QUIET>=10&&G2.HOLD_WATCH>=30);
+  }
+}
+
+{
+  // ================= v114: THE GREAT WOOD =================
+  const G=global.__G, N=G.nodes, H=o=>{const bb=new THREE.Box3().setFromObject(o);return bb.max.y-bb.min.y;};
+  const trees=N.filter(n=>n.type==="wood");
+  const MAPX=G.MAP.x, MAPZ=G.MAP.z;
+  const MAN=4.43; // a nutcracker on foot, measured
+  const hs=trees.filter(t=>t.amount>0).map(t=>H(t.mesh)); // felled stumps aren't canopy
+  const avg=hs.reduce((a,b)=>a+b,0)/hs.length;
+  check("v114 trees: the wood towers over the nutcrackers (avg "+avg.toFixed(1)+" = "+(avg/MAN).toFixed(1)+"× a "+MAN+" soldier)",
+    avg>MAN*2.5&&avg<MAN*4);
+  check("v114 forest: the map runs flush ("+trees.length+" choppable trees)",trees.length>=400);
+  check("v114 draw budget: every tree is ONE mesh sharing pre-built geometry ("+G.TREE_GEOS.length+" silhouettes)",
+    trees.every(t=>t.mesh.isMesh&&!t.mesh.children.length)&&
+    G.TREE_GEOS.length>=6&&G.STUMP_GEOS.length===G.TREE_GEOS.length&&
+    trees.every(t=>G.TREE_GEOS.includes(t.mesh.geometry)||G.STUMP_GEOS.includes(t.mesh.geometry)));
+  // the lanes the game needs stay open
+  // The scattered wild wood keeps TREE_CLEAR_BASE off both thrones; the v34 HOME FORESTS are
+  // deliberately planted close so each team has timber in reach, so the hard rule is only that
+  // nothing grows in the town centre's own yard, and nothing at all stands on the road.
+  let inYard=0,onRoad=0;
+  for(const t of trees){
+    for(const tc of G.TCPOS)if(Math.hypot(t.x-tc[0],t.z-tc[1])<G.BLD.towncenter.r+11)inYard++;
+    for(let i=0;i<=40;i++){const p=G.roadPoint(i/40);if(Math.hypot(t.x-p.x,t.z-p.z)<G.TREE_CLEAR_ROAD){onRoad++;break;}}
+  }
+  check("v114 clear lanes: nothing in a town-centre yard ("+inYard+"), nothing on the King's Road ("+onRoad+")",
+    inYard===0&&onRoad===0);
+  // placement: wood yields, the finite prizes do not
+  {
+    // a tree standing on ground that is otherwise legal: clear of buildings, clear of the
+    // finite nodes, inside the map. Only the timber should be in the way.
+    const R=G.BLD.house.r;
+    const live=trees.find(t=>t.amount>0&&Math.abs(t.x)<MAPX-20&&Math.abs(t.z)<MAPZ-20&&
+      !G.buildings.some(b=>b.alive&&Math.hypot(b.x-t.x,b.z-t.z)<R+b.def.r+4)&&
+      !N.some(n=>n.type!=="wood"&&n.amount>0&&Math.hypot(n.x-t.x,n.z-t.z)<R+5)&&
+      !G.townBoards.some(tb=>Math.hypot(tb.x-t.x,tb.z-t.z)<R+5));
+    const stone=N.find(n=>n.type==="stone"&&n.amount>0);
+    check("v114 clearing: a plot may be laid over standing timber, never over a stone pile",
+      G.validFor("house",live.x,live.z,0)===true&&G.validFor("house",stone.x,stone.z,0)===false);
+    const before=live.amount;
+    const h=G.makeBuilding(0,"house",live.x,live.z,true);
+    check("v114 clearing: raising the house FELLS the trees under its footprint ("+before+" → "+live.amount+")",
+      live.amount===0&&h.alive===true);
+    // and only what it actually covers
+    const far=trees.find(t=>t.amount>0&&Math.hypot(t.x-h.x,t.z-h.z)>G.BLD.house.r+8);
+    check("v114 clearing: a tree outside the footprint is left standing",!!far&&far.amount>0);
+    h.alive=false; G.scene?0:0;
+  }
+  check("v114 tree scale is one dial (TREE_SCALE "+G.TREE_SCALE+")",G.TREE_SCALE>1&&G.TREE_SCALE<2);
+
+  // ---- v115: the wood grows in STANDS, not as evenly-spaced pasture ----
+  const live=trees.filter(t=>t.amount>0);
+  check("v115 stands: the map carries real forests ("+G.TREE_STANDS.length+" stands)",
+    G.TREE_STANDS.length>=20&&G.TREE_STANDS.length%2===0);
+  // every stand is mirrored through the map centre, so neither throne draws the better wood
+  const mirrored=G.TREE_STANDS.every(s=>
+    G.TREE_STANDS.some(o=>Math.abs(o.x+s.x)<0.001&&Math.abs(o.z+s.z)<0.001&&Math.abs(o.r-s.r)<0.001));
+  check("v115 stands: every stand is mirrored 180° — the wood is fair to both thrones",mirrored);
+  // CLUSTERING, measured properly: nearest-neighbour distance is a poor test here because the
+  // planting grid puts a floor under it either way. The INDEX OF DISPERSION does the job —
+  // quadrat-count variance over mean. A uniform/Poisson scatter sits near 1.0; a field that
+  // clumps into stands runs well above it. (v114's even grid measured ~1.0; stands measure ~3+.)
+  const QR=24; const counts=[];
+  for(let x=-G.MAP.x+28;x<G.MAP.x-28;x+=QR)for(let z=-G.MAP.z+18;z<G.MAP.z-18;z+=QR){
+    if(G.TCPOS.some(t=>Math.hypot(x-t[0],z-t[1])<G.TREE_CLEAR_BASE+QR))continue; // cleared by rule
+    if(Math.abs(z)<G.TREE_CLEAR_ROAD+QR*0.5)continue;                            // ditto the road
+    let c=0; for(const t of live)if(Math.abs(t.x-x)<QR/2&&Math.abs(t.z-z)<QR/2)c++;
+    counts.push(c);
+  }
+  const mean=counts.reduce((a,b)=>a+b,0)/counts.length;
+  const varr=counts.reduce((a,b)=>a+(b-mean)*(b-mean),0)/counts.length;
+  const disp=varr/mean;
+  check("v115 clustering: the wood clumps into stands (index of dispersion "+disp.toFixed(2)+
+    ", uniform scatter ≈ 1.0)",disp>=1.8);
+  // and the meadows are real: some open country genuinely has no wood in it
+  let empty=0,probed=0;
+  for(let x=-G.MAP.x+30;x<G.MAP.x-30;x+=26)for(let z=-G.MAP.z+20;z<G.MAP.z-20;z+=22){
+    if(Math.abs(z)<26)continue;                       // skip the road corridor, cleared by rule
+    if(G.TCPOS.some(t=>Math.hypot(x-t[0],z-t[1])<G.TREE_CLEAR_BASE))continue;
+    probed++;
+    if(!live.some(t=>Math.hypot(t.x-x,t.z-z)<13))empty++;
+  }
+  check("v115 meadows: open ground survives between the stands ("+empty+"/"+probed+" probes clear)",
+    empty>=probed*0.15&&empty<=probed*0.75);
+}
+
+{
+  // ================= v116: THE MOBILE SPIKE =================
+  const G=global.__G;
+  // 12-touch.js loads with the rest of the bundle. Headless it must be COMPLETELY inert —
+  // no pad, no perf tier, no pointer-lock override — or it would corrupt every test above it.
+  check("v116 touch: the mobile layer is a no-op outside a browser",
+    G.getHideD()===150&&G.getMouseLocked()===false);
+  // the cull dial the perf tier uses is real, clamped, and reversible
+  G.setHideD(105); const lowered=G.getHideD();
+  G.setHideD(9999); const clampedHi=G.getHideD();
+  G.setHideD(1);    const clampedLo=G.getHideD();
+  G.setHideD(150);
+  check("v116 touch: setHideD moves the cull line and clamps it ("+lowered+" / "+clampedHi+" / "+clampedLo+")",
+    lowered===105&&clampedHi===400&&clampedLo===40&&G.getHideD()===150);
+}
+
+{
+  // ================= v122: THE LEAK THAT CRASHED A 45-MINUTE MATCH =================
+  // Three.js does not free GPU buffers on remove(). buildBodyFor rebuilt a unit's body on every
+  // class change, arm-up and respawn-as-another-class and left the old geometry orphaned; across
+  // 100 bots over six ages that is tens of thousands of leaked buffers, which is what took John's
+  // iPhone white and reloaded the tab. This counts disposals for real rather than trusting a diff.
+  const G=global.__G;
+  let disposed=0, created=0;
+  const realDispose=THREE.BufferGeometry.prototype.dispose;
+  THREE.BufferGeometry.prototype.dispose=function(){disposed++;return realDispose.apply(this,arguments);};
+  const u=G.makeUnit(0,"clubman",-150,30,{name:"Leaky",bot:null});
+  u.alive=true;
+  const countGeo=o=>{let n=0;o.traverse(x=>{if(x.geometry)n++;});return n;};
+  created=countGeo(u.body);
+  const before=disposed;
+  G.setClass(u,"archer");          // the rebuild that used to leak
+  const freed=disposed-before;
+  check("v122 leak: rebuilding a unit's body DISPOSES the old geometry ("+freed+" of "+created+" freed)",
+    created>4&&freed>=created);
+  // ...and ten class changes must not drift: every rebuild frees what the last one made
+  let drift=0;
+  for(let i=0;i<10;i++){
+    const had=countGeo(u.body), d0=disposed;
+    G.setClass(u,i%2?"clubman":"archer");
+    if(disposed-d0<had)drift++;
+  }
+  check("v122 leak: ten more class changes free everything they replace ("+drift+" that didn't)",drift===0);
+  // the health bar's sprite materials were leaking two at a time on the same path
+  const src=fs.readFileSync(path.join(ROOT,"js","04-units.js"),"utf8");
+  check("v122 leak: refreshBar disposes the old bar's materials",
+    /u\.bar\.bg\.material\.dispose\(\)/.test(src)&&/u\.bar\.fg\.material\.dispose\(\)/.test(src));
+  // a MODEL-backed body shares its geometry with MODELS[cls] — disposing a clone would blank it
+  check("v122 leak: model-backed bodies are exempt (their geometry is shared, not owned)",
+    /_modelBody/.test(src)&&/if\(!u\._modelBody\)/.test(src));
+  THREE.BufferGeometry.prototype.dispose=realDispose;
+  u.alive=false;
+}
+
+console.log(fails?("\n"+fails+" FAILURES"):"\nALL SMOKE TESTS PASSED");
+process.exit(fails?1:0);

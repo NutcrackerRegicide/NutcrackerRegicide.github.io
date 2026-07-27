@@ -1,0 +1,82 @@
+# REGICIDE PVP — Handoff v87 (July 2026)
+
+Upload this file at the start of a new chat (or read it from the "Nutcracker Regicide" project) to continue development. Supersedes the v85 handoff.
+
+## What the game is
+Browser 50v50 third-person medieval war game, nutcracker-soldier aesthetic. The player is ONE unit among ~110 AI (plus 36 neutral creeps). AoE2-style shared team economy, six ages (Stone → Bronze → Iron → Classical → Medieval → Enlightenment), win by regicide (kill the enemy king, +500 pts). Real main menu (world frozen behind a cinematic orbit until Solo/Host/Join; How-to-Play overlay). Three.js r128 via plain `<script>` tags, NO bundler/modules. Host-authoritative P2P over PeerJS/WebRTC. **NET.PROTO=12** — bump it whenever wire format, world layout, movement rules, or balance stats change (all desync mixed versions).
+
+## User & workflow (John Thompson)
+- Project lives at `Desktop\REGICIDE PVP`. **Cowork device-folder sync**: when the folder is connected, write changed files straight back (SendUserFile → device_commit_files) AND still ship a zip every version. Zips exclude `docs/` and `.git/`.
+- Publishes via **Netlify Drop**, **hard-refresh required** (PROTO rejects mismatches). Netlify is NOT in the gameplay path. 🐢 indicator = WebRTC relay lane; if relay + lag persist, the fix is a TURN server ($5 VPS + coturn), not code.
+- Iterates via screenshots + playtests with a friend (friend hosts, John often RED guest — RED-guest playability is a first-class requirement for every feature).
+- Wants: ship a zip EVERY turn, end summaries with a one-line **version log**.
+- **Balance workflow**: `tools/export_stats.js` dumps every tunable to a sectioned CSV (`node tools/export_stats.js out.csv`; latest lives at `docs/REGICIDE-STATS-v87.csv` — now includes QUESTING scalars + QUEST LIST + BUFF LIST sections). John edits in Excel, sends it back, Claude patches it in. UNITS/BUILDINGS/AGES/QUEST-LIST sections map to 00-data tables; RULES/ECONOMY/QUESTING rows map to inline code (hand-patch + update the exporter's hardcoded rows so it stays truthful). Watch for Excel artifacts ("4-5" → "5-Apr", broken apostrophes). John writes comments in a leading Comment column; review them and ASK before applying when comments conflict (this worked well for v84).
+
+## Build/verify protocol (EVERY turn, non-negotiable)
+Work in `/home/claude/regicide/`. Patch via python heredoc `rep(path,old,new,n)` asserting unique markers, or Edit tool. Then:
+1. `node --check` every touched file
+2. `npm install three@0.128.0 --silent`
+3. `node tools/smoketest.js` → must print `ALL SMOKE TESTS PASSED` (~165 assertions incl. 8-min headless campaign, ~45s/run). Run 2-3x.
+4. `rm -rf node_modules package.json package-lock.json`
+5. `zip -qr /mnt/user-data/outputs/REGICIDE-PVP-vNN.zip . -x "docs/*" ".git/*"` → SendUserFile + sync changed files to the device folder
+6. Bump `<p class="verstamp">vNN</p>` in index.html, and PROTO when the change demands it.
+
+### Known stochastic flakes (pre-existing — do NOT chase)
+- "an enclosed courtyard blooms into a garden (0 plantings)" — campaign sometimes builds no enclosed courtyard (~1 in 5). Verified flaky on pristine v74.
+- "the militia stands down and returns to the fields" — levy stand-down races lingering foes at campaign end.
+A run failing ONLY one of these + 2 clean runs = green.
+
+### Smoketest gotchas (each of these bit us)
+- `__G` export string ~line 35 lists exported globals; names NOT destructured at line ~41 need `global.__G.NAME`. The export string accepts arrow-function entries (`getT:()=>T`).
+- The MENU gate: sim is frozen at load — smoketest calls `NET.uiSolo()` before the first tick loop (there's an assertion pair around it).
+- Possession reassigns `player` — `__G.player` is STALE in guest-era tests; use `units.find(u=>u.isPlayer)`.
+- Guest-mode stretches: wrap host-only calls with `NET.mode="host"; ...; NET.mode="guest"` / restore `"solo"`.
+- **Never assert team-stock deltas across live ticks** — directors spend and economy drips in the same tick. Give the acting unit `u.remote="x"` and assert its exact `.score` instead (awardPts pays humans/remotes only — and now multiplies by the Bounty buff, ×1.0 at zero stacks so exact-score asserts still hold).
+- applyLOD tests: the follow-cam LERPS to the player — position the PLAYER (not the camera) and assert the camera actually arrived before asserting visibility.
+- `makeUnit` units lack `u.spread` (only spawnTeam sets it) — code touched by tests guards `(u.spread||0)`.
+- Test units need explicit `bot:{role:"citizen"}` for bot hooks, or `bot=null` + big hp to stand inert. **`u.remote="x"` makes a unit "human"** for quests/buffs/awardPts.
+- Real three@0.128.0 loads; `document` stubbed (CanvasTexture-safe). `grep -c` exits 1 on 0 matches. Debug harness trick: copy the smoketest stub block into `node -e`, eval the bundle, append probes (stub `setTimeout` and `process.exit(0)` or it hangs).
+- Campaign end-state varies — make post-campaign tests deterministic (call managers directly, force timers with `st.respawnAt=-1`, etc.).
+- When adding a regression test, VERIFY IT BITES: revert the fix, confirm the test fails, restore. (Done for v86 farm passive and v87 death-wipe/stack-cap.)
+- v87: buff tests must ISOLATE buffs (one id at a time, allies >12u from any captain) — a stack of `crit` adds Math.random noise to damage asserts; stub `Math.random=()=>0` for dodge/crit determinism and restore after.
+- v87: placement `gap` is now 2.2 (was 1.5) — fixed-coordinate `validFor` probes in old tests can flip (the five-markets probe moved from x=20 to x=30 for exactly this).
+
+## File map (js/, load order = number order)
+- **00-data.js** — CLS (30 classes incl. wilds appended LAST for CLS_KEYS index stability), **rps() = the v84 wheel**, BLD (+`blacksmith` 420hp/r5.6/100w/12hits, age 2, cap 1/team), AGES, ageBuff, MAP{x:212,z:125}, TCPOS ±175, CAMPS[6], camp consts, walkable/BORDER_FRINGE, awardPts (humans+remotes only, ×Bounty buff), costPts, `isHuman`, **QUESTS[25]** ({id,name,desc,ev,n,xp} — ev is the progress event key, xp 1 or 2 = levels AND XP paid), **BUFFS[20]**, XP_MAX_LVL=20 BUFF_MAX_STACK=3 QUEST_REROLL_CD=60 BOARD_REACH=5, `buffSt(u,id)` (0..3), `carryCap(u)` (20+10/stack), `townBoards[]`, MIL_LINES.
+- **01-engine.js** — texturedMat, terrainHeight (flats: TCs, road bazaars, ponds, southern bay).
+- **02-world.js** — seeded world gen (mulberry32; Math.random restored at EOF), roadPoint/bazaars, forests, mountainRing, camp decor, raidShore, **town boards** (deterministic: TC ±13x/−8z, posts+plank+parchments+team seal, pushed to `townBoards` and `worldDeco`; NOT buildings — no collision, no AI targeting, no netcode).
+- **03-buildings.js** — buildingMesh six ages (+**blacksmith branch**: slab/hall/gable/chimney/anvil/quench barrel/glowing hearth), BSCALE, BARH (+blacksmith:10), roads/gardens/restyle queue, respawnDelay, makeBuilding, **addConstructionHit** (Master Builder: first human swing banks +stacks once per site via `b._mb`; completion pays the placer's build quest via `b.qBy` unit id), **damageBuilding** (Wrecker ×1.1/stack for humans; razing pays raze_farm/raze_bld quests).
+- **04-units.js** — rigs, makeUnit (corpse:false init), setClass (reloads dragoon ammo), **setClassStats calls applyBuffStats(u) when u.buffs exists**, **applyBuffStats** (recomputes maxHp ×1.05/stack keeping hp ratio, spd +0.5/stack, cd −0.1/stack floor 0.2 — NEVER touches rng: the garrison ×1.35 must survive), name tags (**syncNameTags rows are [name,score,team,id,lvl] — lvl>0 renders "Name ⭐N"**), animateUnit.
+- **05-combat.js** — **dealDamage buff gauntlet** (order: parry [window 0.28+0.07×Duelist, pays parry quest] → block ×0.3 → attacker-human mults [Honed Edge 5%, Wild Slayer 15% vs NEUTRAL, Siegewright 10%, Keen Eye crit 5%/stack ×2] → Captain's Banner [any friendly attacker within 12u of a cached captain, +1%/stack] → victim-human [Sixth Sense dodge 5%/stack full negate, Raised Shield −5%/stack] → `victim._lastHurt=T` → hp loss → Bloodthirst heals attacker 1/stack), **killUnit** (quest credit: pistol via `_pistolCtx` flag set in pistolShot, kill_creep/kill_vil/kill_mil by victim class; creep branch checks `u.bot.camp.creeps.every(dead)` → camp_wipe credit; **human death wipes lvl/xp/quest/buffs + notifies + syncs**), respawnUnit, **resurrectUnit** (pays res quest) + RES consts + **resCdFor(u)** (Zealotry −1.5/stack, floor 3 — used by player channel AND hostAct validation), tryAttack/moveUnit/wall routing.
+- **06-input.js** — MYTEAM gating, **E dispatcher** (garrison exit ALWAYS wins → then train menu only if it's nearer than `interactCandidateD2()` = nearest of foundation/tower/ripe-farm/blacksmith/board/bazaar/node — v87 fix for "trapped in the tower by the barracks menu"), playerInteract (+**Town Board** branch → useTownBoard, +**Blacksmith** branch → useBlacksmith, harvest pays harvest+dep_food quests, carryCap), validFor (**gap 2.2**, farms 0.5; blacksmith cap 1 shares the market-cap block), confirmPlace sets `b.qBy=player.id` (single + wall lines), pickTrain pays train quest, build menu (+blacksmith in economic).
+- **07-ai.js** — directors (**build blacksmith at Iron, cap 1** — a RED guest always gets a forge), campStates/campTick/updateCreep, collectCampChest (pays chest quest), orderCharge, updateBot.
+- **08-ui.js** — msg feed, scoreboard (rows carry lvl → "⭐N" chip; hint mentions quests +25/xp), **updateQuestHud** (#questhud: LV/XP line, active posting, buff list), minimap (+parchment specks for boards), ageUp.
+- **09-main.js** — hints (+board at 64s, +blacksmith at 200s), updatePlayer (gather tick −0.1×Practiced Hands, carryCap, deposits pay questDeposit, trader sell ×2.5×(1+0.1×Deep Pockets)+questTradeSale, priest uses resCdFor), **THE QUEST ENGINE**: questNotify (msg locally / NET.note to remotes), syncQuest/syncBuffs (targeted "qst"/"bff" events), rollQuest (never repeats current i), questProgress(u,ev,n) (matches active quest's ev), completeQuest (+xp, lvl capped 20, +25×xp score), questDeposit, boardFor, **useTownBoard** (no quest→roll+arm 60s cd; active→first E reads progress + arms a 3s confirm, second E rerolls if cd ready; max-lvl politely refuses; NO proximity check inside — callers validate), **useBlacksmith** (xp>=1, pool excludes maxed stacks, random pick, applyBuffStats+syncs; NO proximity check inside), grantBuff, bazaarTier (rank by distance from OWN throne)/questTradeSale, **questTick** (captain cache `_captains`, Second Skin +0.5/stack/s after 5 quiet s, scout-quest geometry: within 25 of enemy TC sets `_scoutOut`, then within 40 of own TC completes) — called in tickBody after healTick, FARM_PASSIVE=0.5, economyTick, applyLOD, tick heartbeat.
+- **10-net.js** — PROTO:12, CLS_KEYS index map, hostAdmit, **hostDrop wipes the deserter's lvl/xp/buffs/quest** (the AI never inherits a legend), driveRemote (E-tap chain: garrison→tower→harvest [pays quests]→trader-load→**board→blacksmith** — all host-side proximity-validated, so RED-guest questing needs zero guest code; gather uses buffed tick+carryCap; deposits pay questDeposit; **trader sell fixed to ×2.5** (was an inconsistent 4×) + Deep Pockets + questTradeSale), hostAct (resurrect uses resCdFor; train pays train quest; build sets qBy), packWorld, packSnap (**sc rows [name,score,team,id,lvl]** ride every snap → tags+scoreboard everywhere), applySnap, applyWorld, guestFrame (prediction uses buffed spd — the "bff" handler calls applyBuffStats(player)), **guest handlers "qst" {l,x,qi,qp} and "bff" {b,x}** set player fields + updateQuestHud, uiSolo/uiHost/uiJoin/uiHowTo.
+- **tools/smoketest.js** — ~165 assertions (+22 for v87: tables, boards, AI blacksmith, quest flow/reroll cd, kill-quest via real combat, 2-XP tier, 60-XP full forge + cap, stat buffs, isolated event buffs, captain, regen, satchel, builder, placer credit, scout quest, bazaar tiers, death wipe, E-priority). **tools/export_stats.js** — the balance CSV generator (+QUESTING scalars, QUEST LIST, BUFF LIST sections; keep hardcoded rows in sync!).
+
+## The v87 questing design (John's spec, locked in Q&A)
+One active quest; E at the board reads it, double-E rerolls (60s cd). Tiered XP: hard quests (stone 200, castle, camp wipe, mid/long trade routes, raze 3 buildings, scout the throne) pay 2 levels/2 XP. XP is the ONLY player-personal currency (everything else is team stock). Blacksmith: 100 wood, Iron, one per team, AI auto-builds. Buffs random, ×3 stack cap, maxed buffs excluded from the roll. **Death wipes level, XP, AND all buffs** (full roguelike reset — John chose this). Max level 20 (board refuses at cap). Level visible to all via name tags + scoreboard. Bots never quest.
+
+## The balance state
+The v84 wheel unchanged (anticav 3.8x vs mounted · ranged 1.8x vs anticav · sword tiers 1.8/1.25/2.0 + bMult 1.5 · cavalry 1.8/1.5/1.5 · scoutline 1.5 vs ranged, 4.85x vs economy, farm trample 4x · projectiles 0.15x vs siege · artillery full vs units, ram 0.25 · bayonet 14/2.6/0.8 · pistol 6 rounds rng 15 no regen · castle volley 5@0.15s+4.5s) · costs unchanged + blacksmith 100w · **v86: farm passive 0.5 food/sec (FARM_PASSIVE, harvest untouched at 20)** · **v87: trader premium 2.5x for host AND guests (guests wrongly earned 4x since v84 — flagged to John, fixed)** · placement gap 1.5→2.2 (farms 0.5) · buff scalars: dmg5%/cd0.1/crit5%/shield5%/hp5%/dodge5%/spd0.5/carry10/gather0.1/builder1hit/slayer15%/captain1%@12u/leech1/regen0.5@5s/bounty10%/zeal1.5s/trade10%/parry0.07s/siege10%/wreck10% per stack.
+
+## Session log (v75→v87)
+v75 priest resurrection · v76 staff re-grip · v77 six creep camps (PROTO 3) · v78 bazaars on the Kings Road (PROTO 4) · v79 Viking bay raid boss (PROTO 5) · v80 CHARGE (PROTO 6) · v81 main menu · v82 ghost fix + camps doubled (PROTO 7) · v83 walkable fringe (PROTO 8) · v84 the great rebalance from John's CSV (PROTO 9) · v85 anticav cost fix (PROTO 10) · **v86 farm passive halved to 0.5/sec (PROTO 11)** · **v87 QUESTING & THE BLACKSMITH — John's final major feature: Town Boards, 25 quests, tiered XP, 20 stacking buffs, level tags, full death wipe, E-priority fix, gap 2.2, trader 2.5x unification (PROTO 12)**.
+
+## Netcode architecture status
+HAVE: host-authoritative + validation, client prediction + dead-zone reconciliation + self-healing leash, snapshot interpolation, delta+quantized snaps (15Hz) + reliable events + heartbeat/watchdog, event-based buildings/chests, guest acts for train/build/rally/charge/resurrect/gate/ageup, guest questing entirely host-side (driveRemote E-chain) + targeted qst/bff events, lvl in the sc rows, late-joiner world payload.
+LACK (deliberate): lag-comp hit rewind; AOI/network LOD (the lever IF battles lag in field tests — battle bursts ~4.5KB×15Hz).
+
+## Open threads / watch list
+- **FIELD TEST STILL PENDING**: last real internet session was v67. EVERYTHING since (v68 netcode through v87 questing) is untested between two machines over the internet. First triage: own-body jerks (leash) vs others stuttering (interp) vs hourglass (lane → TURN).
+- Host cannot play RED (guest-red works).
+- **v87 quest balance is untuned**: reroll-fishing for easy quests (60s cd is the only brake), 200-resource grinds vs "build a market" pacing, stone-200 at xp2 with ~3300 map stone, camp-wipe last-hit sniping, captain aura in big rallies (3% on 50 units), Bloodthirst+Second Skin+Stout Heart stacking on a parry-good player. The CSV QUESTING/QUEST LIST sections exist exactly so John can retune in Excel.
+- Quest HUD (#questhud, right of player HUD), board/blacksmith mesh sizes, and level-tag legibility unverified on John's monitor — screenshots will tell.
+- Balance watch (carried): stone pressure, cheap fort gate exploit (75s), camps soloable (intended), AI directors don't know the wheel, AI ignores camps/charge/quests, bots don't lob-aim catapults.
+- Villager mesh count is the render bottleneck if host FPS dips (distance LOD is the fix).
+- Menu orbit + How-to-Play text sizes unverified on John's monitor.
+- A guest's quest state dies with disconnection (hostDrop wipes the body; rejoining starts fresh) — acceptable, documented.
+
+## Transcripts
+This handoff is the carry-forward; prior-session transcripts are not available in a fresh chat. The "Nutcracker Regicide" project holds this doc (claude/REGICIDE-HANDOFF-v87.md).

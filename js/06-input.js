@@ -1,0 +1,895 @@
+/* REGICIDE PVP — 06-input.js */
+// ---------- player input (pointer-lock mouse-look) ----------
+const keys={};
+let placing=null, ghost=null;
+let menuOpen=null;
+let mouseLocked=false, lmbHeld=false, rmbHeld=false, aiming=false;
+function releaseAllKeys(){ // a blurred window eats keyups — never trust held state across focus loss
+  for(const k in keys)keys[k]=false;
+  lmbHeld=false; rmbHeld=false;
+}
+addEventListener("blur",releaseAllKeys);
+addEventListener("keydown",e=>{
+  if(e.key==="Tab"){e.preventDefault();showScoreboard(true);}
+});
+addEventListener("keyup",e=>{
+  if(e.key==="Tab"){e.preventDefault();showScoreboard(false);}
+});
+document.addEventListener("pointerlockchange",()=>{if(!document.pointerLockElement)releaseAllKeys();});
+const canvasEl=renderer.domElement;
+
+function lockMouse(){ if(!mouseLocked&&!gameOver){ try{canvasEl.requestPointerLock();}catch(e){} } }
+canvasEl.addEventListener("click",()=>{ if(!menuOpen)lockMouse(); });
+document.addEventListener("pointerlockchange",()=>{
+  mouseLocked=document.pointerLockElement===canvasEl;
+  document.getElementById("lockhint").style.display=(mouseLocked||gameOver||menuOpen)?"none":"block";
+  document.getElementById("crosshair").style.display=mouseLocked?"block":"none";
+  if(!mouseLocked){lmbHeld=false;rmbHeld=false;}
+});
+addEventListener("mousemove",e=>{
+  if(!mouseLocked)return;
+  camYaw-=e.movementX*0.0032;
+  camPitch=Math.max(-0.35,Math.min(1.25,camPitch+e.movementY*0.0028)); // negative = look up
+});
+addEventListener("mousedown",e=>{
+  if(e.button===0)lmbHeld=true;
+  if(e.button===2){
+    rmbHeld=true;
+    if(mouseLocked&&!gameOver&&player.alive&&player.cls==="dragoon"&&!placing){
+      if((player.ammo||0)<=0){msg("Pistol empty — six rounds a life. Re-arm at the Stable for fresh powder.");}
+      else if(player.atkT<=0){
+        const t=pistolTarget(player,15);
+        if(t){
+          if(typeof NET!=="undefined"&&NET.mode==="guest"){ // theatre now, host lands it
+            player.ammo--;player.atkT=1.0;player.swing=0.25;triggerAttackAnim(player);
+          }else pistolShot(player,t);
+          updatePlayerHud();
+        }else msg("No target in pistol range.");
+      }
+      return;
+    }
+  }
+  if(!mouseLocked||gameOver||!player.alive)return;
+  if(e.button===0){
+    if(placing){confirmPlace();return;}
+    playerPrimary();
+  }
+});
+addEventListener("mouseup",e=>{
+  if(e.button===0)lmbHeld=false;
+  if(e.button===2)rmbHeld=false;
+});
+addEventListener("wheel",e=>{camDist=Math.max(8,Math.min(46,camDist+e.deltaY*0.02));},{passive:true});
+addEventListener("contextmenu",e=>e.preventDefault());
+addEventListener("resize",()=>{
+  camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+  if(composer)composer.setSize(innerWidth,innerHeight);
+});
+
+function playerPrimary(){
+  if(siegeAim){ // the stone flies to the mark
+    if(player.atkT>0)return;
+    if(typeof NET!=="undefined"&&NET.mode==="guest"){
+      NET._pendingLob={x:lobTarget.x,z:lobTarget.z}; // rides the next input packet
+      player.atkT=player.cd; player.swing=0.25; triggerAttackAnim(player);
+      return;
+    }
+    launchLob(player,lobTarget.x,lobTarget.z);
+    player.atkT=player.cd;
+    return;
+  }
+  if(player.blocking)return;          // shield up = no swinging
+  if(aiming){fireAimedShot();return;} // ranged manual shot
+  if(!tryAttack(player)&&player.atkT<=0&&player.dmg>0){
+    // WHIFF: swing at the air toward the camera — cheaper cooldown than a real hit
+    player.atkT=player.cd*0.6;
+    player.swing=0.25;
+    player.facing=Math.atan2(-Math.sin(camYaw),-Math.cos(camYaw));
+    triggerAttackAnim(player);
+  }
+}
+
+// ---------- developer mode (backquote ` to toggle) ----------
+let devMode=false;
+function devAgeUp(team){
+  const nxt=AGES[teamAge[team]+1];
+  if(!nxt){msg("Dev: "+TEAMNAME[team]+" is already in the final age.");return;}
+  ageUp(team); // v107: ageUp no longer pays (the cost rides startAgeResearch) — the dev cheat stays instant & free
+}
+addEventListener("keydown",e=>{
+  const k=e.key.toLowerCase();
+  keys[k]=true;
+  if(e.repeat)return; // v95: held keys auto-repeat keydown ~30x/s — one press is ONE press (hold-E gather reads keys.e, not this)
+  if(k==="f9"){ // v98: save the NET LOG — works mid-game, after the end screen, anywhere
+    e.preventDefault();
+    if(typeof NET!=="undefined"&&NET.saveLog)NET.saveLog();
+    return;
+  }
+  if(k==="m"){ // v100: M opens the SOUND MENU (volume sliders + a MUTE ALL button) — works anywhere
+    if(typeof toggleOptions==="function")toggleOptions();
+    else if(typeof Sound!=="undefined")Sound.toggleMute();
+    return;
+  }
+  if(k==="o"&&!(typeof placing!=="undefined"&&placing)){ // v100: O also opens the sound menu
+    if(typeof toggleOptions==="function"){toggleOptions();return;}
+  }
+  if(typeof inMenu!=="undefined"&&inMenu)return; // the main menu eats hotkeys — no ghost rallies before the war
+  if(gameOver)return;
+  if(k==="\`"||k==="~"){
+    devMode=!devMode;
+    msg(devMode?"🛠 DEV MODE ON — F1 +resources · F2 age BLUE · F3 age RED · F4 heal · F5 force raids · F6 reveal fog"
+               :"Dev mode off.","gold");
+    return;
+  }
+  if(devMode){
+    if(k==="f1"){e.preventDefault();stock[BLUE].food+=1000;stock[BLUE].gold+=1000;updateResHud();
+      msg("Dev: +1000 food, +1000 gold.","blue");return;}
+    if(k==="f2"){e.preventDefault();devAgeUp(BLUE);return;}
+    if(k==="f3"){e.preventDefault();devAgeUp(RED);return;}
+    if(k==="f4"){e.preventDefault();if(player.alive){player.hp=player.maxHp;setBar(player.bar,1);updatePlayerHud();}
+      msg("Dev: healed.","blue");return;}
+    if(k==="f5"){e.preventDefault();for(const D of directors)D.nextRaid=T;
+      msg("Dev: raid timers zeroed — armies march.","warn");return;}
+    if(k==="f6"){e.preventDefault();FOW_REVEAL=!FOW_REVEAL;
+      msg("Dev: fog of war "+(FOW_REVEAL?"REVEALED":"restored")+".","gold");return;}
+  }
+  if(k==="v"&&!menuOpen&&!placing){
+    spawnPref=spawnPref==="tc"?"castle":"tc";
+    msg("Respawn point: "+(spawnPref==="tc"?"TOWN CENTER":"nearest CASTLE (forward)")+" — press V to switch.","gold");
+    return;
+  }
+  if(placing&&k==="r"){ // rotate the foundation
+    placing.rot=((placing.rot||0)+Math.PI/4)%(Math.PI*2);
+    if(ghost)ghost.rotation.y=placing.rot;
+    return;
+  }
+  if(k==="h"){toggleHelp();}
+  if(k==="p"){togglePixel();}
+  if(menuOpen==="build"){
+    if(k==="0"&&buildMenuCat){buildMenuCat=null;renderBuildMenu();return;}
+    if(/^[1-9]$/.test(k)){
+      if(!buildMenuCat){const c=Object.keys(BUILD_CATS)[+k-1];if(c){buildMenuCat=c;renderBuildMenu();}}
+      else{
+        const cat=BUILD_CATS[buildMenuCat];
+        const shown=cat.items.filter(bId=>{
+          const nxt=UPGRADE_NEXT[bId];
+          return !(nxt&&teamAge[MYTEAM]>=BLD[nxt].age); // keyboard matches the display
+        });
+        const b=shown[+k-1]; if(b)pickBuild(b);
+      }
+      return;
+    }
+  }
+  if(menuOpen==="class"&&/^[1-9]$/.test(k)){
+    const opt=trainMenuOptions[+k-1];
+    if(opt)pickTrain(opt);
+    return;
+  }
+  if(menuOpen==="smith"&&/^[0-9]$/.test(k)){ // v93: 1-3 choose, 0 walks away
+    if(k==="0"){closeMenus();lockMouse();return;}
+    const id=smithMenuOffer[+k-1];
+    if(id)pickSmith(id);
+    return;
+  }
+  if(menuOpen==="board"){ // v99: 1-3 take a posting, R redraws, 0 walks away
+    if(k==="0"){closeMenus();lockMouse();return;}
+    if(k==="r"){redrawBoard();return;}
+    if(/^[1-3]$/.test(k)){
+      const qi=boardMenuOffer[+k-1];
+      if(qi!==undefined)pickBoard(qi);
+      return;
+    }
+  }
+  if(k==="escape"){closeMenus();cancelPlacing();return;}
+  if(!player.alive)return;
+  if(k==="b"){
+    if(player.cls!=="villager"){msg("Only Villagers can build. (Press R near a training building to change class.)");return;}
+    if(menuOpen==="build")closeMenus();else openBuildMenu();
+  }
+  if(k==="r"){
+    const tb=nearTrainingBuilding();
+    if(!tb){msg("Stand near a Barracks, Archery Range, Stable, Temple, Market, Siege Workshop, or Storage Pit to change class.");return;}
+    if(menuOpen==="class")closeMenus(); else openTrainMenu(tb);
+  }
+  if(k==="e"){
+    // v87 E-PRIORITY: climbing down always wins; otherwise the NEAREST interactable
+    // wins the keypress — no more being trapped in a tower by the barracks menu,
+    // and the Town Board / Blacksmith stay reachable beside other buildings.
+    const tb=player.garrison?null:nearTrainingBuilding();
+    if(tb&&dist2(player.root.position.x,player.root.position.z,tb.x,tb.z)<=interactCandidateD2()){
+      if(menuOpen==="class")closeMenus(); else openTrainMenu(tb);
+    }else playerInteract();
+  }
+  if(k==="enter"&&placing)confirmPlace();
+  if(k==="g")toggleRally();
+  if(k==="f"&&!menuOpen&&!placing)soundCharge();
+  if(k==="t")tryAgeUp();
+});
+addEventListener("keyup",e=>{keys[e.key.toLowerCase()]=false;});
+
+function nearTrainingBuilding(){
+  let best=null,bd=1e9;
+  for(const t of TRAIN_BUILDINGS){
+    const b=nearestBuilt(MYTEAM,t,player.root.position.x,player.root.position.z,9);
+    if(b){const d=dist2(player.root.position.x,player.root.position.z,b.x,b.z);
+      if(d<bd){bd=d;best=b;}}
+  }
+  return best;
+}
+// v87: squared distance to the nearest NON-menu E-interactable (Infinity if none).
+// The keydown dispatcher compares this against the training building so the
+// closest thing under your boots is what E actually talks to.
+function interactCandidateD2(){
+  if(player.garrison)return 0; // climbing down beats every menu
+  const px=player.root.position.x, pz=player.root.position.z;
+  let bd=Infinity;
+  const c=(x,z,r)=>{const d=dist2(px,pz,x,z); if(d<r*r&&d<bd)bd=d;};
+  for(const b of buildings){
+    if(b.team!==MYTEAM||!b.alive)continue;
+    if(!b.built){c(b.x,b.z,b.def.r+2.6);continue;}           // a foundation to raise
+    if(b.type==="watch_tower"&&!CLS[player.cls].mounted&&!isSiege(player.cls))c(b.x,b.z,b.def.r+2.4);
+    else if(b.type==="farm"&&b.crop>=1)c(b.x,b.z,b.def.r+2.5); // ripe corn
+    else if(b.type==="blacksmith")c(b.x,b.z,b.def.r+2.6);
+  }
+  const brd=boardFor(MYTEAM); if(brd)c(brd.x,brd.z,BOARD_REACH);
+  if(player.cls==="trader")for(const nm of neutralMarkets)c(nm.x,nm.z,7);
+  for(const n of nodes)if(n.amount>0)c(n.x,n.z,4.2);
+  return bd;
+}
+function nearestNode(){
+  let best=null,bd=4.2*4.2;
+  for(const n of nodes){
+    if(n.amount<=0)continue;
+    const d=dist2(player.root.position.x,player.root.position.z,n.x,n.z);
+    if(d<bd){bd=d;best=n;}
+  }
+  return best;
+}
+function nearestFriendlySite(){
+  let best=null,bd=1e12;
+  for(const b of buildings){
+    if(b.team!==MYTEAM||b.built||!b.alive)continue;
+    const reach=b.def.r+2.6; // stand outside the footprint and still whack the foundation
+    const d=dist2(player.root.position.x,player.root.position.z,b.x,b.z);
+    if(d<reach*reach&&d<bd){bd=d;best=b;}
+  }
+  return best;
+}
+const UPGRADE_NEXT={wood_wall:"stone_wall",stone_wall:"fort_wall",wood_gate:"stone_gate",stone_gate:"fort_gate"};
+function playerInteract(){
+  if(typeof NET!=="undefined"&&NET.mode==="guest")return; // host drives gather/build via your E key
+  const px=player.root.position.x, pz=player.root.position.z;
+  if(player.garrison){ // climb down
+    const b=player.garrison; player.garrison=null; player.deckX=player.deckZ=0;
+    player.root.position.set(b.x+(b.def.r+1.6),0,b.z);
+    player.root.position.y=terrainHeight(player.root.position.x,player.root.position.z);
+    setClassStats(player); // restore base range
+    if(typeof Sound!=="undefined"){Sound.play("garrison",{x:b.x,z:b.z}); // v104: tower clamber
+      if(Math.random()<0.6)Sound.play("veffort",{x:b.x,z:b.z});} // v109: the climb takes a grunt
+    msg("You climb down from the watch tower.");
+    return;
+  }
+  for(const b of buildings){ // climb up: man a watch tower
+    if(b.team===MYTEAM&&b.alive&&b.built&&b.type==="watch_tower"&&
+       dist2(px,pz,b.x,b.z)<Math.pow(b.def.r+2.4,2)&&!CLS[player.cls].mounted&&!isSiege(player.cls)){
+      player.garrison=b; player.rng*=1.35; player.deckX=0; player.deckZ=0;
+      if(typeof Sound!=="undefined"){Sound.play("garrison",{x:b.x,z:b.z}); // v104: tower clamber
+      if(Math.random()<0.6)Sound.play("veffort",{x:b.x,z:b.z});} // v109: the climb takes a grunt
+      msg("You man the watch tower — loose arrows from on high. E climbs down.","blue");
+      return;
+    }
+  }
+  for(const b of buildings){ // harvest ripe corn: +20 food, banked instantly
+    if(b.team===MYTEAM&&b.alive&&b.built&&b.type==="farm"&&b.crop>=1&&
+       dist2(px,pz,b.x,b.z)<Math.pow(b.def.r+2.5,2)){
+      if(player.cls!=="villager"){msg("Only Villagers can harvest the corn.");return;}
+      awardPts(player,20);
+      questProgress(player,"harvest");    // REAPER
+      questProgress(player,"dep_food",20); // banked food is banked food
+      b.crop=0;
+      if(b.cropMesh){b.cropMesh.scale.y=0.15;for(const t of b.tassels)t.visible=false;}
+      stock[MYTEAM].food+=20; updateResHud();
+      if(typeof Sound!=="undefined")Sound.play("harvest",{x:b.x,z:b.z}); // v104: corn rustle
+      msg("Harvested the corn: +20 food, straight to the stockpile.","blue");
+      return;
+    }
+  }
+  // traders load goods at neutral bazaars
+  if(player.cls==="trader"){
+    for(const nm of neutralMarkets){
+      if(dist2(player.root.position.x,player.root.position.z,nm.x,nm.z)<7*7){
+        if(player.tradeLoaded){msg("Your cart is already loaded — sell at YOUR Market first.");}
+        else{player.tradeLoaded=nm;msg("Goods loaded! Haul them back to your Market to sell.","blue");updatePlayerHud();if(typeof Sound!=="undefined")Sound.play("bazaarload",{x:player.root.position.x,z:player.root.position.z});} // v104
+        return;
+      }
+    }
+  }
+  { // v87 THE TOWN BOARD: quests (host/solo — a guest's E is handled by the host in driveRemote)
+    const brd=boardFor(MYTEAM);
+    if(brd&&dist2(px,pz,brd.x,brd.z)<BOARD_REACH*BOARD_REACH){useTownBoard(player);return;}
+  }
+  { // v87 THE BLACKSMITH: spend quest XP on a random buff
+    const bs=nearestBuilt(MYTEAM,"blacksmith",px,pz,BLD.blacksmith.r+2.6);
+    if(bs){useBlacksmith(player);return;}
+  }
+  const site=nearestFriendlySite();
+  if(site)return; // handled by hold-E in update
+  const n=nearestNode();
+  if(n){
+    if(player.cls==="oxcart"){ // v99: the ox hauls TIMBER, nothing else
+      if(n.type!=="wood"){msg("The ox snorts — it hauls TIMBER only. Find a tree.");return;}
+    }else if(player.cls!=="villager"){msg("Only Villagers can gather resources. (R at the Town Center to become one.)");return;}
+    if(player.gathering===n){player.gathering=null;return;}
+    const cap=(player.carry.food+player.carry.gold+player.carry.stone+player.carry.wood)>=carryCap(player);
+    if(cap){msg("Hands full — deposit at the Town Center first.");return;}
+    player.gathering=n; player.gatherT=0;
+    player.facing=Math.atan2(n.x-player.root.position.x,n.z-player.root.position.z);
+    msg("Gathering "+(n.type==="food"?"berries":n.type==="gold"?"gold":n.type==="stone"?"stone":"wood")+"… (move to stop)");
+  }
+}
+
+// ---------- menus / building placement ----------
+function openMenu(which){
+  closeMenus();
+  cancelPlacing(); // opening any menu abandons a pending foundation ghost
+  if(document.exitPointerLock)document.exitPointerLock();
+  menuOpen=which;
+  document.getElementById(which+"menu").style.display="block";
+  refreshMenuAfford();
+}
+function closeMenus(){
+  menuOpen=null;
+  document.getElementById("buildmenu").style.display="none";
+  document.getElementById("classmenu").style.display="none";
+  const sm=document.getElementById("smithmenu"); if(sm)sm.style.display="none";
+}
+// ---------- v93: the blacksmith's table — three buffs, choose one ----------
+// v99 THE BOARD DRAFT MENU: three postings, take one — R spends a banked reroll.
+let boardMenuOffer=[];
+function openBoardMenu(offer){
+  closeMenus(); cancelPlacing();
+  if(document.exitPointerLock)document.exitPointerLock();
+  menuOpen="board"; boardMenuOffer=offer.slice();
+  if(typeof Sound!=="undefined")Sound.play("ui_open"); // v100
+  const box=document.getElementById("smithmenu"); // the smith's panel shell fits the board too
+  let html="<h3>📜 The Town Board posts THREE — take ONE</h3>";
+  offer.forEach((qi,i)=>{
+    const Q=QUESTS[qi];
+    html+='<div class="opt" data-q="'+qi+'"><span><span class="key">'+(i+1)+'</span>'+Q.name+
+      ' <small>('+Q.desc+')</small></span><span class="cost">'+(Q.xp>1?"+"+Q.xp+" LEVELS":"+1 level")+'</span></div>';
+  });
+  const rr=(typeof NET!=="undefined"&&NET.mode==="guest")?(NET._qrr||0):(player.qRerolls||0);
+  html+='<div class="opt" data-q="_redraw"><span><span class="key">R</span>Wipe & repost</span><span class="cost">'+rr+' reroll'+(rr===1?'':'s')+' banked</span></div>';
+  html+='<div class="opt" data-q="_walk"><span><span class="key">0</span>Walk away</span><span class="cost">the postings stand</span></div>';
+  html+='<div class="hint">every LEVEL you gain banks one reroll · the same three wait until you choose</div>';
+  box.innerHTML=html; box.style.display="block";
+}
+function pickBoard(qi){
+  if(typeof Sound!=="undefined")Sound.play("ui_confirm"); // v100
+  if(typeof NET!=="undefined"&&NET.mode==="guest"){NET.guestAct({act:"quest",pick:qi});closeMenus();lockMouse();return;}
+  if(questPick(player,qi)){closeMenus();lockMouse();}
+  else msg("That posting isn't on the board.","warn");
+}
+function redrawBoard(){
+  if(typeof Sound!=="undefined")Sound.play("ui_tab"); // v100
+  if(typeof NET!=="undefined"&&NET.mode==="guest"){NET.guestAct({act:"quest",redraw:1});return;} // the host re-lays the trio
+  if(questRedraw(player))openBoardMenu(player.questDraft);
+  else msg("No rerolls banked — gain a level to earn one.","warn");
+}
+let smithMenuOffer=[];
+function openSmithMenu(offer){
+  closeMenus(); cancelPlacing();
+  if(document.exitPointerLock)document.exitPointerLock();
+  menuOpen="smith"; smithMenuOffer=offer.slice();
+  if(typeof Sound!=="undefined")Sound.play("ui_open"); // v100
+  const box=document.getElementById("smithmenu");
+  let html="<h3>🔨 The Blacksmith lays out THREE — choose ONE ("+(player.xp||0)+" XP)</h3>";
+  offer.forEach((id,i)=>{
+    const B=BUFFS.find(b=>b.id===id), st=buffSt(player,id);
+    html+='<div class="opt" data-s="'+id+'"><span><span class="key">'+(i+1)+'</span>'+B.name+
+      ' <small>('+B.desc+')</small></span><span class="cost">×'+st+' → ×'+(st+1)+'</span></div>';
+  });
+  html+='<div class="opt" data-s="_walk"><span><span class="key">0</span>Walk away</span><span class="cost">the offer stands</span></div>';
+  html+='<div class="hint">1 XP buys one · the SAME three wait until you choose — no rerolling</div>';
+  box.innerHTML=html; box.style.display="block";
+}
+function pickSmith(id){
+  if(typeof Sound!=="undefined")Sound.play("ui_confirm"); // v100
+  if(typeof NET!=="undefined"&&NET.mode==="guest"){ // the host holds the table — ask it
+    NET.guestAct({act:"buff",pick:id});
+    closeMenus(); lockMouse(); return;
+  }
+  if(smithPick(player,id)){closeMenus();lockMouse();}
+  else msg("The smith shakes his head — that piece isn't on the table.","warn");
+}
+document.getElementById("smithmenu").addEventListener("click",e=>{
+  const el2=e.target.closest(".opt"); if(!el2)return;
+  if(el2.dataset.q!==undefined){ // v99: the board draft shares the panel
+    if(el2.dataset.q==="_walk"){closeMenus();lockMouse();return;}
+    if(el2.dataset.q==="_redraw"){redrawBoard();return;}
+    pickBoard(+el2.dataset.q);
+    return;
+  }
+  if(!el2.dataset.s)return;
+  if(el2.dataset.s==="_walk"){closeMenus();lockMouse();return;}
+  pickSmith(el2.dataset.s);
+});
+// v121 THE HONEST PRICE TAG. The train menu built its cost line as `cost.food+" food"+(gold?...)`
+// — it only ever knew about two of the four resources. Every SIEGE unit costs gold + WOOD and no
+// food at all, so the menu read "undefined food · 200 gold" and never mentioned the 200 wood
+// (John caught it at a Siege Workshop on his phone). This lists whatever a thing actually costs.
+function costText(cost){
+  if(!cost)return "free";
+  const parts=[];
+  for(const [k,label] of [["food","food"],["wood","wood"],["gold","gold"],["stone","stone"]])
+    if(cost[k])parts.push(cost[k]+" "+label);
+  return parts.length?parts.join(" · "):"free";
+}
+// v121: the same message five times in a row is noise, not information — especially on a phone
+// where the feed covers the battlefield. Identical text inside the window is swallowed.
+const _msgLast={};
+function msgOnce(text,kind,windowS){
+  const now=(typeof performance!=="undefined")?performance.now():Date.now();
+  if(_msgLast[text]&&now-_msgLast[text]<(windowS||4)*1000)return;
+  _msgLast[text]=now; msg(text,kind);
+}
+function canAfford(team,cost){return !cost||(stock[team].food>=(cost.food||0)&&stock[team].gold>=(cost.gold||0)&&stock[team].stone>=(cost.stone||0)&&stock[team].wood>=(cost.wood||0));}
+function pay(team,cost){if(cost){stock[team].food-=(cost.food||0);stock[team].gold-=(cost.gold||0);stock[team].stone-=(cost.stone||0);stock[team].wood-=(cost.wood||0);updateResHud();}}
+function refreshMenuAfford(){
+  if(menuOpen==="build")renderBuildMenu();
+  document.querySelectorAll("#classmenu .opt[data-u]").forEach(el=>{
+    el.classList.toggle("cant",!canAfford(MYTEAM,CLS[el.dataset.u].cost));
+  });
+}
+
+document.getElementById("classmenu").addEventListener("click",e=>{
+  const el=e.target.closest(".opt");
+  if(el&&el.dataset.u)pickTrain(el.dataset.u);
+});
+
+function pickBuild(type){
+  if((BLD[type].age||0)>teamAge[MYTEAM]){msg(BLD[type].name+" requires the "+AGES[BLD[type].age].name+". (T at your Town Center to advance)");return;}
+  if(!canAfford(MYTEAM,BLD[type].cost)){msg("Not enough resources for a "+BLD[type].name+".");return;}
+  if(type==="farm")msg("Farms must border your Town Center or a Storage Pit.");
+  cancelPlacing(); // never stack a second ghost
+  closeMenus();
+  lockMouse();
+  placing={type};
+  if(BLD[type].gate)placing.gateMode=true;              // gates are SET INTO built walls
+  else if(BLD[type].wall)placing.line={stage:0};        // walls are drawn as a LINE
+  ghost=buildingMesh(type,MYTEAM);
+  ghost.scale.setScalar(BSCALE[type]||1); // preview at true size — farms shrank, so must the outline
+  ghost.traverse(o=>{if(o.material){o.material=o.material.clone();o.material.transparent=true;o.material.opacity=0.5;}});
+  scene.add(ghost);
+  msg(placing.gateMode?"Aim at one of your BUILT wall segments and click — the gate replaces it."
+     :placing.line?"Click the ground at the wall's START point."
+     :"Click or press Enter to place the "+BLD[type].name+" · Esc cancels");
+}
+let lineGhosts=[]; // extra translucent segments while drawing a wall line
+function clearLineGhosts(){for(const m of lineGhosts)scene.remove(m);lineGhosts=[];}
+function cancelPlacing(){ if(ghost)scene.remove(ghost); ghost=null; placing=null; clearLineGhosts(); }
+function ghostAnchor(){ // the spot 7 paces ahead — where all placement aims
+  return {x:player.root.position.x-Math.sin(camYaw)*7, z:player.root.position.z-Math.cos(camYaw)*7};
+}
+function wallLineSegments(type,x1,z1,x2,z2){ // even segments along the line, oriented to it
+  const dx=x2-x1, dz=z2-z1, L=Math.hypot(dx,dz);
+  if(L<4)return [];
+  const rot=Math.atan2(-dz,dx), n=Math.min(14,Math.max(1,Math.round(L/10.9)));
+  const ux=dx/L, uz=dz/L, step=L/n, out=[];
+  for(let i=0;i<n;i++){const t=(i+0.5)*step;out.push({x:x1+ux*t,z:z1+uz*t,rot});}
+  return out;
+}
+function snapToWallEnd(x,z){ // the tip of any friendly wall within reach — loops close here
+  let best=null,bd=6*6;
+  for(const b of buildings){
+    if(!b.alive||b.team!==MYTEAM||!b.def.wall||b.def.gate)continue;
+    const c=Math.cos(b.rot||0), sn=Math.sin(b.rot||0);
+    for(const s of [1,-1]){
+      const ex=b.x+s*6.25*c, ez=b.z-s*6.25*sn;
+      const d=dist2(x,z,ex,ez);
+      if(d<bd){bd=d;best={x:ex,z:ez};}
+    }
+  }
+  return best;
+}
+function lineAnchor(){ // the aim point, magnetized to wall tips while drawing walls
+  const a=ghostAnchor();
+  if(placing&&placing.line){
+    const s=snapToWallEnd(a.x,a.z);
+    if(s)return {x:s.x,z:s.z,snapped:true};
+  }
+  return a;
+}
+function nearestGateableWall(x,z){ // a BUILT, friendly, non-gate wall segment nearby
+  let best=null,bd=12*12;
+  for(const b of buildings){
+    if(!b.alive||!b.built||b.team!==MYTEAM||!b.def.wall||b.def.gate)continue;
+    const d=dist2(x,z,b.x,b.z);
+    if(d<bd){bd=d;best=b;}
+  }
+  return best;
+}
+function placeGateOnWall(w,type,team){ // the wall segment steps aside for its gate
+  w.alive=false; scene.remove(w.root);
+  return makeBuilding(team,type,w.x,w.z,false,w.rot||0);
+}
+function updateGhostFollow(){ // shared by host frame and guest frame
+  if(!ghost||!placing)return;
+  const a=ghostAnchor();
+  if(placing.gateMode){
+    const w=nearestGateableWall(a.x,a.z);
+    placing.snapWall=w||null;
+    if(w){ghost.position.set(w.x,terrainHeight(w.x,w.z),w.z);ghost.rotation.y=w.rot||0;}
+    else{ghost.position.set(a.x,terrainHeight(a.x,a.z),a.z);ghost.rotation.y=placing.rot||0;}
+    const ok=!!w&&canAfford(MYTEAM,BLD[placing.type].cost);
+    ghost.traverse(o=>{if(o.material)o.material.opacity=ok?0.55:0.22;});
+    return;
+  }
+  if(placing.line&&placing.line.stage===1){
+    const e=lineAnchor();
+    const segs=wallLineSegments(placing.type,placing.line.sx,placing.line.sz,e.x,e.z);
+    while(lineGhosts.length<Math.max(0,segs.length-1)){
+      const m=buildingMesh(placing.type,MYTEAM);
+      m.traverse(o=>{if(o.material){o.material=o.material.clone();o.material.transparent=true;}});
+      scene.add(m); lineGhosts.push(m);
+    }
+    while(lineGhosts.length>Math.max(0,segs.length-1)){scene.remove(lineGhosts.pop());}
+    const all=[ghost,...lineGhosts];
+    for(let i=0;i<all.length;i++){
+      const s=segs[i]; if(!s){all[i].visible=false;continue;}
+      all[i].visible=true;
+      all[i].position.set(s.x,terrainHeight(s.x,s.z),s.z);
+      all[i].rotation.y=s.rot;
+      const ok=validFor(placing.type,s.x,s.z,MYTEAM);
+      all[i].traverse(o=>{if(o.material)o.material.opacity=ok?0.5:0.18;});
+    }
+    return;
+  }
+  // stage-0 marker and every ordinary building: the classic follow
+  ghost.position.set(a.x,terrainHeight(a.x,a.z),a.z);
+  ghost.rotation.y=placing.rot||0;
+  const ok=placementValid(a.x,a.z);
+  ghost.traverse(o=>{if(o.material)o.material.opacity=ok?0.55:0.25;});
+}
+function farmAdjacent(team,x,z){
+  // STRICT: farms border the Town Center or a Storage Pit — nothing else.
+  // (farm-borders-farm was removed: it let fields chain across the whole map)
+  for(const b of buildings){
+    if(!b.alive||b.team!==team)continue;
+    if(b.type==="towncenter"&&dist2(x,z,b.x,b.z)<26*26)return true;
+    if(b.type==="storage_pit"&&b.built&&dist2(x,z,b.x,b.z)<20*20)return true; // room for the full 8-farm ring
+    if(b.type==="castle"&&b.built&&dist2(x,z,b.x,b.z)<22*22)return true;
+  }
+  return false;
+}
+function validFor(type,x,z,team){
+  if(team===undefined)team=BLUE;
+  if(type==="market"||type==="blacksmith"){ // an economy runs on five markets; one forge serves a whole army
+    const cap=type==="market"?5:1;
+    let mc=0;
+    for(const b of buildings)if(b.alive&&b.team===team&&b.type===type)mc++;
+    if(mc>=cap)return false;
+  }
+  if(Math.abs(x)>MAP.x-3||Math.abs(z)>MAP.z-3)return false;
+  const r=BLD[type].r;
+  // v88: NOTHING may bury a Town Board — players AND the AI validate through here,
+  // so the quest board keeps a clear yard on every side (it vanished under an
+  // Iron-age building in John's game; boards aren't in `buildings`, so the
+  // collision loop below never saw it)
+  if(typeof townBoards!=="undefined")for(const tb of townBoards)
+    if(dist2(x,z,tb.x,tb.z)<Math.pow(r+3.5,2))return false;
+  const gap=type==="farm"?0.5:2.2; // farms pack snugly; everything else spreads out (v87: room for clean E targets)
+  const wallish=!!BLD[type].wall;
+  for(const b of buildings){
+    if(!b.alive)continue;
+    if(wallish&&b.def.wall&&b.team===team){ // walls chain end-to-end AND meet at corners
+      if(dist2(x,z,b.x,b.z)<Math.pow(r+b.def.r-3.4,2))return false;
+      continue;
+    }
+    if(dist2(x,z,b.x,b.z)<Math.pow(r+b.def.r+gap,2))return false;
+  }
+  // v114 CLEARING THE LAND: with the map flush with forest, a wood node blocking placement
+  // meant you could barely build outside your own yard. Trees no longer refuse a plot — the
+  // footprint FELLS them instead (clearFootprint, called from makeBuilding). Stone, gold and
+  // berries still hold their ground: those are finite prizes, not scrub to be bulldozed.
+  for(const n of nodes){
+    if(n.type==="wood")continue;
+    if(n.amount>0&&dist2(x,z,n.x,n.z)<Math.pow(r+3,2))return false;
+  }
+  if(type==="farm"&&!farmAdjacent(team,x,z))return false;
+  return true;
+}
+function placementValid(x,z){return validFor(placing.type,x,z,MYTEAM);}
+function confirmPlace(){
+  if(placing&&placing.gateMode){
+    const w=placing.snapWall;
+    if(!w){msg("No wall there — aim at one of your BUILT wall segments.");return;}
+    if(!canAfford(MYTEAM,BLD[placing.type].cost)){msg("Not enough resources for the gate.");return;}
+    if(typeof NET!=="undefined"&&NET.mode==="guest"){
+      NET.guestAct({act:"gate",wid:w.id,type:placing.type});
+      msg("Gate ordered — the wall will open for it.","blue");
+      cancelPlacing();lockMouse();return;
+    }
+    pay(MYTEAM,BLD[placing.type].cost);
+    placeGateOnWall(w,placing.type,MYTEAM);
+    updateResHud();
+    msg("⛏ Gate foundation set into the wall — hold E to raise it.");
+    cancelPlacing();lockMouse();return;
+  }
+  if(placing&&placing.line){
+    const a=lineAnchor();
+    if(placing.line.stage===0){
+      if(!a.snapped&&!placementValid(a.x,a.z)){msg("Can't start the wall there.");return;}
+      placing.line={stage:1,sx:a.x,sz:a.z};
+      msg(a.snapped?"⭐ Start snapped to the wall's end — aim the line and click."
+                   :"Start set — walk or look to the END point and click.");
+      return;
+    }
+    const segs=wallLineSegments(placing.type,placing.line.sx,placing.line.sz,a.x,a.z);
+    if(!segs.length){msg("Too short — stretch the line further.");return;}
+    let laid=0;
+    for(const s of segs){
+      if(!validFor(placing.type,s.x,s.z,MYTEAM))continue;
+      if(!canAfford(MYTEAM,BLD[placing.type].cost))break;
+      if(typeof NET!=="undefined"&&NET.mode==="guest"){
+        NET.guestAct({act:"build",type:placing.type,x:s.x,z:s.z,rot:s.rot});laid++;continue;
+      }
+      pay(MYTEAM,BLD[placing.type].cost);
+      const wb=makeBuilding(MYTEAM,placing.type,s.x,s.z,false,s.rot); wb.qBy=player.id; laid++; // quest credit on completion
+    }
+    msg(laid?("⛏ "+laid+" wall foundation"+(laid>1?"s":"")+" laid — raise them with E."):"No valid ground along that line.");
+    cancelPlacing();lockMouse();return;
+  }
+  if(!placing)return;
+  const x=ghost.position.x,z=ghost.position.z;
+  if(!placementValid(x,z)){msg("Can't build there — too close to something.");return;}
+  if(!canAfford(MYTEAM,BLD[placing.type].cost)){msg("Not enough resources anymore.");cancelPlacing();return;}
+  if(typeof NET!=="undefined"&&NET.mode==="guest"){
+    NET.guestAct({act:"build",type:placing.type,x:x,z:z,rot:placing.rot||0});
+    msg("Foundation ordered — hold E beside it once it appears.","blue");
+    if(typeof Sound!=="undefined")Sound.play("place",{x:x,z:z}); // v100: foundation thunk (guest)
+    cancelPlacing();lockMouse();return;
+  }
+  pay(MYTEAM,BLD[placing.type].cost);
+  const nb=makeBuilding(MYTEAM,placing.type,x,z,false,placing.rot||0); nb.qBy=player.id; // quest credit on completion
+  if(typeof Sound!=="undefined")Sound.play("place",{x:x,z:z}); // v100: foundation thunk
+  msg("Foundation laid! Hold E next to it to build.","blue");
+  cancelPlacing();
+  lockMouse();
+}
+// two-step build menu: pick a category, then a building
+const BUILD_CATS={
+  economic:{name:"Economic",items:["house","storage_pit","farm","market","blacksmith"],
+    desc:{house:"faster team respawn",storage_pit:"forward drop-off",farm:"0.5 food/sec passive + workable · must border TC/Pit",market:"trade carts fetch gold from neutral bazaars",
+      blacksmith:"spend quest XP on random buffs (Iron) · one per team"}},
+  military:{name:"Military",items:["barracks","archery_range","stable","temple","siege_workshop"],
+    desc:{barracks:"melee & anti-cav lines",archery_range:"ranged line",stable:"cavalry & scout lines",temple:"healing aura, priests",siege_workshop:"rams & artillery — building killers"}},
+  defense:{name:"Defense",items:["watch_tower","tower","wood_wall","wood_gate","stone_wall","stone_gate","fort_wall","fort_gate","castle"],
+    desc:{watch_tower:"extends your fog-of-war vision (Bronze)",tower:"auto-fires at raiders · needs stone",
+      wood_wall:"cheap palisade (Iron) · R rotates",wood_gate:"your troops pass, theirs don't (Iron)",
+      stone_wall:"solid masonry (Classical) · R rotates",stone_gate:"stone gatehouse (Classical)",
+      fort_wall:"the great curtain (Medieval) · R rotates",fort_gate:"fortified gatehouse (Medieval)",
+      castle:"forward spawn · drop-off · rains arrows (Medieval)"}}
+};
+let buildMenuCat=null;
+function openBuildMenu(){
+  closeMenus(); cancelPlacing();
+  if(document.exitPointerLock)document.exitPointerLock();
+  menuOpen="build"; buildMenuCat=null;
+  if(typeof Sound!=="undefined")Sound.play("ui_open"); // v100
+  renderBuildMenu();
+}
+function fmtCost(c){if(!c)return"free";const p=[];if(c.food)p.push(c.food+" food");if(c.wood)p.push(c.wood+" wood");if(c.gold)p.push(c.gold+" gold");if(c.stone)p.push(c.stone+" stone");return p.join(" · ")||"free";}
+function renderBuildMenu(){
+  const box=document.getElementById("buildmenu"); let html;
+  if(!buildMenuCat){
+    html="<h3>🔨 Construct — pick a category</h3>";
+    Object.keys(BUILD_CATS).forEach((c,i)=>{
+      html+='<div class="opt" data-cat="'+c+'"><span><span class="key">'+(i+1)+'</span>'+BUILD_CATS[c].name+
+            '</span><span class="cost">'+BUILD_CATS[c].items.length+' buildings</span></div>';
+    });
+    html+='<div class="hint">1–3 to pick · Esc to close</div>';
+  }else{
+    const cat=BUILD_CATS[buildMenuCat];
+    html="<h3>🔨 "+cat.name+"</h3>";
+    const shown=cat.items.filter(bId=>{
+      const nxt=UPGRADE_NEXT[bId];
+      return !(nxt&&teamAge[MYTEAM]>=BLD[nxt].age); // superseded walls & gates step aside
+    });
+    shown.forEach((bId,i)=>{
+      const b=BLD[bId], locked=(b.age||0)>teamAge[MYTEAM];
+      html+='<div class="opt'+((locked||!canAfford(MYTEAM,b.cost))?" cant":"")+'" data-b="'+bId+'"><span><span class="key">'+(i+1)+'</span>'+
+            b.name+' <small>('+cat.desc[bId]+')</small></span><span class="cost">'+
+            (locked?("🔒 "+AGES[b.age].name):fmtCost(b.cost))+'</span></div>';
+    });
+    html+='<div class="opt" data-back="1"><span><span class="key">0</span>◀ Back</span><span class="cost"></span></div>';
+    html+='<div class="hint">Pick, then click / Enter to place · whack the foundation with E</div>';
+  }
+  box.innerHTML=html; box.style.display="block";
+}
+document.getElementById("buildmenu").addEventListener("click",e=>{
+  const el=e.target.closest(".opt"); if(!el)return;
+  if(el.dataset.cat){buildMenuCat=el.dataset.cat;renderBuildMenu();return;}
+  if(el.dataset.back){buildMenuCat=null;renderBuildMenu();return;}
+  if(el.dataset.b)pickBuild(el.dataset.b);
+});
+
+// training menus are built dynamically from the building's LINES + current age
+let trainMenuOptions=[];
+function openTrainMenu(building){
+  closeMenus();
+  cancelPlacing();
+  if(document.exitPointerLock)document.exitPointerLock();
+  menuOpen="class";
+  if(typeof Sound!=="undefined")Sound.play("ui_open"); // v100
+  trainMenuOptions=[];
+  const box=document.getElementById("classmenu");
+  let html="<h3>⚔ "+building.def.name+" — take up arms</h3>";
+  let i=1;
+  for(const line of linesAt(building.type,BLUE)){
+    const uid=lineUnitFor(line,BLUE);
+    if(!uid){ // line exists here but no tier at this age yet
+      const firstAge=LINES[line].tiers.findIndex(t=>t);
+      html+='<div class="opt cant"><span><span class="key">·</span>'+LINES[line].name+
+            ' line</span><span class="cost">🔒 '+AGES[firstAge].name+'</span></div>';
+      continue;
+    }
+    const c=CLS[uid], costTxt=costText(c.cost);
+    trainMenuOptions.push(uid);
+    html+='<div class="opt" data-u="'+uid+'"><span><span class="key">'+i+'</span>'+c.name+
+          ' <small>('+LINES[line].name+' line)</small></span><span class="cost">'+costTxt+'</span></div>';
+    i++;
+  }
+  if(building.type==="market"){
+    const c=CLS.trader;
+    trainMenuOptions.push("trader");
+    html+='<div class="opt" data-u="trader"><span><span class="key">'+i+'</span>Trader <small>(run routes yourself — 4× cart gold)</small></span><span class="cost">'+costText(c.cost)+'</span></div>';
+    i++;
+  }
+  if(building.type==="storage_pit"){ // v99: the pit yokes the OX
+    const c=CLS.oxcart;
+    trainMenuOptions.push("oxcart");
+    html+='<div class="opt" data-u="oxcart"><span><span class="key">'+i+'</span>Ox Cart <small>(300 wood bed · chops 4× — timber only)</small></span><span class="cost">'+costText(c.cost)+'</span></div>';
+    i++;
+  }
+  trainMenuOptions.push("villager");
+  html+='<div class="opt" data-u="villager"><span><span class="key">'+i+'</span>Back to Villager</span><span class="cost">free</span></div>';
+  html+='<div class="hint">Your team\'s AGE sets the tier you get · costs come from the TEAM stockpile</div>';
+  box.innerHTML=html;
+  box.style.display="block";
+  refreshMenuAfford();
+}
+function armupFor(cls){ // v105: base arm-up cheer routed by unit type (combat cheers, civilian modest)
+  const l=CLS[cls]&&CLS[cls].line;
+  return (l==="cavalry"||l==="scoutline")?"armup_cavalry"
+       :(l==="melee"||l==="anticav"||l==="ranged"||l==="meleesiege"||l==="rangedsiege")?"armup_infantry"
+       :"armup_civilian";
+}
+function armupSig(cls){ // v106: a per-LINE signature layered over the base cheer, so each line sounds distinct
+  const c=CLS[cls]||{},l=c.line;
+  if(cls==="musketeer")return "gun";                            // powder crack
+  if(l==="melee")return "parry";                                // ringing sword shing
+  if(l==="anticav")return "spearhit";                           // spear thud
+  if(l==="ranged")return "bow";                                 // bow twang
+  if(l==="cavalry")return "neigh";                              // a warhorse (scouts ride the base cheer alone)
+  if(l==="meleesiege"||l==="rangedsiege")return "siegefire";    // heavy engine rumble
+  if(l==="healer")return "channel";                             // holy shimmer for the priest
+  if(l==="trade")return "bazaarload";                           // a merchant's crate/coin
+  return null;                                                  // scouts & villagers: base cheer only
+}
+function playArmup(cls){ // v106: base cheer + line signature, layered
+  if(typeof Sound==="undefined")return;
+  Sound.play(armupFor(cls));
+  const s=armupSig(cls); if(s)Sound.play(s);
+}
+function pickTrain(uid){
+  if(player.cls===uid){closeMenus();lockMouse();return;} // already this class — no arm-up
+  if(typeof NET!=="undefined"&&NET.mode==="guest"){
+    playArmup(uid); // v106: arm-up cheer + line signature (guest, local)
+    NET.guestAct({act:"train",cls:uid});
+    msg("Requesting "+CLS[uid].name+" from the quartermaster…");
+    if(uid==="priest")msg("Priest: hold LMB 2s to channel, stand over a fallen ally, release to resurrect. 10s cooldown.","gold");
+    closeMenus();lockMouse();return;
+  }
+  if(!canAfford(MYTEAM,CLS[uid].cost)){
+    msgOnce("The team stockpile can't afford a "+CLS[uid].name+" ("+costText(CLS[uid].cost)+").","warn");return;}
+  pay(MYTEAM,CLS[uid].cost);
+  setClass(player,uid);
+  playArmup(uid); // v106: arm-up cheer + line signature
+  if(uid!=="villager")questProgress(player,"train"); // MASTER-AT-ARMS
+  msg("You are now a "+CLS[uid].name+"!","blue");
+  if(uid==="priest")msg("Priest: hold LMB 2s to channel, stand over a fallen ally, release to resurrect. 10s cooldown.","gold");
+  closeMenus();
+  lockMouse();
+}
+let rallyUnit=null; // legacy fallback leader — v95 soldiers follow their OWN v.rallyBy
+function rallyCapFor(u){return RALLY_CAP+buffSt(u,"rally");} // BANNERMAN: +1 troop per stack
+// v95 PERSONAL WARBANDS: every rallied soldier remembers WHO rallied them (v.rallyBy).
+// G only toggles YOUR band; F only charges YOUR band; soldiers already marching
+// under another leader's banner can never be poached. Two humans on one team each
+// field their own 5 (plus Bannerman) with no bouncing and no accidental recalls.
+function releaseWarband(ldr){ // leader died or disconnected — the band returns to guard the King
+  let n=0;
+  for(const v of units)if(v.rallyBy===ldr){v.rally=false;v.rallyBy=null;v.chargeTo=null;n++;}
+  return n;
+}
+function rallyLeaderFor(v){ // whom does this soldier follow?
+  const b=v.rallyBy;
+  if(b&&b.alive&&b.team===v.team)return b;
+  if(rallyUnit&&rallyUnit.alive&&rallyUnit.team===v.team)return rallyUnit; // legacy states only
+  return null;
+}
+// Shared host/solo core — hostAct "rally" routes guests through the same rules.
+function toggleRallyFor(u){
+  rallyUnit=u;
+  const mil=units.filter(v=>v.team===u.team&&v.bot&&!v.isKing&&v.alive&&v.cls!=="villager"&&!v.remote);
+  if(!mil.length)return null;
+  // only YOUR band counts toward the toggle — ownerless rallies (legacy states) adopt the horn-blower
+  const mine=v=>v.rally&&(v.rallyBy===u||!v.rallyBy);
+  const on=!mil.some(mine);
+  for(const v of mil)if(mine(v)||v.rallyBy===u){v.rally=false;v.rallyBy=null;v.chargeTo=null;} // recall (or re-rally) clears only YOURS
+  let n=0;
+  if(on){
+    const px=u.root.position.x,pz=u.root.position.z;
+    const free=mil.filter(v=>!v.rally); // unclaimed soldiers only — no poaching a teammate's band
+    if(!free.length)return null;
+    free.sort((a,b)=>dist2(a.root.position.x,a.root.position.z,px,pz)-dist2(b.root.position.x,b.root.position.z,px,pz));
+    n=Math.min(rallyCapFor(u),free.length);
+    for(let i=0;i<n;i++){free[i].rally=true;free[i].rallyBy=u;free[i].chargeTo=null;}
+  }
+  return {on,n};
+}
+function toggleRally(){
+  if(typeof NET!=="undefined"&&NET.mode==="guest"){NET.guestAct({act:"rally"});return;}
+  const res=toggleRallyFor(player);
+  if(!res){msg("No allied soldiers to rally yet.");return;}
+  msg(res.on?"⚑ "+res.n+" soldier"+(res.n===1?"":"s")+" rally to YOU (cap "+rallyCapFor(player)+" — Bannerman adds more). G recalls · F to CHARGE."
+            :"Soldiers return to guard the King.","blue");
+}
+function soundCharge(){ // F: hurl the rallied army forward along your gaze — attack-move, then hold the far ground
+  if(gameOver||!player.alive)return;
+  if(typeof NET!=="undefined"&&NET.mode==="guest"){
+    if(typeof Sound!=="undefined")Sound.play("warhorn"); // v102: the charge horn (guest hears it locally)
+    NET.guestAct({act:"charge",yaw:camYaw});return;
+  }
+  const n=orderCharge(player,camYaw);
+  if(!n){msg("No rallied soldiers to charge — press G to rally them to you first.");return;}
+  if(typeof Sound!=="undefined")Sound.play("warhorn"); // v102: the charge horn (only when a band actually storms)
+  msg("⚔ CHARGE! Your "+n+" rallied soldiers storm ahead — they'll hold the far ground (G recalls them).","warn");
+}
+function toggleHelp(){
+  const h=document.getElementById("help"),t=document.getElementById("helptoggle");
+  const showing=h.style.display!=="none";
+  h.style.display=showing?"none":"block";
+  t.style.display=showing?"block":"none";
+}
+document.getElementById("helptoggle").addEventListener("click",toggleHelp);
+
+// Megabonk crunch: low-res render upscaled with nearest-neighbor
+let pixelMode=false;
+function togglePixel(){
+  pixelMode=!pixelMode;
+  const pr=pixelMode?0.3:Math.min(devicePixelRatio,1);
+  renderer.setPixelRatio(pr);
+  if(composer&&composer.setPixelRatio)composer.setPixelRatio(pr);
+  renderer.domElement.style.imageRendering=pixelMode?"pixelated":"auto";
+  msg(pixelMode?"Pixel mode ON — very Megabonk.":"Pixel mode OFF.");
+}
+
+// advance your team's age at the Town Center
+function tryAgeUp(){
+  if(!player.alive)return;
+  if(typeof NET!=="undefined"&&NET.mode==="guest"){NET.guestAct({act:"ageup"});return;}
+  const tc=teamTC(BLUE);
+  if(!tc||dist2(player.root.position.x,player.root.position.z,tc.x,tc.z)>12*12){
+    msg("Stand at your Town Center to advance the age (T).");return;
+  }
+  const nxt=AGES[teamAge[MYTEAM]+1];
+  if(!nxt){msg("Your civilization has reached the "+AGES[teamAge[MYTEAM]].name+" — the final age.");return;}
+  if(ageResT[MYTEAM]>0){msg("⏳ Your team is already advancing — "+Math.ceil(ageResT[MYTEAM])+"s to go.");return;}
+  if(!canAfford(MYTEAM,nxt.cost)){
+    msgOnce(nxt.name+" costs "+costText(nxt.cost)+". Keep gathering!");return;
+  }
+  startAgeResearch(BLUE); // v107: pay now — the age lands in 90 seconds
+}
