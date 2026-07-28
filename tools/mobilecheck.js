@@ -526,8 +526,14 @@ const DEVICES=[
       // bar, the two king boxes and the fps read-out all stacked on the same line.
       const bx=el=>[el.offsetLeft,el.offsetTop,el.offsetWidth,el.offsetHeight];
       const ov=(a,b)=>!(a[0]+a[2]<=b[0]||b[0]+b[2]<=a[0]||a[1]+a[3]<=b[1]||b[1]+b[3]<=a[1]);
-      const barB=bx(bar),topB=bx(document.getElementById("ttop")),
-            mapB=bx(document.getElementById("tmap"));
+      // v124.4: the read-out and the map moved INSIDE the bar, so "do they overlap it" is now the
+      // wrong question — they are nested by design. What must hold instead is that both are
+      // CHILDREN of the bar (nothing left floating in the top band to collide with it) and that
+      // the bar spans the stage.
+      const topEl=document.getElementById("ttop"), mapEl=document.getElementById("tmap");
+      const barB=bx(bar),topB=bx(topEl),mapB=bx(mapEl);
+      const swallowed=topEl.parentElement===bar&&mapEl.parentElement===bar;
+      const spansStage=bar.offsetWidth>=document.getElementById("tstage").offsetWidth-4;
       const kingsIn=document.getElementById("kings").parentElement===bar;
       // v124.3 THE CROWN IS THE METER — it must track the king's health, keep the right glyph, and
       // stop keeping a separate bar. The glyph check matters: the first version re-read ownership
@@ -555,11 +561,11 @@ const DEVICES=[
       const kb=bx(document.getElementById("kings"));
       const kingsInside=kb[0]+kb[2]<=bar.offsetWidth+2;   // not clipped by the bar's overflow
       carryEl.className=c0; rosterEl.className=r0;
-      const topClean=!ov(barB,topB)&&!ov(barB,mapB)&&!ov(topB,mapB);
-      const topBoxes={bar:barB,ttop:topB,map:mapB,
-        hits:[ov(barB,topB)?"bar/ttop":"",ov(barB,mapB)?"bar/map":"",ov(topB,mapB)?"ttop/map":""]
-          .filter(Boolean).join(",")};
-      const barOnStage=barB[0]+barB[2]<=document.getElementById("tstage").offsetWidth;
+      // inside the bar they must still not sit on top of EACH OTHER
+      const topClean=swallowed&&spansStage&&!ov(topB,mapB);
+      const topBoxes={bar:barB,ttop:topB,map:mapB,swallowed,spansStage,
+        hits:ov(topB,mapB)?"ttop/map":""};
+      const barOnStage=barB[0]+barB[2]<=document.getElementById("tstage").offsetWidth+2;
       return {oneRow,holds,noDup,reachable,escaped,drew,camMoved,fill,
         kingsIn,kingsInside,topClean,barOnStage,topBoxes,
         hp0,hp1,hurt,refilled,glyphs,noBar,clipped,

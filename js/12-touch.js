@@ -231,7 +231,9 @@
     // three things in the same band — the bar, the two king boxes and the fps read-out — all
     // overlapping. Two royal health bars ARE top-line information; they belong in the one bar
     // rather than beside it.
-    for(const id of ["resources","agebar","roster","carry","kings"]){
+    // v124.4: the read-out and the map button come INSIDE the bar too. They were the last two
+    // things floating in the top band, which is what kept producing collisions with it.
+    for(const id of ["resources","agebar","roster","carry","kings","ttop","tmap"]){
       const el=document.getElementById(id);
       if(el)bar.appendChild(el);
     }
@@ -269,10 +271,18 @@
     // v124.3: drain the crowns. Read the kings straight off the sim rather than parsing the width
     // updateKingBars just wrote — one less thing to stay in step with, and it works on a guest
     // where the bar is driven from the snapshot.
-    const crowns=[["kb0",0],["kb1",1]].map(([id,t])=>[document.querySelector("#"+id+" .lbl"),t]);
+    // v124.4: a number beside each crown, in that king's colour. The crown alone reads as "roughly
+    // half"; at a glance mid-fight John wanted the actual figure, and a percentage is the one thing
+    // a glyph genuinely cannot say.
+    const crowns=[["kb0",0],["kb1",1]].map(([id,t])=>{
+      const box=document.getElementById(id);
+      let pct=box.querySelector(".kpct");
+      if(!pct){pct=document.createElement("span");pct.className="kpct";box.appendChild(pct);}
+      return [box.querySelector(".lbl"),t,pct];
+    });
     function drainCrowns(){
       if(typeof kings==="undefined"||!kings)return;
-      for(const [el,t] of crowns){
+      for(const [el,t,pctEl] of crowns){
         const k=kings[t];
         if(!el||!k)continue;
         const pct=Math.max(0,Math.min(1,(k.hp||0)/(k.maxHp||1)));
@@ -281,6 +291,9 @@
           el._hp=s;
           el.style.setProperty("--hp",s);
           el.classList.toggle("hurt",pct>0&&pct<0.25);
+          // round, but never round a living king to 0% — that reads as "already dead"
+          const shown=pct>0?Math.max(1,Math.round(pct*100)):0;
+          if(pctEl)pctEl.textContent=shown+"%";
         }
       }
     }
@@ -388,21 +401,25 @@
      parchment boxes with their own borders, on two rows, and the age bar ran under the king
      panels. They are now segments of a single strip: one background, one border, hairline
      dividers between them, and the whole thing sized to stop short of the kings. */
-  .touch-mode #tbar{position:absolute;left:calc(8px + var(--sl));top:calc(6px + var(--st));
-    z-index:22;display:flex;align-items:stretch;height:34px;overflow:hidden;
-    /* NOT a fixed cap. The fps read-out to its right is right-anchored and CHANGES WIDTH — it
-       grows when the adaptive pixel ratio appends its step — so any fixed number here is safe
-       until the neighbour happens to be wide, which is precisely the overlap John reported.
-       Reserve the space instead and let the strip take whatever is left. */
-    max-width:calc(100% - 392px);
-    background:rgba(24,20,14,.86);border:2px solid #2b1d12;border-radius:5px;
-    box-shadow:0 2px 0 rgba(0,0,0,.45)}
+  /* ---------- v124.4 THE FULL-WIDTH PARCHMENT BAR ----------
+     John: "bar is black and font is black so hard for a human to read. Bar should match bottom bar
+     style. It should sit at top of screen as is but go all the way across the screen. Map and fps
+     counter should be included inside the bar."
+     The dark bar was my invention and it fought the game's own look — every other panel is
+     parchment with dark ink, which is why the ink-on-dark text was unreadable. This is now the
+     same .panel treatment as the VILLAGER box at the bottom, edge to edge, and it swallows the
+     read-out and the map button so nothing is left floating beside it to collide with. */
+  .touch-mode #tbar{position:absolute;left:var(--sl);right:var(--sr);top:var(--st);
+    z-index:22;display:flex;align-items:center;height:46px;overflow:hidden;
+    background:var(--parch);border:0;border-bottom:3px solid var(--ink);border-radius:0;
+    box-shadow:0 3px 0 rgba(0,0,0,.35), inset 0 0 0 2px var(--parch2);
+    color:var(--ink);padding:0 4px}
   .touch-mode #tbar>*{position:static!important;transform:none!important;margin:0!important;
     display:flex!important;align-items:center;background:none!important;border:0!important;
     border-radius:0!important;box-shadow:none!important;padding:0 10px!important;
-    white-space:nowrap;font-size:12px!important;line-height:1!important;max-width:none!important;
-    opacity:1;transition:none}
-  .touch-mode #tbar>*+*{border-left:1px solid rgba(160,150,120,.32)!important}
+    white-space:nowrap;font-size:13px!important;line-height:1!important;max-width:none!important;
+    color:var(--ink)!important;opacity:1;transition:none;height:100%}
+  .touch-mode #tbar>*+*{border-left:1px solid rgba(43,29,18,.22)!important}
   /* v124.2 PRIORITY INSIDE THE STRIP. The bar is capped so it never reaches the fps read-out, and
      when the transient segments (roster, carry) appear the total exceeds that cap. Whatever gets
      clipped must be the LEAST important thing, not whatever happens to be last in the DOM — the
@@ -410,9 +427,21 @@
      Resources and the kings hold their size; the age bar and the transients give way. */
   .touch-mode #tbar #resources{order:0;flex:0 0 auto}
   .touch-mode #tbar #kings    {order:1;flex:0 0 auto}
-  .touch-mode #tbar #agebar   {order:2;flex:1 1 auto;min-width:0;overflow:hidden}
+  .touch-mode #tbar #agebar   {order:2;flex:1 1 auto;min-width:0;overflow:hidden;
+    text-overflow:ellipsis}
   .touch-mode #tbar #roster   {order:3;flex:0 1 auto;min-width:0;overflow:hidden}
   .touch-mode #tbar #carry    {order:4;flex:0 1 auto;min-width:0;overflow:hidden}
+  /* the read-out and the map ride at the far right INSIDE the bar — margin-left:auto is what
+     pushes them there, and it is why nothing can collide with them any more */
+  .touch-mode #tbar #ttop     {order:5;flex:0 0 auto;margin-left:auto!important;gap:8px}
+  .touch-mode #tbar #tmap     {order:6;flex:0 0 auto}
+  .touch-mode #tbar #tfps{background:none!important;color:var(--ink)!important;
+    font:600 11px/1 ui-monospace,monospace!important;padding:0!important;opacity:.62}
+  .touch-mode #tbar #tflip,.touch-mode #tbar #tfull{background:rgba(43,29,18,.10)!important;
+    color:var(--ink)!important;padding:5px 8px!important;border-radius:3px;font-size:14px}
+  .touch-mode #tbar #tmap{width:auto!important;height:auto!important;border:0!important;
+    background:none!important;color:var(--ink)!important;font-size:22px!important;
+    padding:0 8px!important}
   .touch-mode #tbar #agebar,.touch-mode #tbar #roster{font-size:11px!important}
   .touch-mode #tbar #carry{color:#e6c86a}
   .touch-mode #tbar>.thidden{display:none!important}
@@ -433,22 +462,26 @@
      Done with background-clip:text: the gradient is painted through the glyph's own shape, so the
      "sand" drains along the crown's silhouette rather than down a rectangle. --hp is written per
      frame in JS below. */
-  .touch-mode #tbar .kingbox .lbl{font-size:23px!important;margin:0!important;
+  .touch-mode #tbar .kingbox .lbl{font-size:34px!important;margin:0!important;
     line-height:1!important;letter-spacing:0!important;
     --hp:100%; --col:#6f86d6;
-    /* the "spent" half is a warm dark grey, NOT black: a king at 5% is the most important thing on
-       the screen, and a pure-black crown on a near-black strip is exactly when you can least
-       afford to lose the silhouette */
+    /* the "spent" half is a light stone grey now that the bar is parchment — on the old dark bar
+       it had to be a dark grey, and simply inverting the bar behind it would have made an emptied
+       crown vanish. Whatever the bar colour, the empty half has to CONTRAST with it. */
     background:linear-gradient(to top,var(--col) 0,var(--col) var(--hp),
-      #4a4137 var(--hp),#4a4137 100%);
+      #b3a68c var(--hp),#b3a68c 100%);
     -webkit-background-clip:text;background-clip:text;
     color:transparent!important;-webkit-text-fill-color:transparent;
-    filter:drop-shadow(0 1px 0 rgba(0,0,0,.85)) drop-shadow(0 0 2px rgba(255,240,210,.22))}
+    filter:drop-shadow(0 1px 0 rgba(43,29,18,.55))}
+  /* the number, in the king's own colour — John: "blue font next to blue king crown would say 50%" */
+  .touch-mode #tbar .kpct{font:bold 14px/1 "Trebuchet MS",sans-serif;letter-spacing:.5px;
+    min-width:38px;text-align:left}
+  .touch-mode #tbar #kb0 .kpct{color:#2f57c9}
+  .touch-mode #tbar #kb1 .kpct{color:#b4291b}
   /* under a quarter health the crown pulses — you should not have to read a number to know */
   .touch-mode #tbar .kingbox .lbl.hurt{animation:crownpulse 1.15s ease-in-out infinite}
-  @keyframes crownpulse{0%,100%{filter:drop-shadow(0 1px 0 rgba(0,0,0,.85))
-      drop-shadow(0 0 2px rgba(255,240,210,.22))}
-    50%{filter:drop-shadow(0 1px 0 rgba(0,0,0,.85)) drop-shadow(0 0 6px rgba(255,120,90,.85))}}
+  @keyframes crownpulse{0%,100%{filter:drop-shadow(0 1px 0 rgba(43,29,18,.55))}
+    50%{filter:drop-shadow(0 1px 0 rgba(43,29,18,.55)) drop-shadow(0 0 7px rgba(200,30,20,.95))}}
   .touch-mode #tbar #kb0 .lbl{--col:#6f86d6}   /* Blue crown  */
   .touch-mode #tbar #kb1 .lbl{--col:#d05a4c}   /* Red crown   */
   /* the bar was the meter; the crown is the meter now */
