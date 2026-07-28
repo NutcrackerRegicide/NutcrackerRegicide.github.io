@@ -522,13 +522,63 @@ const DEVICES=[
       fire(zR,"touchend",[T(zR,sx+56,sy+40,72)]); await wait(320);
       // a loosed shot is proved by the cooldown the launch sets, not by counting projectiles —
       // those get culled by range and life on their own schedule
+      // v124.2: the kings joined the bar, and NOTHING in the top band may overlap. John had the
+      // bar, the two king boxes and the fps read-out all stacked on the same line.
+      const bx=el=>[el.offsetLeft,el.offsetTop,el.offsetWidth,el.offsetHeight];
+      const ov=(a,b)=>!(a[0]+a[2]<=b[0]||b[0]+b[2]<=a[0]||a[1]+a[3]<=b[1]||b[1]+b[3]<=a[1]);
+      const barB=bx(bar),topB=bx(document.getElementById("ttop")),
+            mapB=bx(document.getElementById("tmap"));
+      const kingsIn=document.getElementById("kings").parentElement===bar;
+      // v124.3 THE CROWN IS THE METER — it must track the king's health, keep the right glyph, and
+      // stop keeping a separate bar. The glyph check matters: the first version re-read ownership
+      // from its own rewritten text, so every crown flipped to the enemy's on the next observer
+      // tick — a rule that destroyed the evidence it depended on.
+      const l0=document.querySelector("#kb0 .lbl"), l1=document.querySelector("#kb1 .lbl");
+      kings[0].hp=kings[0].maxHp*0.62; kings[1].hp=kings[1].maxHp*0.18;
+      await wait(140);
+      const hp0=parseFloat(l0.style.getPropertyValue("--hp")),
+            hp1=parseFloat(l1.style.getPropertyValue("--hp"));
+      const hurt=l1.classList.contains("hurt")&&!l0.classList.contains("hurt");
+      kings[0].hp=kings[0].maxHp; kings[1].hp=kings[1].maxHp;
+      await wait(160);
+      const refilled=parseFloat(l0.style.getPropertyValue("--hp"))>99;
+      const glyphs=l0.textContent.trim()==="♔"&&l1.textContent.trim()==="♚";
+      const noBar=getComputedStyle(document.querySelector("#kb0 .bar")).display==="none";
+      const clipped=(getComputedStyle(l0).webkitBackgroundClip||
+                     getComputedStyle(l0).backgroundClip)==="text";
+      // force the WORST case before measuring: every transient segment visible at once. That is
+      // the state that clipped the kings, and a check that only ever sees the quiet bar is useless.
+      const carryEl=document.getElementById("carry"), rosterEl=document.getElementById("roster");
+      const c0=carryEl.className, r0=rosterEl.className;
+      carryEl.classList.remove("thidden"); rosterEl.classList.remove("thidden");
+      await wait(60);
+      const kb=bx(document.getElementById("kings"));
+      const kingsInside=kb[0]+kb[2]<=bar.offsetWidth+2;   // not clipped by the bar's overflow
+      carryEl.className=c0; rosterEl.className=r0;
+      const topClean=!ov(barB,topB)&&!ov(barB,mapB)&&!ov(topB,mapB);
+      const topBoxes={bar:barB,ttop:topB,map:mapB,
+        hits:[ov(barB,topB)?"bar/ttop":"",ov(barB,mapB)?"bar/map":"",ov(topB,mapB)?"ttop/map":""]
+          .filter(Boolean).join(",")};
+      const barOnStage=barB[0]+barB[2]<=document.getElementById("tstage").offsetWidth;
       return {oneRow,holds,noDup,reachable,escaped,drew,camMoved,fill,
+        kingsIn,kingsInside,topClean,barOnStage,topBoxes,
+        hp0,hp1,hurt,refilled,glyphs,noBar,clipped,
         shot:player.atkT>0,reset:player._drawT||0};
     });
     check(dev.name+": v124.1 HUD — resources, age, roster and carry are ONE strip on one row",
       v1241.oneRow&&v1241.holds);
     check(dev.name+": v124.1 feed — a promoted line is MOVED to the banner, never duplicated",
       v1241.noDup);
+    check(dev.name+": v124.2 HUD — the king bars live IN the strip and are not clipped by it ("+
+      v1241.kingsIn+"/"+v1241.kingsInside+")",v1241.kingsIn&&v1241.kingsInside);
+    check(dev.name+": v124.3 crown — the glyph IS the health meter, draining as the king is hurt ("+
+      v1241.hp0+"% / "+v1241.hp1+"%, refills "+v1241.refilled+", separate bar gone "+v1241.noBar+")",
+      Math.abs(v1241.hp0-62)<1.5&&Math.abs(v1241.hp1-18)<1.5&&v1241.refilled&&
+      v1241.noBar&&v1241.clipped);
+    check(dev.name+": v124.3 crown — yours stays ♔ and theirs stays ♚, and a dying king pulses",
+      v1241.glyphs&&v1241.hurt);
+    check(dev.name+": v124.2 HUD — nothing in the top band overlaps: bar, read-out and map button "+
+      JSON.stringify(v1241.topBoxes),v1241.topClean&&v1241.barOnStage);
     check(dev.name+": v124.1 picker — CLOSE is the topmost element at its own centre and escapes ("+
       v1241.reachable+"/"+v1241.escaped+")",v1241.reachable&&v1241.escaped);
     check(dev.name+": v124.1 draw — one thumb charges the bow AND steers ("+

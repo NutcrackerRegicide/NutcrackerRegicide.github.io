@@ -227,9 +227,37 @@
     const host=document.getElementById("resources");
     if(!host||!host.parentNode)return;
     host.parentNode.insertBefore(bar,host);
-    for(const id of ["resources","agebar","roster","carry"]){
+    // v124.2: the KINGS join the strip. They were a separate centred panel at top:10, which put
+    // three things in the same band — the bar, the two king boxes and the fps read-out — all
+    // overlapping. Two royal health bars ARE top-line information; they belong in the one bar
+    // rather than beside it.
+    for(const id of ["resources","agebar","roster","carry","kings"]){
       const el=document.getElementById(id);
       if(el)bar.appendChild(el);
+    }
+    // v124.2: "♔ KING OSRIC (YOUR KING)" is 210px of text that says the same thing every match.
+    // Compress to the crown alone and carry the ONE bit that matters — whose king it is — in its
+    // colour. Done with an observer rather than a one-off rewrite because 10-net relabels both
+    // boxes when you join as RED, and a static rewrite would be silently undone (or would undo it).
+    for(const id of ["kb0","kb1"]){
+      const lbl=document.querySelector("#"+id+" .lbl");
+      if(!lbl)continue;
+      const shorten=()=>{
+        const t=(lbl.textContent||"").trim();
+        // Only re-read ownership from a FULL label. The observer fires on its own rewrite, and the
+        // first version then tested "♔" for the word YOUR, found none, and flipped every crown to
+        // the enemy glyph on the very next tick — a rule that destroyed its own evidence.
+        if(t.length>2){
+          const mine=/YOUR/i.test(t);
+          lbl.classList.toggle("mine",mine);
+          lbl.classList.toggle("foe",!mine);
+        }
+        const want=lbl.classList.contains("mine")?"♔":"♚";
+        if(t!==want)lbl.textContent=want;
+      };
+      if(typeof MutationObserver!=="undefined")
+        new MutationObserver(shorten).observe(lbl,{childList:true,characterData:true,subtree:true});
+      shorten();
     }
     // carry and the roster only earn their segment when they have something to say
     const carry=document.getElementById("carry");
@@ -238,8 +266,27 @@
     if(roster&&typeof MutationObserver!=="undefined")
       new MutationObserver(()=>{rHot=performance.now();}).observe(
         roster,{childList:true,characterData:true,subtree:true});
+    // v124.3: drain the crowns. Read the kings straight off the sim rather than parsing the width
+    // updateKingBars just wrote — one less thing to stay in step with, and it works on a guest
+    // where the bar is driven from the snapshot.
+    const crowns=[["kb0",0],["kb1",1]].map(([id,t])=>[document.querySelector("#"+id+" .lbl"),t]);
+    function drainCrowns(){
+      if(typeof kings==="undefined"||!kings)return;
+      for(const [el,t] of crowns){
+        const k=kings[t];
+        if(!el||!k)continue;
+        const pct=Math.max(0,Math.min(1,(k.hp||0)/(k.maxHp||1)));
+        const s=(pct*100).toFixed(1)+"%";
+        if(el._hp!==s){
+          el._hp=s;
+          el.style.setProperty("--hp",s);
+          el.classList.toggle("hurt",pct>0&&pct<0.25);
+        }
+      }
+    }
     (function tickBar(){
       requestAnimationFrame(tickBar);
+      drainCrowns();
       if(carry)carry.classList.toggle("thidden",getComputedStyle(carry).display==="none"||
         !(typeof player!=="undefined"&&player&&player.carry&&
           (player.carry.food+player.carry.gold+player.carry.stone+player.carry.wood)>0));
@@ -342,7 +389,12 @@
      panels. They are now segments of a single strip: one background, one border, hairline
      dividers between them, and the whole thing sized to stop short of the kings. */
   .touch-mode #tbar{position:absolute;left:calc(8px + var(--sl));top:calc(6px + var(--st));
-    z-index:22;display:flex;align-items:stretch;height:34px;max-width:600px;overflow:hidden;
+    z-index:22;display:flex;align-items:stretch;height:34px;overflow:hidden;
+    /* NOT a fixed cap. The fps read-out to its right is right-anchored and CHANGES WIDTH — it
+       grows when the adaptive pixel ratio appends its step — so any fixed number here is safe
+       until the neighbour happens to be wide, which is precisely the overlap John reported.
+       Reserve the space instead and let the strip take whatever is left. */
+    max-width:calc(100% - 392px);
     background:rgba(24,20,14,.86);border:2px solid #2b1d12;border-radius:5px;
     box-shadow:0 2px 0 rgba(0,0,0,.45)}
   .touch-mode #tbar>*{position:static!important;transform:none!important;margin:0!important;
@@ -351,9 +403,59 @@
     white-space:nowrap;font-size:12px!important;line-height:1!important;max-width:none!important;
     opacity:1;transition:none}
   .touch-mode #tbar>*+*{border-left:1px solid rgba(160,150,120,.32)!important}
+  /* v124.2 PRIORITY INSIDE THE STRIP. The bar is capped so it never reaches the fps read-out, and
+     when the transient segments (roster, carry) appear the total exceeds that cap. Whatever gets
+     clipped must be the LEAST important thing, not whatever happens to be last in the DOM — the
+     first version clipped the king health bars, which are the whole objective of the game.
+     Resources and the kings hold their size; the age bar and the transients give way. */
+  .touch-mode #tbar #resources{order:0;flex:0 0 auto}
+  .touch-mode #tbar #kings    {order:1;flex:0 0 auto}
+  .touch-mode #tbar #agebar   {order:2;flex:1 1 auto;min-width:0;overflow:hidden}
+  .touch-mode #tbar #roster   {order:3;flex:0 1 auto;min-width:0;overflow:hidden}
+  .touch-mode #tbar #carry    {order:4;flex:0 1 auto;min-width:0;overflow:hidden}
   .touch-mode #tbar #agebar,.touch-mode #tbar #roster{font-size:11px!important}
   .touch-mode #tbar #carry{color:#e6c86a}
   .touch-mode #tbar>.thidden{display:none!important}
+  /* v124.2 THE KINGS, in the bar. Full-width titles ("KING OSRIC (YOUR KING)") cost 210px each and
+     say the same thing every match — the crown, the colour and the bar carry all of it. */
+  .touch-mode #tbar #kings{gap:8px!important;padding:0 10px!important}
+  /* the king boxes are GRANDchildren of the strip, so the "#tbar>*" reset above never reached
+     them and each crown kept sitting on its own parchment panel */
+  .touch-mode #tbar .kingbox{width:auto!important;padding:0!important;display:flex!important;
+    align-items:center;gap:5px;background:none!important;border:0!important;
+    border-radius:0!important;box-shadow:none!important}
+  /* ---------- v124.3 THE CROWN IS THE METER ----------
+     John's idea, and a better one than a crown next to a bar: fill the crown glyph itself with its
+     team colour and let it DRAIN to black from the top as that king takes damage, like an
+     hourglass running out. One glyph now carries three things the old layout needed four elements
+     for — whose king, which team, and how close he is to dying — and the separate health bar can
+     go entirely, which buys back 150px of the strip.
+     Done with background-clip:text: the gradient is painted through the glyph's own shape, so the
+     "sand" drains along the crown's silhouette rather than down a rectangle. --hp is written per
+     frame in JS below. */
+  .touch-mode #tbar .kingbox .lbl{font-size:23px!important;margin:0!important;
+    line-height:1!important;letter-spacing:0!important;
+    --hp:100%; --col:#6f86d6;
+    /* the "spent" half is a warm dark grey, NOT black: a king at 5% is the most important thing on
+       the screen, and a pure-black crown on a near-black strip is exactly when you can least
+       afford to lose the silhouette */
+    background:linear-gradient(to top,var(--col) 0,var(--col) var(--hp),
+      #4a4137 var(--hp),#4a4137 100%);
+    -webkit-background-clip:text;background-clip:text;
+    color:transparent!important;-webkit-text-fill-color:transparent;
+    filter:drop-shadow(0 1px 0 rgba(0,0,0,.85)) drop-shadow(0 0 2px rgba(255,240,210,.22))}
+  /* under a quarter health the crown pulses — you should not have to read a number to know */
+  .touch-mode #tbar .kingbox .lbl.hurt{animation:crownpulse 1.15s ease-in-out infinite}
+  @keyframes crownpulse{0%,100%{filter:drop-shadow(0 1px 0 rgba(0,0,0,.85))
+      drop-shadow(0 0 2px rgba(255,240,210,.22))}
+    50%{filter:drop-shadow(0 1px 0 rgba(0,0,0,.85)) drop-shadow(0 0 6px rgba(255,120,90,.85))}}
+  .touch-mode #tbar #kb0 .lbl{--col:#6f86d6}   /* Blue crown  */
+  .touch-mode #tbar #kb1 .lbl{--col:#d05a4c}   /* Red crown   */
+  /* the bar was the meter; the crown is the meter now */
+  .touch-mode #tbar .kingbox .bar{display:none!important}
+  /* the read-out moves off the centre line it was sharing with the kings */
+  .touch-mode #ttop{left:auto!important;right:calc(62px + var(--sr))!important;
+    transform:none!important}
   /* THE BANNER — John: fewer lines, but the big ones unmissable */
   #tbanner{position:absolute;left:50%;top:calc(84px + var(--st));transform:translateX(-50%) translateY(-8px);
     z-index:44;padding:10px 22px;border-radius:4px;opacity:0;pointer-events:none;
@@ -371,7 +473,6 @@
   .touch-mode #minimapwrap{display:none}
   .touch-mode.tmapon #minimapwrap{display:block;transform:scale(.92);transform-origin:top right;
     right:calc(62px + var(--sr));top:calc(8px + var(--st))}
-  .touch-mode #kings{top:calc(10px + var(--st))}
   .touch-mode #objective{transform:scale(.8);transform-origin:top center;top:calc(74px + var(--st))}
   .touch-mode #playerhud{transform:translateX(-50%) scale(.78);bottom:calc(4px + var(--sb))}
   .touch-mode #tbtns{right:calc(10px + var(--sr));bottom:calc(12px + var(--sb))}
