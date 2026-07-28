@@ -563,12 +563,42 @@ const DEVICES=[
       carryEl.className=c0; rosterEl.className=r0;
       // inside the bar they must still not sit on top of EACH OTHER
       const topClean=swallowed&&spansStage&&!ov(topB,mapB);
+      // ---- v124.6: the strip moved to the BOTTOM and the feed to the TOP ----
+      const stg=document.getElementById("tstage");
+      const hudB=bx(document.getElementById("playerhud"));
+      const btnB=bx(document.getElementById("tbtns"));
+      const feedB=bx(document.getElementById("feed"));
+      const zLB=bx(document.getElementById("tzL"));
+      const atBottom=barB[1]+barB[3]>=stg.offsetHeight-4;
+      const stacked=hudB[1]+hudB[3]<=barB[1]+2&&btnB[1]+btnB[3]<=barB[1]+2;
+      const feedTop=feedB[1]<stg.offsetHeight*0.35;
+      // the thumb zones sit at z-index 30 against the bar's 22 — without a stop they would swallow
+      // taps meant for the map and fullscreen buttons now living down there
+      const zoneClears=zLB[1]+zLB[3]<=barB[1]+2;
+      // ---- v124.6: the age line says two ages and YOUR clock, never theirs ----
+      const foeTeam=(MYTEAM===BLUE)?RED:BLUE;
+      teamAge[MYTEAM]=1; teamAge[foeTeam]=2;
+      ageResT[MYTEAM]=0; ageResT[foeTeam]=0;
+      updateAgeHud(); await wait(60);
+      const quiet=document.getElementById("agebar").textContent;
+      ageResT[foeTeam]=77;                      // THEIR advance must be invisible
+      updateAgeHud(); await wait(60);
+      const foeTicking=document.getElementById("agebar").textContent;
+      ageResT[MYTEAM]=42;                       // MINE must show a countdown
+      updateAgeHud(); await wait(60);
+      const mineTicking=document.getElementById("agebar").textContent;
+      ageResT[MYTEAM]=0; ageResT[foeTeam]=0; updateAgeHud();
+      const ageOK=quiet===foeTicking&&                       // no enemy timer, ever
+        !/\d+s/.test(quiet)&&/42s/.test(mineTicking)&&       // mine ticks, and only mine
+        /BRONZE/.test(quiet)&&/IRON/.test(quiet)&&           // both ages named
+        !/next:|Town Center|▰/.test(quiet);                  // the desktop copy is gone
       const topBoxes={bar:barB,ttop:topB,map:mapB,swallowed,spansStage,
         hits:ov(topB,mapB)?"ttop/map":""};
       const barOnStage=barB[0]+barB[2]<=document.getElementById("tstage").offsetWidth+2;
       return {oneRow,holds,noDup,reachable,escaped,drew,camMoved,fill,
         kingsIn,kingsInside,topClean,barOnStage,topBoxes,
         hp0,hp1,hurt,refilled,glyphs,noBar,clipped,
+        atBottom,stacked,feedTop,zoneClears,ageOK,quiet,mineTicking,
         shot:player.atkT>0,reset:player._drawT||0};
     });
     check(dev.name+": v124.1 HUD — resources, age, roster and carry are ONE strip on one row",
@@ -583,6 +613,12 @@ const DEVICES=[
       v1241.noBar&&v1241.clipped);
     check(dev.name+": v124.3 crown — yours stays ♔ and theirs stays ♚, and a dying king pulses",
       v1241.glyphs&&v1241.hurt);
+    check(dev.name+": v124.6 layout — the strip is at the BOTTOM with the unit panel and rail "+
+      "stacked above it",v1241.atBottom&&v1241.stacked);
+    check(dev.name+": v124.6 layout — the feed moved to the top, and the thumb zones stop at the "+
+      "strip so its buttons stay tappable",v1241.feedTop&&v1241.zoneClears);
+    check(dev.name+": v124.6 age — your age, their age, and only YOUR countdown (\""+
+      v1241.quiet+"\" -> \""+v1241.mineTicking+"\")",v1241.ageOK);
     check(dev.name+": v124.2 HUD — nothing in the top band overlaps: bar, read-out and map button "+
       JSON.stringify(v1241.topBoxes),v1241.topClean&&v1241.barOnStage);
     check(dev.name+": v124.1 picker — CLOSE is the topmost element at its own centre and escapes ("+

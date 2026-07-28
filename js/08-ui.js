@@ -204,6 +204,24 @@ function ageUp(team){
 }
 function updateAgeHud(){
   const a=teamAge[MYTEAM], nxt=AGES[a+1];
+  // v124.6 THE AGE LINE, ON A PHONE. John: "that section should just show what age your team is and
+  // what age the enemy is. When you are aging up it should add a simple countdown timer next to the
+  // name of the age you are in... You should not see enemy age up timer, only their age."
+  // The desktop line — cost, the T hint, a ten-block progress meter — is good copy on a 1920 window
+  // and ran clean off a 1180 strip. Two ages and a number is all that survives the trip.
+  if(typeof document!=="undefined"&&document.documentElement&&
+     document.documentElement.classList.contains("touch-mode")){
+    const foeTeam=(MYTEAM===BLUE)?RED:BLUE;
+    const mine=AGES[a].name.toUpperCase().replace(/ AGE$| ERA$/,"");
+    const foe=AGES[teamAge[foeTeam]].name.toUpperCase().replace(/ AGE$| ERA$/,"");
+    const rem=(nxt&&ageResT[MYTEAM]>0)?Math.ceil(Math.max(0,ageResT[MYTEAM])):0;
+    document.getElementById("agebar").innerHTML=
+      '<b class="agemine">'+mine+'</b>'+
+      (rem?'<span class="agecd">⏳'+rem+'s</span>':'')+
+      '<span class="agevs">vs</span><b class="agefoe">'+foe+'</b>';
+    if(menuOpen)refreshMenuAfford();
+    return;
+  }
   let tail;
   if(nxt&&ageResT[MYTEAM]>0){ // v107: the 90s advance — countdown + a small progress bar
     const rem=Math.max(0,ageResT[MYTEAM]), f=1-rem/AGE_RESEARCH_S, n=10, fill=Math.max(0,Math.min(n,Math.round(f*n)));

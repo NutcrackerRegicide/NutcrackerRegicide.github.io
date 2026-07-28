@@ -319,7 +319,10 @@
     touch-action:none;-webkit-tap-highlight-color:transparent}
   /* the two thumb zones. The right one stops short of the button column so a thumb on ATTACK
      never also starts steering the camera. */
-  .tzone{position:absolute;bottom:0;height:74%;pointer-events:auto}
+  /* v124.6: the thumb zones stop at the strip. They sit at z-index 30 against the bar's 22, so
+     without this a thumb aimed at the map or the fullscreen button would be swallowed by the
+     camera stick instead — the same class of bug as the v117 pad over the start menu. */
+  .tzone{position:absolute;bottom:calc(var(--tbarh) + var(--sb));height:70%;pointer-events:auto}
   #tzL{left:0;width:46%}
   #tzR{left:46%;width:36%}
   .tstick{position:absolute;left:0;top:0;display:none}
@@ -386,8 +389,8 @@
   /* v124: was bottom:78px, which sat straight on top of #playerhud's title — John's field shot
      had "gathering" printed across the word VILLAGER. #playerhud is bottom-anchored and centred
      too, so this has to clear its full scaled height (~62px) plus the safe-area inset. */
-  #tauto{position:absolute;left:50%;bottom:calc(112px + var(--sb));transform:translateX(-50%);
-    padding:4px 12px;
+  #tauto{position:absolute;left:50%;bottom:calc(var(--tbarh) + 68px + var(--sb));
+    transform:translateX(-50%);padding:4px 12px;
     border-radius:3px;color:#fff;background:rgba(0,0,0,.42);font-size:12px;display:none}
   #tauto.on{display:block}
   /* HUD triage — every left/top anchored panel is pushed clear of the notch via --sl/--st */
@@ -409,10 +412,15 @@
      parchment with dark ink, which is why the ink-on-dark text was unreadable. This is now the
      same .panel treatment as the VILLAGER box at the bottom, edge to edge, and it swallows the
      read-out and the map button so nothing is left floating beside it to collide with. */
-  .touch-mode #tbar{position:absolute;left:var(--sl);right:var(--sr);top:var(--st);
-    z-index:22;display:flex;align-items:center;height:46px;overflow:hidden;
-    background:var(--parch);border:0;border-bottom:3px solid var(--ink);border-radius:0;
-    box-shadow:0 3px 0 rgba(0,0,0,.35), inset 0 0 0 2px var(--parch2);
+  /* v124.6: the strip moved to the BOTTOM, under the unit panel. Everything anchored to the bottom
+     edge — the unit panel, the button rail, the automation caption, the picker's CLOSE and the two
+     thumb zones — has to clear it, and the message feed swaps to the top where the strip used to
+     be. --tbarh is the single number they all read, so the bar's height is changed in one place. */
+  .touch-mode{--tbarh:46px}
+  .touch-mode #tbar{position:absolute;left:var(--sl);right:var(--sr);bottom:var(--sb);top:auto;
+    z-index:22;display:flex;align-items:center;height:var(--tbarh);overflow:hidden;
+    background:var(--parch);border:0;border-top:3px solid var(--ink);border-radius:0;
+    box-shadow:0 -3px 0 rgba(0,0,0,.35), inset 0 0 0 2px var(--parch2);
     color:var(--ink);padding:0 4px}
   .touch-mode #tbar>*{position:static!important;transform:none!important;margin:0!important;
     display:flex!important;align-items:center;background:none!important;border:0!important;
@@ -427,8 +435,13 @@
      Resources and the kings hold their size; the age bar and the transients give way. */
   .touch-mode #tbar #resources{order:0;flex:0 0 auto}
   .touch-mode #tbar #kings    {order:1;flex:0 0 auto}
-  .touch-mode #tbar #agebar   {order:2;flex:1 1 auto;min-width:0;overflow:hidden;
-    text-overflow:ellipsis}
+  .touch-mode #tbar #agebar   {order:2;flex:0 0 auto;min-width:0;overflow:hidden;
+    text-overflow:ellipsis;gap:7px}
+  .touch-mode #tbar .agemine{font-size:13px;letter-spacing:.5px}
+  .touch-mode #tbar .agefoe {font-size:13px;letter-spacing:.5px;color:#8a3a30}
+  .touch-mode #tbar .agevs  {font-size:10px;opacity:.5;letter-spacing:1px}
+  .touch-mode #tbar .agecd  {font-size:12px;font-weight:bold;color:#8a6a12;
+    background:rgba(224,169,46,.22);padding:3px 6px;border-radius:3px}
   .touch-mode #tbar #roster   {order:3;flex:0 1 auto;min-width:0;overflow:hidden}
   .touch-mode #tbar #carry    {order:4;flex:0 1 auto;min-width:0;overflow:hidden}
   /* the read-out and the map ride at the far right INSIDE the bar — margin-left:auto is what
@@ -490,13 +503,18 @@
   .touch-mode #ttop{left:auto!important;right:calc(62px + var(--sr))!important;
     transform:none!important}
   /* THE BANNER — John: fewer lines, but the big ones unmissable */
-  #tbanner{position:absolute;left:50%;top:calc(84px + var(--st));transform:translateX(-50%) translateY(-8px);
+  /* v124.6: the feed owns the top-left now, so the banner drops to a third of the way down where
+     it cannot sit on top of it */
+  #tbanner{position:absolute;left:50%;top:calc(30% + var(--st));transform:translateX(-50%) translateY(-8px);
     z-index:44;padding:10px 22px;border-radius:4px;opacity:0;pointer-events:none;
     background:rgba(232,217,176,.96);color:#2b1d12;border:2px solid #2b1d12;
     box-shadow:0 3px 0 rgba(0,0,0,.45);max-width:70%;text-align:center;
     font:bold 14px/1.25 "Trebuchet MS",sans-serif;
     transition:opacity .18s ease,transform .18s ease}
   #tbanner.on{opacity:1;transform:translateX(-50%) translateY(0)}
+  .touch-mode.tmapon #minimapwrap{top:auto!important;
+    bottom:calc(var(--tbarh) + var(--sb) + 8px)!important;right:calc(10px + var(--sr))!important;
+    transform-origin:bottom right!important}
   #tbanner.warn{background:rgba(150,58,44,.96);color:#ffe9df;border-color:#2b1d12}
   /* THE MAP — behind a tap. John's pick: maximum clear screen during a fight. */
   #tmap{position:absolute;z-index:31;right:calc(10px + var(--sr));top:calc(8px + var(--st));
@@ -507,17 +525,21 @@
   .touch-mode.tmapon #minimapwrap{display:block;transform:scale(.92);transform-origin:top right;
     right:calc(62px + var(--sr));top:calc(8px + var(--st))}
   .touch-mode #objective{transform:scale(.8);transform-origin:top center;top:calc(74px + var(--st))}
-  .touch-mode #playerhud{transform:translateX(-50%) scale(.78);bottom:calc(4px + var(--sb))}
-  .touch-mode #tbtns{right:calc(10px + var(--sr));bottom:calc(12px + var(--sb))}
-  .touch-mode #ttop{top:calc(5px + var(--st))}
+  /* v124.6: everything bottom-anchored now sits above the strip */
+  .touch-mode #playerhud{transform:translateX(-50%) scale(.78);
+    bottom:calc(var(--tbarh) + var(--sb) + 2px)}
+  .touch-mode #tbtns{right:calc(10px + var(--sr));
+    bottom:calc(var(--tbarh) + var(--sb) + 10px)}
   /* THE FEED. v120 set a font-size on #feed, but .msg carries its own — so nothing changed and
      tutorial hints covered half the battlefield. Style the ENTRIES, cap the width, and clamp
      each one to two lines; the count is trimmed in JS below. */
   /* px, not vw: inside a rotated stage the vw unit still means the VIEWPORT, which is the SHORT
      edge — 34vw came out as a 185px ribbon that wrapped every hint into six lines.
      (backticks are banned in here: this whole block is a JS template literal) */
-  .touch-mode #feed{left:calc(14px + var(--sl));bottom:calc(14px + var(--sb));
-    max-height:34%;max-width:360px}
+  /* v124.6: the feed swaps to the TOP-LEFT, where the strip used to live. It reads bottom-up in
+     the DOM, so column-reverse keeps the newest line nearest the top edge rather than sinking. */
+  .touch-mode #feed{left:calc(14px + var(--sl));top:calc(12px + var(--st));bottom:auto;
+    display:flex;flex-direction:column-reverse;max-height:34%;max-width:360px}
   .touch-mode #feed .msg{font-size:10.5px;padding:3px 7px;line-height:1.32;
     max-height:2.9em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
     overflow:hidden;text-overflow:ellipsis}
@@ -589,7 +611,8 @@
   /* the escape hatch — see the note by #tpickclose in the markup */
   /* z-index 62: above the picker (52) AND above the scoreboard (55) and the grid (58). It is a
      direct child of #tstage now, so this number actually means something. */
-  #tpickclose{position:absolute;left:50%;bottom:calc(14px + var(--sb));transform:translateX(-50%);
+  #tpickclose{position:absolute;left:50%;bottom:calc(var(--tbarh) + var(--sb) + 12px);
+    transform:translateX(-50%);
     display:none;z-index:62;padding:13px 30px;border-radius:5px;
     background:#c9b177;color:#2b1d12;border:2px solid #2b1d12;
     box-shadow:0 3px 0 rgba(0,0,0,.5);pointer-events:auto;
