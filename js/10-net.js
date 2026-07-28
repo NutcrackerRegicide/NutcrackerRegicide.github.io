@@ -165,6 +165,7 @@ NET.uiShowHost=function(){ // the HOST button reveals the options row
   if(jr)jr.style.display="none"; if(sl)sl.style.display="none";
   const hr=document.getElementById("hostrow");
   if(hr)hr.style.display=hr.style.display==="flex"?"none":"flex";
+  if(hr&&hr.style.display==="flex"&&NET._reveal)NET._reveal(hr); // v124.1
 };
 NET.uiHost=function(){
   if(typeof Peer==="undefined"){msg("PeerJS failed to load — check your internet connection.","warn");return;}
@@ -1470,9 +1471,14 @@ NET.uiSolo=function(){
 };
 NET.uiShowJoin=function(){
   const hr=document.getElementById("hostrow"); if(hr)hr.style.display="none";
-  document.getElementById("joinrow").style.display="flex";
+  const jr=document.getElementById("joinrow");
+  jr.style.display="flex";
   NET.uiBrowse(); // v92: opening JOIN scans the hall right away — the code box stays for private halls
-  document.getElementById("joincode").focus();
+  if(NET._reveal)NET._reveal(jr); // v124.1
+  // v124.1: focusing the code box summons the keyboard over the whole menu on a phone before the
+  // player has even decided to type. Let them tap the field themselves.
+  if(!document.documentElement.classList.contains("touch-mode"))
+    document.getElementById("joincode").focus();
 };
 NET.uiName=function(){ // v92: the name screen — first thing a warrior does
   const v=String((document.getElementById("playername")||{value:""}).value||"").trim().slice(0,28);
@@ -1508,10 +1514,28 @@ NET.uiHowTo=function(show){
   const el=id=>document.getElementById(id);
   if(el("btnsolo"))el("btnsolo").onclick=NET.uiSolo;
   // v124: multiplayer moves behind one disclosure, so PLAY owns the screen
+  // v124.1: a disclosure that pushes itself off the bottom of a phone screen is no disclosure at
+  // all. The menu scrolls now, but the row also brings itself into view so nobody has to find out
+  // that it scrolls.
+  NET._reveal=function(elm){
+    if(!elm)return;
+    setTimeout(()=>{try{elm.scrollIntoView({block:"nearest",behavior:"smooth"});}catch(_){}},60);
+  };
   if(el("btnfriends"))el("btnfriends").onclick=()=>{
-    const r=el("friendsrow"); if(r)r.style.display=r.style.display==="none"?"block":"none";
+    const r=el("friendsrow");
+    if(r){r.style.display=r.style.display==="none"?"block":"none";
+      if(r.style.display!=="none")NET._reveal(r);}
   };
   if(el("btnrename"))el("btnrename").onclick=NET.uiRename;
+  // v124.1: the dice. Typing a name on a phone means summoning a keyboard over the menu — rolling
+  // one is a single tap, and the pools are good enough that most people will just keep tapping.
+  if(el("btnreroll"))el("btnreroll").onclick=()=>{
+    NET.myName=NET.rollName();
+    try{localStorage.setItem("regicideName",NET.myName);}catch(_){}
+    NET.showWhoAmI();
+    if(typeof player!=="undefined"&&player&&!player.isKing)player.name=NET.myName;
+    if(typeof Sound!=="undefined")Sound.play("ui_select");
+  };
   if(el("btnhost"))el("btnhost").onclick=NET.uiShowHost; // v92: HOST reveals the options row
   if(el("btnhostgo"))el("btnhostgo").onclick=NET.uiHost;
   if(el("btnjoin"))el("btnjoin").onclick=NET.uiShowJoin;

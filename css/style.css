@@ -96,6 +96,11 @@
 
 /* ---------- multiplayer: start menu + net status ---------- */
 #startmenu{display:flex;z-index:60;background:rgba(8,10,18,0.82);}
+/* v124.1: .overlay is z-index 50 but #startmenu overrides to 60, so AUDIO OPTIONS opened from the
+   main menu rendered UNDERNEATH it — John could see the sliders showing through the gaps between
+   buttons and could not touch them. Not a mobile bug: it has been broken on desktop for as long as
+   the options screen has existed, and nobody had opened it from the main menu. */
+#optionsscreen{z-index:70;}
 /* v92: the name screen greets first; the main menu waits behind it */
 #namescreen{display:flex;z-index:70;background:rgba(8,10,18,0.88);}
 #namescreen h1{font-size:52px;letter-spacing:6px;margin:0 0 4px;color:#e8ddc2;}

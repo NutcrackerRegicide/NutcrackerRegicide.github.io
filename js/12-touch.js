@@ -204,11 +204,48 @@
     // the screen, and CANCEL only appears while placing — so until now the only way out of a build
     // menu on a phone was to pick something. Third instance of the same bug shape as the v118
     // rotate gate and the v122 scoreboard: an interface with no escape hatch.
-    '<div id="tpickclose">✕ CLOSE</div>'+
     '<div id="tbanner"></div>'+
     '<div id="tmap">🗺</div>'+
     '<div id="ttop"><span id="tfps">--</span><span id="tflip">⟲</span><span id="tfull">⛶</span></div>';
   stage.appendChild(pad);
+  // v124.1 THE FOURTH STACKING-CONTEXT BUG. The picker's CLOSE button shipped inside #touchpad,
+  // which carries z-index:30 and therefore OPENS A STACKING CONTEXT — so the button's own z-index:57
+  // could never climb past the menu's 52. It rendered, faintly, UNDERNEATH the menu: John could see
+  // a ghost of it behind the unit panel and reported "no way to leave the grid menu". A child can
+  // never out-rank its parent's context, whatever number you write on it. It hangs off the STAGE.
+  const pickCloseEl=document.createElement("div");
+  pickCloseEl.id="tpickclose";
+  pickCloseEl.textContent="✕ CLOSE";
+  stage.appendChild(pickCloseEl);
+
+  // v124.1 ONE SOLID BAR — physically reparent the four HUD panels into a single strip rather than
+  // positioning four boxes to look adjacent. Adjacent boxes drift the moment any of them changes
+  // width, which is exactly what John saw: the age bar ran off under the king panels.
+  (function oneBar(){
+    const bar=document.createElement("div");
+    bar.id="tbar";
+    const host=document.getElementById("resources");
+    if(!host||!host.parentNode)return;
+    host.parentNode.insertBefore(bar,host);
+    for(const id of ["resources","agebar","roster","carry"]){
+      const el=document.getElementById(id);
+      if(el)bar.appendChild(el);
+    }
+    // carry and the roster only earn their segment when they have something to say
+    const carry=document.getElementById("carry");
+    const roster=document.getElementById("roster");
+    let rHot=0;
+    if(roster&&typeof MutationObserver!=="undefined")
+      new MutationObserver(()=>{rHot=performance.now();}).observe(
+        roster,{childList:true,characterData:true,subtree:true});
+    (function tickBar(){
+      requestAnimationFrame(tickBar);
+      if(carry)carry.classList.toggle("thidden",getComputedStyle(carry).display==="none"||
+        !(typeof player!=="undefined"&&player&&player.carry&&
+          (player.carry.food+player.carry.gold+player.carry.stone+player.carry.wood)>0));
+      if(roster)roster.classList.toggle("thidden",performance.now()-rHot>4000);
+    })();
+  })();
 
   const css=document.createElement("style");
   css.textContent=`
@@ -299,16 +336,24 @@
      Four stacked panels down the left edge ate a quarter of a phone screen. Resources and the age
      bar are the only two you want CONSTANTLY, so they share one line; roster and carry are
      situational and now appear only when they have something to say (see syncHud below). */
-  .touch-mode #resources{transform:scale(.78);transform-origin:top left;
-    left:calc(10px + var(--sl));top:calc(8px + var(--st))}
-  .touch-mode #agebar{transform:scale(.78);transform-origin:top left;
-    left:calc(232px + var(--sl));top:calc(8px + var(--st))}
-  .touch-mode #roster{transform:scale(.78);transform-origin:top left;
-    left:calc(10px + var(--sl));top:calc(44px + var(--st));
-    opacity:0;transition:opacity .35s ease;pointer-events:none}
-  .touch-mode #roster.tshow{opacity:1}
-  .touch-mode #carry{transform:scale(.78);transform-origin:top left;
-    left:calc(10px + var(--sl));top:calc(76px + var(--st))}
+  /* v124.1 ONE SOLID BAR. John: "all the stuff at the top UI wise just needs to be in one solid
+     bar." v124 put resources and the age on the same LINE but they were still three separate
+     parchment boxes with their own borders, on two rows, and the age bar ran under the king
+     panels. They are now segments of a single strip: one background, one border, hairline
+     dividers between them, and the whole thing sized to stop short of the kings. */
+  .touch-mode #tbar{position:absolute;left:calc(8px + var(--sl));top:calc(6px + var(--st));
+    z-index:22;display:flex;align-items:stretch;height:34px;max-width:600px;overflow:hidden;
+    background:rgba(24,20,14,.86);border:2px solid #2b1d12;border-radius:5px;
+    box-shadow:0 2px 0 rgba(0,0,0,.45)}
+  .touch-mode #tbar>*{position:static!important;transform:none!important;margin:0!important;
+    display:flex!important;align-items:center;background:none!important;border:0!important;
+    border-radius:0!important;box-shadow:none!important;padding:0 10px!important;
+    white-space:nowrap;font-size:12px!important;line-height:1!important;max-width:none!important;
+    opacity:1;transition:none}
+  .touch-mode #tbar>*+*{border-left:1px solid rgba(160,150,120,.32)!important}
+  .touch-mode #tbar #agebar,.touch-mode #tbar #roster{font-size:11px!important}
+  .touch-mode #tbar #carry{color:#e6c86a}
+  .touch-mode #tbar>.thidden{display:none!important}
   /* THE BANNER — John: fewer lines, but the big ones unmissable */
   #tbanner{position:absolute;left:50%;top:calc(84px + var(--st));transform:translateX(-50%) translateY(-8px);
     z-index:44;padding:10px 22px;border-radius:4px;opacity:0;pointer-events:none;
@@ -343,6 +388,31 @@
     max-height:2.9em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
     overflow:hidden;text-overflow:ellipsis}
   .touch-mode #helptoggle,.touch-mode #help,.touch-mode #questhud{display:none !important}
+  /* ---------- v124.1 THE MAIN MENU FITS ----------
+     John: "some stuff is off screen at game start and gets even worse if you open up play with
+     friends, host, join game as the menu just continues to expand vertically but the screen has no
+     room for it." Two separate faults. The overlay centres its content with no scroll, so anything
+     taller than the stage loses BOTH ends — the title off the top, the version stamp off the
+     bottom. And every disclosure row adds height to a column that was already overflowing.
+     Fix: scroll from the top, and shrink desktop-sized type to phone-sized. */
+  .touch-mode .overlay{justify-content:flex-start;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    padding:calc(10px + var(--st)) 12px calc(18px + var(--sb));gap:10px}
+  .touch-mode #startmenu h1{font-size:26px!important;letter-spacing:3px;margin:0}
+  .touch-mode #startmenu .tagline{font-size:12px!important;margin:0 0 8px!important;max-width:520px}
+  .touch-mode .overlay p{font-size:12px}
+  .touch-mode .startbtns{width:min(460px,72%);gap:7px}
+  .touch-mode .startbtns button,.touch-mode #joinrow button{font-size:14px;padding:9px 14px}
+  .touch-mode .playbtn{font-size:19px!important;padding:13px 16px!important}
+  .touch-mode .optline{font-size:11px}
+  .touch-mode .optline button.pick{font-size:12px;padding:6px 10px}
+  .touch-mode #hostrow,.touch-mode #joinrow{width:min(460px,72%)}
+  .touch-mode #joinrow input,.touch-mode #joinrow select{font-size:13px;padding:8px 10px}
+  /* the deploy note is desktop advice — on a phone the game is already served over HTTPS */
+  .touch-mode #startmenu .netnote{display:none}
+  .touch-mode #startmenu .verstamp{font-size:10px;opacity:.55;margin:4px 0 0}
+  .touch-mode #whoami{font-size:12px}
+  .touch-mode #optbox{max-height:82%;overflow-y:auto;font-size:13px}
+  .touch-mode #howtobox{max-height:88%;font-size:13px}
   /* v122 THE MENUS FIT NOW. #buildmenu/#classmenu/#smithmenu are fixed-size desktop panels — the
      DEFENSIVE category has the most rows and ran off the bottom of a phone. Cap them to the stage
      and let them scroll; the scoreboard gets the same treatment. */
@@ -383,8 +453,10 @@
   .touch-mode #buildmenu .hint,.touch-mode #classmenu .hint,.touch-mode #smithmenu .hint{
     display:block;clear:both;padding:8px 4px;text-align:center;font-size:11px;color:#9c9075}
   /* the escape hatch — see the note by #tpickclose in the markup */
+  /* z-index 62: above the picker (52) AND above the scoreboard (55) and the grid (58). It is a
+     direct child of #tstage now, so this number actually means something. */
   #tpickclose{position:absolute;left:50%;bottom:calc(14px + var(--sb));transform:translateX(-50%);
-    display:none;z-index:57;padding:13px 30px;border-radius:5px;
+    display:none;z-index:62;padding:13px 30px;border-radius:5px;
     background:#c9b177;color:#2b1d12;border:2px solid #2b1d12;
     box-shadow:0 3px 0 rgba(0,0,0,.5);pointer-events:auto;
     font:bold 13px/1 "Trebuchet MS",sans-serif;letter-spacing:2px}
@@ -478,7 +550,22 @@
   // v119: HALVED on John's note (was 2.9 / 2.1 rad-per-sec at full deflection).
   let lookX=0, lookY=0;
   const LOOK_RATE_X=1.45, LOOK_RATE_Y=1.05;
-  makeStick("tzR","tsR",(ux,uy)=>{lookX=ux;lookY=uy;},()=>{lookX=lookY=0;});
+  // v124.1 THE DRAW MOVED TO THE STICK. John, field-testing v124: "archer charge on mobile feels a
+  // little odd because currently I cannot move look camera after holding down aimed charged."
+  // Correct, and unfixable where it was — FIRE sits under the right thumb and so does the camera
+  // stick, and nobody has three thumbs. While AIM is latched the right zone now DRAWS as well as
+  // steers: press to nock, slide to aim, lift to loose. One continuous gesture, which is how
+  // twin-stick shooters have always done charge shots. The FIRE button still works for anyone who
+  // reaches for it.
+  let stickDraw=false;
+  function drawClass(){return typeof isDrawClass==="function"&&player&&isDrawClass(player.cls);}
+  makeStick("tzR","tsR",(ux,uy)=>{
+    lookX=ux;lookY=uy;
+    if(!stickDraw&&aiming&&drawClass()){stickDraw=true;}
+  },()=>{
+    lookX=lookY=0;
+    if(stickDraw){stickDraw=false;}      // lifting the thumb looses it — tickDraw sees lmbHeld fall
+  });
 
   // ---------- the action pad ----------
   function hold(id,down,up){
@@ -730,7 +817,10 @@
       }
       if(!foe&&!canGather())resumeNode=null;
     }
-    lmbHeld=manualAtk||autoFire;
+    // v124.1: a thumb on the right stick draws the bow while it steers (see makeStick above).
+    // It feeds the SAME lmbHeld flag the button does, so tickDraw, the net packet and the host all
+    // see one mechanism — there is no second code path for "drew with the stick".
+    lmbHeld=manualAtk||autoFire||(stickDraw&&aiming&&drawClass());
     if(m!==autoMsg){autoMsg=m;autoEl.textContent=m;autoEl.classList.toggle("on",!!m);}
     // the big button relabels itself for what it would actually do right now
     const bb=document.getElementById("tb-atk");
@@ -868,22 +958,17 @@
     new MutationObserver(muts=>{
       for(const m of muts)for(const n of m.addedNodes){
         if(!n.classList)continue;
-        if(n.classList.contains("warn")||n.classList.contains("gold"))
+        if(n.classList.contains("warn")||n.classList.contains("gold")){
           showBanner(n.textContent,n.classList.contains("warn"));
+          // v124.1: PROMOTED, not copied. v124 raised the line to the banner and left it in the
+          // feed as well, so John read "Red riders wheel toward their workers..." twice on one
+          // screen. A message belongs in exactly one place.
+          n.remove();
+        }
       }
       trim();
     }).observe(feedEl,{childList:true});
     trim();
-  }
-  // ---------- v124 the roster shows itself only when it changes ----------
-  const rosterEl=document.getElementById("roster");
-  if(rosterEl&&typeof MutationObserver!=="undefined"){
-    let rT=null;
-    new MutationObserver(()=>{
-      rosterEl.classList.add("tshow");
-      clearTimeout(rT);
-      rT=setTimeout(()=>rosterEl.classList.remove("tshow"),2800);
-    }).observe(rosterEl,{childList:true,characterData:true,subtree:true});
   }
   // ---------- v124 the map is behind a tap ----------
   document.getElementById("tmap").addEventListener("touchend",e=>{

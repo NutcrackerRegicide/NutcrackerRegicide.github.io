@@ -73,6 +73,55 @@ const DEVICES=[
       check(dev.name+": the rotated stage lands near the HUD's design width ("+rot.stageW+")",
         rot.stageW>1000&&rot.stageW<1400);
     }
+    // ---- v124.1: the MAIN MENU has to fit the stage, and every overlay has to out-rank it ----
+    const menu=await page.evaluate(async()=>{
+      const wait=ms=>new Promise(r=>setTimeout(r,ms));
+      const sm=document.getElementById("startmenu");
+      const fits=()=>sm.scrollHeight<=sm.offsetHeight+2;
+      const scrolls=getComputedStyle(sm).overflowY==="auto"||
+                    getComputedStyle(sm).overflowY==="scroll";
+      const h1=sm.querySelector("h1");
+      // at rest NOTHING may be clipped: John lost the title off the top and the version off the
+      // bottom, because .overlay centres its content and never scrolled
+      const atRest=fits()&&h1.offsetTop>=0&&h1.offsetTop<sm.offsetHeight;
+      // and once every disclosure is open it must at least be REACHABLE by scrolling
+      document.getElementById("btnfriends").click(); await wait(200);
+      const friendsFit=fits();
+      document.getElementById("btnhost").click(); await wait(200);
+      document.getElementById("btnjoin").click(); await wait(260);
+      const reachable=scrolls;                       // expanded rows may overflow, but must scroll
+      // AUDIO OPTIONS must land ON TOP of the menu, not behind it
+      document.getElementById("btnoptions").click(); await wait(260);
+      const os=document.getElementById("optionsscreen"), box=document.getElementById("optbox");
+      const r=box.getBoundingClientRect();
+      const hit=document.elementFromPoint(Math.round(r.left+r.width/2),Math.round(r.top+r.height/2));
+      const audioOnTop=getComputedStyle(os).display!=="none"&&!!hit&&os.contains(hit)&&
+        (+getComputedStyle(os).zIndex>+getComputedStyle(sm).zIndex);
+      document.getElementById("btnoptback").click(); await wait(200);
+      // the dice rolls a NEW name in John's format
+      const before=document.getElementById("myname").textContent;
+      let changed=false;
+      for(let i=0;i<6&&!changed;i++){
+        document.getElementById("btnreroll").click(); await wait(90);
+        changed=document.getElementById("myname").textContent!==before;
+      }
+      const after=document.getElementById("myname").textContent;
+      // put the menu back the way we found it
+      document.getElementById("btnjoin").click();
+      const hr=document.getElementById("hostrow"); if(hr)hr.style.display="none";
+      const jr=document.getElementById("joinrow"); if(jr)jr.style.display="none";
+      await wait(150);
+      return {atRest,friendsFit,reachable,audioOnTop,changed,shaped:/ the /.test(after),after};
+    });
+    check(dev.name+": v124.1 menu — nothing is clipped at rest and PLAY WITH FRIENDS still fits",
+      menu.atRest&&menu.friendsFit);
+    check(dev.name+": v124.1 menu — every disclosure open, the menu is still reachable by scroll",
+      menu.reachable);
+    check(dev.name+": v124.1 menu — AUDIO OPTIONS opens ON TOP of the start menu, not behind it",
+      menu.audioOnTop);
+    check(dev.name+": v124.1 menu — the dice rolls a fresh <Name> the <Epithet> ("+menu.after+")",
+      menu.changed&&menu.shaped);
+
     // start a solo battle through the real menu.
     // v124: the name screen is GONE — you are auto-titled ("Alexander the Great") and land straight
     // on the start menu, where PLAY is the dominant button. Tapping the dead #btnname here used to
@@ -419,6 +468,73 @@ const DEVICES=[
       v124.mapHidden+"/"+v124.mapShown+")",v124.mapHidden&&v124.mapShown);
     check(dev.name+": v124 HUD — a warn line is promoted to the banner, feed stays short ("+
       v124.feed+")",v124.banner&&v124.feed<=2);
+    // ---- v124.1: John's four field-test notes ----
+    const v1241=await page.evaluate(async()=>{
+      const T=(el,x,y,id)=>new Touch({identifier:id,target:el,clientX:x,clientY:y});
+      const fire=(el,t,tt)=>el.dispatchEvent(new TouchEvent(t,
+        {bubbles:true,cancelable:true,touches:tt,targetTouches:tt,changedTouches:tt}));
+      const wait=ms=>new Promise(r=>setTimeout(r,ms));
+      closeMenus(); await wait(200);
+      // 1. ONE SOLID BAR — the four HUD panels are segments of a single strip, all on one row
+      const bar=document.getElementById("tbar");
+      // offsetTop/offsetHeight, NOT getBoundingClientRect: inside the rotated stage the rect is the
+      // TRANSPOSED on-screen box, so a bar that is correctly one row deep reads as 490 tall in
+      // portrait. Fourth time this has cost a cycle. Layout inside #tstage is measured in LAYOUT
+      // space; the bar is position:absolute, so it is its children's offsetParent.
+      const vis=bar?[...bar.children].filter(c=>getComputedStyle(c).display!=="none"):[];
+      const oneRow=!!bar&&vis.length>0&&vis.every(c=>
+        c.offsetTop>=-2&&c.offsetTop+c.offsetHeight<=bar.offsetHeight+2);
+      const holds=bar?["resources","agebar","roster","carry"]
+        .every(id=>document.getElementById(id).parentElement===bar):false;
+      // 2. a promoted line leaves the feed — it must not read twice on one screen
+      const feed=document.getElementById("feed");
+      feed.innerHTML="";
+      msg("Red riders wheel toward their workers...","gold");
+      await wait(260);
+      const noDup=feed.children.length===0&&
+        /Red riders/.test(document.getElementById("tbanner").textContent);
+      // 3. the picker's CLOSE must be the TOPMOST thing at its own centre. It shipped inside
+      //    #touchpad (z-index:30 => its own stacking context) so its z-index:57 could not climb
+      //    past the menu's 52 — it rendered underneath and John could not leave the build menu.
+      openBuildMenu(); await wait(260);
+      const pc=document.getElementById("tpickclose");
+      const pr=pc.getBoundingClientRect();
+      const hit=document.elementFromPoint(Math.round(pr.left+pr.width/2),
+                                          Math.round(pr.top+pr.height/2));
+      const reachable=getComputedStyle(pc).display!=="none"&&hit===pc&&
+        pc.parentElement.id==="tstage";
+      fire(pc,"touchend",[T(pc,0,0,70)]); await wait(220);
+      const escaped=!menuOpen;
+      // 4. THE DRAW ON THE STICK — one thumb must charge the bow AND steer the camera
+      setClass(player,"archer"); player.atkT=0; player._drawT=0;
+      const blk=document.getElementById("tb-block");
+      fire(blk,"touchstart",[T(blk,0,0,71)]); fire(blk,"touchend",[T(blk,0,0,71)]);
+      await wait(220);
+      const zR=document.getElementById("tzR"), rb=zR.getBoundingClientRect();
+      const sx=rb.left+rb.width*0.5, sy=rb.top+rb.height*0.5;
+      // push along BOTH screen axes: which one maps to yaw depends on the stage rotation, and a
+      // portrait drag along +x is pure pitch. What matters is that the camera moved at all.
+      const yaw0=camYaw, pitch0=camPitch;
+      fire(zR,"touchstart",[T(zR,sx,sy,72)]); await wait(120);
+      for(let i=1;i<=8;i++){fire(zR,"touchmove",[T(zR,sx+i*7,sy+i*5,72)]); await wait(105);}
+      const drew=player._drawT||0, fill=drawFill();
+      const camMoved=Math.abs(camYaw-yaw0)+Math.abs(camPitch-pitch0);
+      fire(zR,"touchend",[T(zR,sx+56,sy+40,72)]); await wait(320);
+      // a loosed shot is proved by the cooldown the launch sets, not by counting projectiles —
+      // those get culled by range and life on their own schedule
+      return {oneRow,holds,noDup,reachable,escaped,drew,camMoved,fill,
+        shot:player.atkT>0,reset:player._drawT||0};
+    });
+    check(dev.name+": v124.1 HUD — resources, age, roster and carry are ONE strip on one row",
+      v1241.oneRow&&v1241.holds);
+    check(dev.name+": v124.1 feed — a promoted line is MOVED to the banner, never duplicated",
+      v1241.noDup);
+    check(dev.name+": v124.1 picker — CLOSE is the topmost element at its own centre and escapes ("+
+      v1241.reachable+"/"+v1241.escaped+")",v1241.reachable&&v1241.escaped);
+    check(dev.name+": v124.1 draw — one thumb charges the bow AND steers ("+
+      v1241.drew.toFixed(2)+"s drawn, camera moved "+v1241.camMoved.toFixed(2)+
+      ", ring "+v1241.fill.toFixed(2)+", loosed on lift: "+v1241.shot+")",
+      v1241.drew>0.3&&v1241.camMoved>0.1&&v1241.fill>0.2&&v1241.shot&&v1241.reset===0);
     check(dev.name+": every build category fits the stage (worst: "+v122.worst[0]+" "+
       v122.worst[2]+"×"+v122.worst[1]+" in "+v122.vw+"×"+v122.vh+")",v122.allFit);
     await page.waitForTimeout(1200);
