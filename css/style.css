@@ -210,3 +210,11 @@
 .optrow.dim{opacity:.45}
 #btnmute{padding:4px 12px;font-size:13px;cursor:pointer}
 #btnoptback{display:block;margin:16px auto 0}
+
+/* ---------- v124: the start menu leads with PLAY ---------- */
+.playbtn{font-size:1.35em!important;padding:16px 20px!important;letter-spacing:2px}
+#friendsrow{display:none;margin-top:6px}
+#friendsrow button{display:block;width:100%;margin-top:6px}
+#whoami{margin-top:12px;font-size:12px;color:#b9ad8c;text-align:center;letter-spacing:.5px}
+#whoami b{color:#e8d9b0;font-weight:normal}
+.renamebtn{background:none;border:none;color:#b9ad8c;cursor:pointer;font-size:12px;padding:2px 4px}

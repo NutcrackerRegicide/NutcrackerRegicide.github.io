@@ -780,8 +780,119 @@ function moveToward(u,x,z,dt,stopDist){
   return false;
 }
 
-// player archer: manually aimed straight shot along the camera
-function fireAimedShot(){
+// ---------- v124 THE CONVERGENCE ----------
+// John: "archer projectile does not quite line up with crosshair, probably same for
+// musketeer/skirmisher." Right on both counts, and it was worse than a rounding error.
+//
+// The old code spawned the arrow a FULL UNIT off the right shoulder and then gave it a velocity
+// PARALLEL to the camera ray. Parallel lines never meet: the shot tracked ~1 unit right of the
+// crosshair at EVERY range, forever. On top of that sits third-person parallax — the crosshair is
+// the CAMERA's ray and the camera stands behind and above the shoulder, so even a centred muzzle
+// would not agree with it.
+//
+// The fix is what every shooter does: pick the point the crosshair is actually over, then aim the
+// muzzle AT THAT POINT rather than along a parallel heading. The convergence distance is measured
+// from the feet, not the lens, because the camera's stand-off would otherwise pull the aim point
+// toward the player by however far the camera sits back.
+function aimRay(range){
+  const dir=new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  return {dir,pt:aimPointFor(dir,range)};
+}
+function aimPointFor(dir,range){
+  const cp=camera.position, pp=player.root.position;
+  const back=Math.hypot(cp.x-pp.x,cp.z-pp.z);   // how far the camera stands off the shoulder
+  const d=back+range;
+  return new THREE.Vector3(cp.x+dir.x*d, cp.y+dir.y*d, cp.z+dir.z*d);
+}
+// aim a projectile from `muzzle` at `pt` — the whole point of the exercise
+function convergeFrom(muzzle,pt){ return pt.clone().sub(muzzle).normalize(); }
+
+// ---------- v124 THE DRAW ----------
+// John: "archer aim will be reworked where it becomes a charged shot — the longer you hold down
+// fire and release, the faster the projectile and more damage it does."
+//
+// WHICH CLASSES DRAW is an explicit list, and it has to be. Crossbowman and Skirmisher are tagged
+// rig:"bow" for their ANIMATION rig, so the obvious `rig==="bow"` test would have handed the draw
+// to exactly the two units John excluded. His rule: "crossbowman or musketeer, skirmisher... should
+// just fire and reload."
+//
+// The consequence is a nice one: the draw is an early-and-mid-game skill that technology retires.
+// Ages 0-3 archery is timing and commitment; from the Medieval Age the crossbow — whose whole
+// historical selling point was needing no strength or training — and then the musket trade that
+// skill away for a mechanism. The Slinger is in by judgement call: a sling is whirled rather than
+// drawn, but excluding it would leave the Stone Age with no ranged skill expression at all.
+const DRAW_CLASSES=new Set(["slinger","archer","imparcher","comparcher"]);
+const DRAW_FULL=1.2;    // seconds to a full draw
+const DRAW_DMG=[0.5,2.0];  // tap -> full, multiplied into the unit's base damage
+const DRAW_SPD=[0.6,1.6];  // tap -> full, multiplied into the 36 u/s arrow
+function isDrawClass(cls){ return DRAW_CLASSES.has(cls); }
+// The fire-and-reload lines keep EXACTLY their old behaviour — the v113 aimed-shot bonus of 1.35x
+// and the standard arrow speed. Nothing about crossbow/skirmisher/musket play changes in v124.
+function drawScale(cls,lv){
+  if(!isDrawClass(cls))return {dmg:1.35,spd:1};
+  const t=Math.max(0,Math.min(1,lv||0));
+  return {dmg:DRAW_DMG[0]+(DRAW_DMG[1]-DRAW_DMG[0])*t,
+          spd:DRAW_SPD[0]+(DRAW_SPD[1]-DRAW_SPD[0])*t};
+}
+function drawLevel(){
+  return isDrawClass(player.cls)?Math.min(1,(player._drawT||0)/DRAW_FULL):1;
+}
+// Called once per frame from updatePlayer (and the guest frame). Holding primary while aiming
+// builds the draw; RELEASING looses it. A tap still looses — weak and slow — because a panicked
+// press that produces no arrow at all reads as a broken button.
+function tickDraw(dt){
+  if(!player||!player.alive||!isDrawClass(player.cls)||!aiming){
+    if(player)player._drawT=0;
+    return;
+  }
+  if(lmbHeld){
+    if(player.atkT<=0)player._drawT=(player._drawT||0)+dt;
+  }else if(player._drawT>0){
+    const lv=Math.min(1,player._drawT/DRAW_FULL);
+    player._drawT=0;
+    fireAimedShot(lv);
+  }
+}
+// how full the bow is right now, 0..1 — the mobile FIRE ring and any future desktop meter read this
+function drawFill(){
+  return (player&&isDrawClass(player.cls)&&aiming)?Math.min(1,(player._drawT||0)/DRAW_FULL):0;
+}
+
+// The host resolving a GUEST's loosed arrow. Before v124 this did not exist: a guest's aimed shot
+// was called locally from its own click handler while driveRemote saw only the `atk` bit and ran a
+// plain auto-attack — the guest watched a free-aimed arrow, the host resolved a generic swing.
+// Survivable while every shot did the same damage. Not survivable once the draw multiplies it.
+// `dir` arrives ALREADY CONVERGED from the guest, so what the host launches is the line the guest
+// actually saw leave the bow.
+function fireAimedFor(u,dir,lv){
+  if(!u||!u.alive||u.atkT>0)return false;
+  u.atkT=u.cd; u.swing=0.25; triggerAttackAnim(u);
+  u.facing=Math.atan2(dir.x,dir.z);
+  const D=drawScale(u.cls,lv);
+  const right=new THREE.Vector3(-dir.z,0,dir.x);
+  const muzzle=new THREE.Vector3(
+    u.root.position.x+dir.x*0.8+right.x,
+    u.root.position.y+1.7,
+    u.root.position.z+dir.z*0.8+right.z);
+  const m=cyl(0.05,0.05,0.9,0x4a3826,4);
+  m.position.copy(muzzle);
+  m.lookAt(muzzle.clone().add(dir)); m.rotateX(Math.PI/2);
+  scene.add(m);
+  projectiles.push({m,free:true,vel:dir.clone().multiplyScalar(36*D.spd),spd:36*D.spd,traveled:0,
+    maxRange:34,att:u,dmg:u.dmg*D.dmg,attCls:u.cls,life:3});
+  if(typeof Sound!=="undefined"){
+    const k=CLS[u.cls].rig==="musket"?"gun":"bow";
+    Sound.play(k,{x:u.root.position.x,z:u.root.position.z});
+    if(typeof NET!=="undefined"&&NET.mode==="host"&&NET.bcast)
+      NET.bcast({t:"snd",k,x:u.root.position.x,z:u.root.position.z});
+  }
+  return true;
+}
+
+// player archer: manually aimed straight shot along the camera.
+// lv is the draw level 0..1 for the drawing classes; the fire-and-reload lines ignore it.
+function fireAimedShot(lv){
   if(player.atkT>0)return;
   player.atkT=player.cd; player.swing=0.25; triggerAttackAnim(player);
   // v113 THE SILENT ARCHER: manual aimed fire made NO sound — the launch foley lived in
@@ -805,20 +916,38 @@ function fireAimedShot(){
     player._recoil=0.4;
     cannonPlume(f,sx+Math.sin(f)*5.0,gy+3.2,sz+Math.cos(f)*5.0);
     const mC=new THREE.Mesh(new THREE.SphereGeometry(player.cls==="culverin"?0.16:0.22,6,5),mat(0x2b2b2b));
-    mC.castShadow=false; mC.position.set(sx+dirC.x*4.5,gy+3.2+dirC.y*4.5,sz+dirC.z*4.5); scene.add(mC);
-    projectiles.push({m:mC,free:true,vel:dirC.clone().multiplyScalar(100),spd:100,traveled:0,
+    mC.castShadow=false;
+    // v124: the barrel sits 4.5 units out and 3.2 up — the widest muzzle offset in the game, so the
+    // convergence matters most here. Aim the ball AT the crosshair point, not parallel to the ray.
+    const muzC=new THREE.Vector3(sx+dirC.x*4.5,gy+3.2+dirC.y*4.5,sz+dirC.z*4.5);
+    const velC=convergeFrom(muzC,aimPointFor(dirC,player.rng+28));
+    mC.position.copy(muzC); scene.add(mC);
+    projectiles.push({m:mC,free:true,vel:velC.multiplyScalar(100),spd:100,traveled:0,
       maxRange:player.rng+28,att:player,dmg:player.dmg*1.2,attCls:player.cls,life:2.5});
     return;
   }
-  const dir=new THREE.Vector3();
-  camera.getWorldDirection(dir); // full 3D aim: down off the parapet, up at the walls
+  const {dir,pt}=aimRay(34);       // full 3D aim: down off the parapet, up at the walls
   player.facing=Math.atan2(dir.x,dir.z);
+  // v124 THE DRAW — 0..1. tickDraw hands the released level in; a direct call (fire-and-reload
+  // lines, or any older path) falls through to a full-strength shot.
+  const draw=(typeof lv==="number")?lv:drawLevel();
+  const D=drawScale(player.cls,draw);
   const right=new THREE.Vector3(-dir.z,0,dir.x); // shoulder offset matches the aim camera
   const m=cyl(0.05,0.05,0.9,0x4a3826,4);
-  m.position.set(player.root.position.x+dir.x*0.8+right.x,
-    player.root.position.y+1.7,player.root.position.z+dir.z*0.8+right.z);
-  m.lookAt(m.position.clone().add(dir)); m.rotateX(Math.PI/2);
+  const muzzle=new THREE.Vector3(
+    player.root.position.x+dir.x*0.8+right.x,
+    player.root.position.y+1.7,
+    player.root.position.z+dir.z*0.8+right.z);
+  const vdir=convergeFrom(muzzle,pt);
+  m.position.copy(muzzle);
+  m.lookAt(muzzle.clone().add(vdir)); m.rotateX(Math.PI/2);
   scene.add(m);
-  projectiles.push({m,free:true,vel:dir.clone().multiplyScalar(36),spd:36,traveled:0,maxRange:34,
-    att:player,dmg:player.dmg*1.35,attCls:player.cls,life:3});
+  projectiles.push({m,free:true,vel:vdir.clone().multiplyScalar(36*D.spd),spd:36*D.spd,traveled:0,
+    maxRange:34,att:player,dmg:player.dmg*D.dmg,attCls:player.cls,life:3});
+  // v124: on a guest the arrow above is pure theatre — dealDamage returns early off the host — so
+  // the loosed shot has to be REPORTED. It rides the next input packet the way the siege lob does.
+  // The direction is already converged, so the host launches the exact line the guest watched.
+  if(typeof NET!=="undefined"&&NET.mode==="guest")
+    NET._pendingShot={dx:r3(vdir.x),dy:r3(vdir.y),dz:r3(vdir.z),lv:Math.round(draw*100)/100};
 }
+function r3(n){return Math.round(n*1000)/1000;}

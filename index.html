@@ -97,14 +97,22 @@
 <div class="overlay" id="startmenu" style="display:none">
   <h1>REGICIDE <span class="pvp">PVP</span></h1>
   <p class="tagline">50v50 medieval war · every soldier is a player · slay the enemy King</p>
+  <!-- v124: PLAY dominates. The old menu opened on a three-way choice between SOLO, HOST and JOIN
+       before a stranger had seen a single frame of the game. The solo code path is untouched —
+       only the CHOICE is gone: hosting depends on the public PeerJS broker, so making it the way
+       to play alone would mean no offline play and a dead game whenever that broker is down. -->
   <div class="startbtns">
-    <button id="btnsolo">⚔ SOLO — vs 99 AI</button>
+    <button id="btnsolo" class="playbtn">⚔ PLAY</button>
     <div class="optline" id="solodiff">ENEMY AI
       <button class="pick on" id="sdEasy">🌱 EASY</button>
       <button class="pick" id="sdHard">🔥 HARD</button>
     </div>
-    <button id="btnhost">⚑ HOST — open your own hall</button>
-    <button id="btnjoin">🛡 JOIN — browse halls or enter a code</button>
+    <button id="btnfriends" class="howbtn">⚑ PLAY WITH FRIENDS</button>
+    <div id="friendsrow" style="display:none">
+      <button id="btnhost">⚑ HOST — open your own hall</button>
+      <button id="btnjoin">🛡 JOIN — browse halls or enter a code</button>
+    </div>
+    <div id="whoami">You fight as <b id="myname">—</b> <button id="btnrename" class="renamebtn">✎</button></div>
     <button id="btnhow" class="howbtn">📜 HOW TO PLAY</button>
     <button id="btnoptions" class="howbtn">⚙ AUDIO OPTIONS</button>
   </div>
@@ -137,8 +145,8 @@
   </div>
   <div id="serverlist" style="display:none"></div>
   <p class="netnote">Multiplayer needs the game served over HTTP (not file://) —
-  host it free on Netlify Drop, or run <b>python -m http.server</b> in this folder.</p>
-  <p class="verstamp">v123</p>
+  it lives at <b>nutcrackerregicide.github.io</b>, or run <b>python -m http.server</b> in this folder.</p>
+  <p class="verstamp">v124 — THE MOBILE UI REVAMP</p>
 </div>
 
 <div class="overlay" id="howto">

@@ -1,6 +1,26 @@
 /* REGICIDE PVP — 06-input.js */
 // ---------- player input (pointer-lock mouse-look) ----------
 const keys={};
+// ---------- v124 TRUE ANALOG MOVEMENT ----------
+// The stick used to synthesise w/a/s/d, which made movement 8-way: circling an enemy snapped to
+// 45 degrees and there was no walking, only running. Both control schemes now feed ONE vector.
+// Desktop fills it from the keys (magnitude always 1 — a key is pressed or it isn't); touch writes
+// a real direction and deflection into it. moveUnit normalises what it is handed, so the magnitude
+// has to ride the dt argument rather than the direction.
+const moveVec={x:0,z:0,analog:false};
+const MOVE_DEAD=0.16;   // thumb noise
+const MOVE_FLOOR=0.42;  // below this a nudge would crawl uselessly — walk, don't shuffle
+function readMove(){
+  if(!moveVec.analog){
+    let mx=0,mz=0;
+    if(keys.w)mz-=1; if(keys.s)mz+=1; if(keys.a)mx-=1; if(keys.d)mx+=1;
+    return {mx,mz,mag:(mx||mz)?1:0};
+  }
+  const L=Math.hypot(moveVec.x,moveVec.z);
+  if(L<MOVE_DEAD)return {mx:0,mz:0,mag:0};
+  const t=Math.min(1,(L-MOVE_DEAD)/(1-MOVE_DEAD));
+  return {mx:moveVec.x,mz:moveVec.z,mag:MOVE_FLOOR+(1-MOVE_FLOOR)*t};
+}
 let placing=null, ghost=null;
 let menuOpen=null;
 let mouseLocked=false, lmbHeld=false, rmbHeld=false, aiming=false;
@@ -80,7 +100,12 @@ function playerPrimary(){
     return;
   }
   if(player.blocking)return;          // shield up = no swinging
-  if(aiming){fireAimedShot();return;} // ranged manual shot
+  if(aiming){
+    // v124 THE DRAW: for the drawing classes the PRESS only starts the draw — tickDraw looses it
+    // on release. The fire-and-reload lines (crossbow, skirmisher, musket) still shoot on press.
+    if(!isDrawClass(player.cls))fireAimedShot();
+    return;
+  }
   if(!tryAttack(player)&&player.atkT<=0&&player.dmg>0){
     // WHIFF: swing at the air toward the camera — cheaper cooldown than a real hit
     player.atkT=player.cd*0.6;
@@ -207,6 +232,54 @@ addEventListener("keydown",e=>{
   if(k==="t")tryAgeUp();
 });
 addEventListener("keyup",e=>{keys[e.key.toLowerCase()]=false;});
+
+// ---------- v124 WHAT CAN I DO RIGHT NOW ----------
+// The organising rule of the mobile revamp, in John's own words about age-up: it "should only show
+// up when it is available and team has resources to age up". Not "when you are near the building" —
+// when PRESSING IT WOULD WORK. Every predicate below is the same test the action itself runs, so
+// a button that exists can never be refused with a message.
+//
+// This lives in 06-input rather than 12-touch on purpose: the action and the test that gates it
+// belong together, and a desktop hint layer can read exactly the same list later.
+//
+// NOTE the pre-existing team inconsistency: tryAgeUp() checks teamTC(BLUE) but reads
+// teamAge[MYTEAM]. Harmless today because the local player is always BLUE (host-can't-play-RED is
+// a known open thread), but this predicate uses MYTEAM throughout so it stays correct when that
+// is finally fixed.
+const ACTIONS=[
+  {k:"t",label:"AGE UP",hint:"advance the age",can:()=>{
+    const tc=teamTC(MYTEAM);
+    if(!tc||dist2(player.root.position.x,player.root.position.z,tc.x,tc.z)>12*12)return false;
+    const nxt=AGES[teamAge[MYTEAM]+1];
+    if(!nxt)return false;                       // already in the final age
+    if(ageResT[MYTEAM]>0)return false;          // already advancing
+    return canAfford(MYTEAM,nxt.cost);          // John's rule: only when the stockpile covers it
+  }},
+  {k:"r",label:"CLASS",hint:"change unit",can:()=>!!nearTrainingBuilding()},
+  {k:"b",label:"BUILD",hint:"lay a foundation",can:()=>player.cls==="villager"&&!placing},
+  {k:"e",label:"USE",hint:"board · harvest · forge",can:()=>
+    !!player.garrison||interactCandidateD2()<Infinity},
+  {k:"g",label:"RALLY",hint:"call your five nearest",can:()=>{
+    if(typeof units==="undefined")return false;
+    let n=0;
+    for(const v of units){
+      if(!v.alive||v.team!==player.team||v===player||v.isKing||v.cls==="villager")continue;
+      if(dist2(player.root.position.x,player.root.position.z,v.root.position.x,v.root.position.z)<26*26&&++n>=1)return true;
+    }
+    return false;
+  }}
+];
+// the rail is capped at three, so ACTIONS order IS the priority order
+function availableActions(max){
+  if(typeof player==="undefined"||!player||!player.alive||menuOpen||placing)return [];
+  const out=[];
+  for(const a of ACTIONS){
+    let ok=false;
+    try{ok=a.can();}catch(e){ok=false;}   // a half-built world must never take the pad down
+    if(ok){out.push(a); if(out.length>=(max||3))break;}
+  }
+  return out;
+}
 
 function nearTrainingBuilding(){
   let best=null,bd=1e9;

@@ -114,6 +114,7 @@ NET.saveLog=function(){
 NET.unitById=function(id){for(const u of units)if(u.id===id)return u;return null;};
 NET.bldById=function(id){for(const b of buildings)if(b.id===id)return b;return null;};
 function r1(v){return Math.round(v*10)/10;}
+function r2(v){return Math.round(v*100)/100;} // v124: the analog move vector — 2dp is ~0.6 degrees
 NET.status=function(txt,show){
   const el=document.getElementById("netstatus");
   el.style.display=show===false?"none":"block";
@@ -453,6 +454,26 @@ NET.driveRemote=function(r,dt){
     }
     i.lobx=undefined;
   }
+  // ---- v124 THE DRAW, host-authoritative ----
+  // The host watches the guest hold, so the guest can never claim more charge than it actually
+  // built. `blk` is what aiming looks like on the wire for a ranged class, and a stale/dropped
+  // packet simply stops the clock rather than granting free charge.
+  const _lobber=(u.cls==="catapult"||u.cls==="trebuchet");
+  const _rangedAim=!!i.blk&&!!u.ranged&&!_lobber;
+  if(_rangedAim&&i.atk&&isDrawClass(u.cls)&&u.atkT<=0)r.drawT=(r.drawT||0)+dt;
+  else if(!i.atk)r.drawT=0;
+  if(i.shot&&typeof i.shot.dx==="number"){
+    const d=new THREE.Vector3(i.shot.dx,i.shot.dy,i.shot.dz);
+    if(d.lengthSq()>0.0001){
+      d.normalize();
+      // clamp the CLAIM to the hold the host observed — this is the whole point of the exercise
+      const seen=Math.min(1,(r.drawT||0)/DRAW_FULL);
+      const lv=isDrawClass(u.cls)?Math.min(Number(i.shot.lv)||0,seen):1;
+      fireAimedFor(u,d,lv);
+      r.drawT=0;
+    }
+    i.shot=undefined;
+  }
   if(u.cls==="dragoon"){
     u.blocking=false;
     if(i.blk&&!r.blkUsed&&(u.ammo||0)>0&&u.atkT<=0){
@@ -580,16 +601,26 @@ NET.driveRemote=function(r,dt){
     }
   }
   // fallback: outside the leash (or old clients), the host walks the body itself
-  let mx=0,mz=0;
-  if(i.w)mz-=1; if(i.s)mz+=1; if(i.a)mx-=1; if(i.d)mx+=1;
+  let mx=0,mz=0,mag=1;
+  // v124: prefer the guest's ANALOG vector when it sent one; fall back to the bits when it did not
+  // (a v123 client, or a desktop player on keys). Either way this path only runs outside the leash.
+  if(typeof i.mx==="number"&&(i.mx||i.mz)){
+    mx=i.mx; mz=i.mz;
+    const L=Math.hypot(mx,mz);
+    mag=Math.max(0,Math.min(1,L));      // never let a guest claim more than full deflection
+  }else{
+    if(i.w)mz-=1; if(i.s)mz+=1; if(i.a)mx-=1; if(i.d)mx+=1;
+  }
   if(!trusted){
     if((mx||mz)&&!u.garrison){
       const dir=new THREE.Vector3(mx,0,mz).applyAxisAngle(new THREE.Vector3(0,1,0),i.yaw||0);
-      moved=moveUnit(u,dir.x,dir.z,dt*(u.blocking?0.55:1));
+      moved=moveUnit(u,dir.x,dir.z,dt*mag*(u.blocking?0.55:1));
     }else u.moving=false;
   }
-  // attack: auto-target like the player's primary, whiff included
-  if(i.atk&&!u.blocking){
+  // attack: auto-target like the player's primary, whiff included.
+  // v124: a drawing archer holding primary is NOT swinging — it is nocking. Without this guard the
+  // held atk bit would auto-fire an arrow every cooldown all the way through the draw.
+  if(i.atk&&!u.blocking&&!(_rangedAim&&isDrawClass(u.cls))){
     if(!tryAttack(u)&&u.atkT<=0&&u.dmg>0){
       u.atkT=u.cd*0.35; u.swing=0.25;
       u.facing=Math.atan2(-Math.sin(i.yaw||0),-Math.cos(i.yaw||0));
@@ -1399,6 +1430,7 @@ NET.guestFrame=function(dt){
   siegeAim=rmbHeld&&lobber&&player.alive&&!placing;
   aiming=rmbHeld&&!!player.ranged&&!lobber;
   document.getElementById("crosshair").classList.toggle("aim",aiming||siegeAim);
+  tickDraw(dt); // v124 THE DRAW — the guest looses locally for feel and reports it below
   if(ghost)updateGhostFollow(); // shared: classic follow, wall lines, gate snapping
   // ship our inputs to the host @20 Hz
   NET.inputT+=dt;
@@ -1413,8 +1445,14 @@ NET.guestFrame=function(dt){
         blk:rmbHeld?1:0,yaw:r1(camYaw),
         px:r1(player.root.position.x),pz:r1(player.root.position.z),
         f:r1(player.facing), // v96: the host mirrors our TRUE facing, not just our feet
-        ...(NET._pendingLob?{lobx:r1(NET._pendingLob.x),lobz:r1(NET._pendingLob.z)}:{})});
+        // v124 ANALOG: mx/mz are OPTIONAL and additive. An old host ignores them and walks us with
+        // the w/a/s/d bits above, while px/pz carries our true position either way — so this
+        // degrades to the v123 behaviour instead of breaking it. No PROTO bump.
+        ...(moveVec.analog?{mx:r2(moveVec.x),mz:r2(moveVec.z)}:{}),
+        ...(NET._pendingLob?{lobx:r1(NET._pendingLob.x),lobz:r1(NET._pendingLob.z)}:{}),
+        ...(NET._pendingShot?{shot:NET._pendingShot}:{})}); // v124 THE DRAW: a loosed arrow
       NET._pendingLob=null;
+      NET._pendingShot=null;
     }
   }
   rosterAccum+=dt; if(rosterAccum>0.5){rosterAccum=0;updateRoster();}
@@ -1437,11 +1475,31 @@ NET.uiShowJoin=function(){
   document.getElementById("joincode").focus();
 };
 NET.uiName=function(){ // v92: the name screen — first thing a warrior does
-  const v=String((document.getElementById("playername")||{value:""}).value||"").trim().slice(0,14);
-  NET.myName=v||"Warrior";
+  const v=String((document.getElementById("playername")||{value:""}).value||"").trim().slice(0,28);
+  NET.myName=v||NET.rollName();
   try{localStorage.setItem("regicideName",NET.myName);}catch(_){}
   const ns=document.getElementById("namescreen"); if(ns)ns.style.display="none";
   const sm=document.getElementById("startmenu"); if(sm)sm.style.display="flex";
+  NET.showWhoAmI();
+};
+// v124: the name gate is gone. Typing on a phone before you have seen the game is a real drop-off
+// point, and the name only matters once other people can read it. You are auto-titled in John's
+// format — "Alexander the Great" — and can rename yourself from the menu or the action grid.
+NET.rollName=function(){
+  const i=Math.floor(Math.random()*NAMES.length*EPITHETS.length);
+  return NAMES[i%NAMES.length]+" "+EPITHETS[Math.floor(i/NAMES.length)%EPITHETS.length];
+};
+NET.showWhoAmI=function(){
+  const el=document.getElementById("myname");
+  if(el)el.textContent=NET.myName||"—";
+};
+NET.uiRename=function(){
+  const v=prompt("Your name, warrior:",NET.myName||"");
+  if(v===null)return;
+  NET.myName=String(v).trim().slice(0,28)||NET.rollName();
+  try{localStorage.setItem("regicideName",NET.myName);}catch(_){}
+  NET.showWhoAmI();
+  if(typeof player!=="undefined"&&player&&!player.isKing)player.name=NET.myName;
 };
 NET.uiHowTo=function(show){
   document.getElementById("howto").style.display=show?"flex":"none";
@@ -1449,6 +1507,11 @@ NET.uiHowTo=function(show){
 (function wireMenu(){
   const el=id=>document.getElementById(id);
   if(el("btnsolo"))el("btnsolo").onclick=NET.uiSolo;
+  // v124: multiplayer moves behind one disclosure, so PLAY owns the screen
+  if(el("btnfriends"))el("btnfriends").onclick=()=>{
+    const r=el("friendsrow"); if(r)r.style.display=r.style.display==="none"?"block":"none";
+  };
+  if(el("btnrename"))el("btnrename").onclick=NET.uiRename;
   if(el("btnhost"))el("btnhost").onclick=NET.uiShowHost; // v92: HOST reveals the options row
   if(el("btnhostgo"))el("btnhostgo").onclick=NET.uiHost;
   if(el("btnjoin"))el("btnjoin").onclick=NET.uiShowJoin;
@@ -1465,6 +1528,15 @@ NET.uiHowTo=function(show){
     el("playername").addEventListener("keydown",e=>{if(e.key==="Enter")NET.uiName();e.stopPropagation();});
     try{const n=localStorage.getItem("regicideName");if(n)el("playername").value=n;}catch(_){}
   }
+  // v124: skip the name screen entirely — auto-title and go straight to PLAY.
+  (function autoName(){
+    let n=null; try{n=localStorage.getItem("regicideName");}catch(_){}
+    NET.myName=n||NET.rollName();
+    try{localStorage.setItem("regicideName",NET.myName);}catch(_){}
+    const ns=el("namescreen"); if(ns)ns.style.display="none";
+    const sm=el("startmenu"); if(sm)sm.style.display="flex";
+    NET.showWhoAmI();
+  })();
   // v92: host option toggles
   const pickPair=(idA,idB,set)=>{
     if(!el(idA)||!el(idB))return;

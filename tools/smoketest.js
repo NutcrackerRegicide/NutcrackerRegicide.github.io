@@ -47,7 +47,11 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "laneTarget,laneFor,assignLane,LANE_Z,LANE_TURNIN,LANE_EDGE,HOLD_TOUR,HOLD_QUIET,HOLD_WATCH,bandHoldPoint,OXSCALE,"+
   "buildBodyFor,fireAimedShot,FARM_PASSIVE,setAiming:v=>{aiming=v;},"+
   "makeTree,depleteNode,clearFootprint,TREE_SCALE,TREE_GEOS,STUMP_GEOS,TREE_STANDS,TREE_CLEAR_BASE,TREE_CLEAR_ROAD,roadPoint,"+
-  "setHideD,getHideD:()=>HIDE_D,getMouseLocked:()=>mouseLocked};";
+  "setHideD,getHideD:()=>HIDE_D,getMouseLocked:()=>mouseLocked,"+
+  // v124: the draw, the rail's gating predicates, the analog move vector and the epithet roller
+  "DRAW_CLASSES,DRAW_FULL,drawScale,isDrawClass,drawLevel,tickDraw,drawFill,fireAimedFor,"+
+  "ACTIONS,availableActions,moveVec,readMove,updateRoster,mkName,NAMES,EPITHETS,projectiles,"+
+  "aimPointFor,convergeFrom,setPlayerDraw:v=>{player._drawT=v;}};";
 try{(0,eval)(bundle);}catch(e){console.error("LOAD FAIL:",e.message);process.exit(1);}
 console.log("all scripts loaded");
 const {units,buildings,neutralMarkets,buildingMesh,makeBuilding,makeUnit,tradeGold,tick,
@@ -2162,6 +2166,103 @@ global.__G.setGameOver(false);
     /_modelBody/.test(src)&&/if\(!u\._modelBody\)/.test(src));
   THREE.BufferGeometry.prototype.dispose=realDispose;
   u.alive=false;
+}
+
+// ---------------------------------------------------------------- v124
+{
+  const G=global.__G;
+  // ---- the roster counts TWO teams, not "blue and everything else" ----
+  // John's field shots showed RED at 73 against BLUE's 49, a constant 24-unit gap that was exactly
+  // the live wilds population. Prove the creeps are excluded by counting with them alive.
+  const before=document.getElementById("roster").innerHTML;
+  G.updateRoster();
+  const html=document.getElementById("roster").innerHTML;
+  // parse the SYMBOLS, not every digit: the markup carries #3d6ef2 / #d94a3d team colours and a
+  // naive \d+ sweep happily reported the hex as unit counts
+  const nums=[...html.matchAll(/[⛏⚔]\s*(\d+)/g)].map(m=>Number(m[1]));
+  let creepsAlive=0;
+  for(const u of G.units)if(u.alive&&u.team===G.NEUTRAL&&!u.isKing)creepsAlive++;
+  // recount by hand the way the HUD should
+  let bv=0,bm=0,rv=0,rm=0;
+  for(const u of G.units){
+    if(!u.alive||u.isKing)continue;
+    if(u.team===G.BLUE)u.cls==="villager"?bv++:bm++;
+    else if(u.team===G.RED)u.cls==="villager"?rv++:rm++;
+  }
+  check("v124 roster: the wilds belong to nobody — "+creepsAlive+" live creeps are counted for "+
+    "neither crown (blue "+bv+"/"+bm+" · red "+rv+"/"+rm+")",
+    creepsAlive>0&&nums[0]===bv&&nums[1]===bm&&nums[2]===rv&&nums[3]===rm);
+
+  // ---- THE DRAW: which classes, and what the curve pays ----
+  const draws=["slinger","archer","imparcher","comparcher"].every(c=>G.isDrawClass(c));
+  const fires=["crossbowman","skirmisher","musketeer"].every(c=>!G.isDrawClass(c));
+  check("v124 draw: bows draw, the fire-and-reload lines do NOT — and rig is NOT the test "+
+    "(crossbowman and skirmisher are rig:\"bow\")",
+    draws&&fires&&CLS.crossbowman.rig==="bow"&&CLS.skirmisher.rig==="bow");
+  const tap=G.drawScale("archer",0), full=G.drawScale("archer",1), mid=G.drawScale("archer",0.5);
+  check("v124 draw: a tap is weak and slow, a full draw hits ~2x and flies ~2.6x faster ("+
+    tap.dmg+"->"+full.dmg+" dmg, "+tap.spd+"->"+full.spd+" spd)",
+    tap.dmg===0.5&&full.dmg===2&&full.spd/tap.spd>2.5&&mid.dmg>tap.dmg&&mid.dmg<full.dmg);
+  const cb=G.drawScale("crossbowman",0);
+  check("v124 draw: holding does nothing for a crossbow — it keeps the v113 aimed bonus exactly",
+    cb.dmg===1.35&&cb.spd===1&&G.drawScale("crossbowman",1).dmg===1.35);
+  // the host must clamp a guest's CLAIM to the hold it actually watched
+  const net=fs.readFileSync(path.join(ROOT,"js","10-net.js"),"utf8")
+    .split("\n").filter(l=>!/^\s*\/\//.test(l)).join("\n");
+  check("v124 draw: the host clamps a guest's claimed charge to the hold it observed",
+    /Math\.min\(Number\(i\.shot\.lv\)\|\|0,seen\)/.test(net)&&/r\.drawT=\(r\.drawT\|\|0\)\+dt/.test(net));
+
+  // ---- THE CONVERGENCE: an aimed shot must point AT the crosshair, not parallel to it ----
+  // The old bug in one line: spawn a unit off the shoulder, fly parallel, miss by that offset for
+  // ever. Fire from a known muzzle at a known aim point and check the velocity actually converges.
+  const muzzle=new THREE.Vector3(0,1.7,0), pt=new THREE.Vector3(3,1.7,34);
+  const v=G.convergeFrom(muzzle,pt);
+  const hit=muzzle.clone().add(v.clone().multiplyScalar(pt.distanceTo(muzzle)));
+  check("v124 aim: the shot converges on the crosshair point (lands "+
+    hit.distanceTo(pt).toFixed(3)+" units off, was ~1.0 by construction)",
+    hit.distanceTo(pt)<0.01);
+  const comb=fs.readFileSync(path.join(ROOT,"js","05-combat.js"),"utf8")
+    .split("\n").filter(l=>!/^\s*\/\//.test(l)).join("\n");
+  check("v124 aim: no aimed projectile is launched parallel to the camera ray any more",
+    !/vel:dir\.clone\(\)\.multiplyScalar\(36\)/.test(comb)&&
+    !/vel:dirC\.clone\(\)\.multiplyScalar\(100\)/.test(comb)&&
+    /convergeFrom\(muzzle,pt\)/.test(comb)&&/convergeFrom\(muzC,/.test(comb));
+
+  // ---- ANALOG MOVEMENT ----
+  const mv=G.moveVec;
+  mv.analog=false;
+  G.keys.w=true; G.keys.a=false; G.keys.s=false; G.keys.d=false;
+  const byKey=G.readMove();
+  G.keys.w=false;
+  mv.analog=true; mv.x=0; mv.z=-1;
+  const byStickFull=G.readMove();
+  mv.x=0; mv.z=-0.5;
+  const byStickHalf=G.readMove();
+  mv.x=0; mv.z=-0.05;
+  const byStickDead=G.readMove();
+  mv.analog=false; mv.x=mv.z=0;
+  check("v124 analog: a key is all-or-nothing, a stick is proportional, and thumb noise is dead "+
+    "(key "+byKey.mag+" · full "+byStickFull.mag+" · half "+byStickHalf.mag.toFixed(2)+
+    " · noise "+byStickDead.mag+")",
+    byKey.mag===1&&byStickFull.mag===1&&byStickDead.mag===0&&
+    byStickHalf.mag>0.4&&byStickHalf.mag<1);
+  check("v124 analog: the wire field is OPTIONAL — an old host still walks a guest by the bits",
+    /typeof i\.mx==="number"/.test(net)&&/if\(i\.w\)mz-=1/.test(net));
+
+  // ---- "ALEXANDER THE GREAT" ----
+  const names=[0,1,2,7,25,63].map(i=>G.mkName(i));
+  const shaped=names.every(n=>/^[A-Z][a-z]+ the [A-Z]/.test(n));
+  const distinct=new Set(names).size===names.length;
+  check("v124 names: every warrior is <Name> the <Epithet> and the pairing does not repeat ("+
+    names.slice(0,3).join(" · ")+")",shaped&&distinct);
+  check("v124 names: the same unit id yields the same name on every machine",
+    G.mkName(11)===G.mkName(11)&&G.mkName(11)!==G.mkName(12));
+
+  // ---- THE RAIL's gating predicates ----
+  check("v124 rail: the action table is priority-ordered with AGE UP first, and every entry "+
+    "carries a can() test",
+    G.ACTIONS[0].k==="t"&&G.ACTIONS.every(a=>typeof a.can==="function"&&a.label));
+  document.getElementById("roster").innerHTML=before;
 }
 
 console.log(fails?("\n"+fails+" FAILURES"):"\nALL SMOKE TESTS PASSED");

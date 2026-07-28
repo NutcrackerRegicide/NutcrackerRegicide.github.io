@@ -73,11 +73,14 @@ const DEVICES=[
       check(dev.name+": the rotated stage lands near the HUD's design width ("+rot.stageW+")",
         rot.stageW>1000&&rot.stageW<1400);
     }
-    // start a solo battle through the real menu
-    // the real flow is name screen -> start menu -> solo
-    await page.tap("#btnname").catch(()=>{});
-    await page.waitForTimeout(400);
-    await page.tap("#btnsolo").catch(()=>{});
+    // start a solo battle through the real menu.
+    // v124: the name screen is GONE — you are auto-titled ("Alexander the Great") and land straight
+    // on the start menu, where PLAY is the dominant button. Tapping the dead #btnname here used to
+    // be step one; now it is a hidden element that only burns an actionability timeout.
+    await page.waitForSelector("#btnsolo",{state:"visible",timeout:8000}).catch(()=>{});
+    await page.tap("#btnsolo").catch(async()=>{ // fall back past any overlay hit-test
+      await page.evaluate(()=>document.getElementById("btnsolo").click()).catch(()=>{});
+    });
     await page.waitForTimeout(1600);
     const live=await page.evaluate(()=>({inMenu:typeof inMenu==="undefined"?null:inMenu,alive:!!(player&&player.alive)}));
     check(dev.name+": a solo battle starts from a tap ("+JSON.stringify(live)+")",live.inMenu===false&&live.alive===true);
@@ -304,15 +307,33 @@ const DEVICES=[
       // the SCOREBOARD is a held Tab on desktop — a phone has neither, so the grid toggles it
       fire(mb,"touchstart",[T(mb,0,0,30)]); fire(mb,"touchend",[T(mb,0,0,30)]); await wait(150);
       const entry=[...document.querySelectorAll("#tgrid .tgb")].find(b=>/Scores/.test(b.textContent));
-      let on=false,off=false,fits=false;
+      // v124 THE THREE ESCAPES. v122 asserted the scoreboard OPENED and stopped there — which is
+      // precisely why John shipped a build where it could never be closed. The grid sat at z-index
+      // 45 under the scoreboard's 55, both centred, so the toggle was correct and buried. Assert
+      // every way out, and assert the grid actually wins the stack.
+      const tap=async(el,id)=>{fire(el,"touchstart",[T(el,0,0,id)]);fire(el,"touchend",[T(el,0,0,id)]);await wait(180);};
+      const shown=()=>getComputedStyle(sb).display!=="none";
+      let on=false,off=false,fits=false,offTap=false,offMenu=false,above=false;
       if(entry){
-        fire(entry,"touchstart",[T(entry,0,0,31)]); fire(entry,"touchend",[T(entry,0,0,31)]); await wait(200);
-        on=getComputedStyle(sb).display!=="none";
-        fits=sb.offsetHeight<=innerHeight&&sb.offsetWidth<=innerWidth;
-        fire(mb,"touchstart",[T(mb,0,0,32)]); fire(mb,"touchend",[T(mb,0,0,32)]); await wait(150);
-        const e2=[...document.querySelectorAll("#tgrid .tgb")].find(b=>/Scores/.test(b.textContent));
-        fire(e2,"touchstart",[T(e2,0,0,33)]); fire(e2,"touchend",[T(e2,0,0,33)]); await wait(200);
-        off=getComputedStyle(sb).display==="none";
+        await tap(entry,31);
+        on=shown();
+        {const s0=document.getElementById("tstage");
+         fits=sb.offsetHeight<=(s0?s0.offsetHeight:innerHeight)&&
+              sb.offsetWidth <=(s0?s0.offsetWidth :innerWidth);}
+        // the grid must sit ABOVE the scoreboard, or its own entry is unreachable
+        above=parseInt(getComputedStyle(document.getElementById("tgrid")).zIndex||0,10)
+             > parseInt(getComputedStyle(sb).zIndex||0,10);
+        // escape 1: tap the panel itself
+        await tap(sb,32);
+        offTap=!shown();
+        // escape 2: the menu button closes it rather than opening the grid over it
+        if(!offTap)await tap(sb,33);
+        await tap(entry,34);                       // re-open through the grid entry
+        if(!shown()){ await tap(mb,35); const e=[...document.querySelectorAll("#tgrid .tgb")]
+          .find(b=>/Scores/.test(b.textContent)); if(e)await tap(e,36); }
+        await tap(mb,37);
+        offMenu=!shown();
+        off=offTap&&offMenu;
       }
       // EVERY build category must fit the stage — Defensive has the most rows and ran off the
       // bottom of John's phone
@@ -324,11 +345,80 @@ const DEVICES=[
       }
       closeMenus();
       const worst=sizes.reduce((a,b)=>b[1]>a[1]?b:a,sizes[0]);
-      return {hasEntry:!!entry,on,off,fits,worst,vh:innerHeight,vw:innerWidth,
-        allFit:sizes.every(x=>x[1]<=innerHeight&&x[2]<=innerWidth)};
+      // v124: measure against the STAGE, not the viewport. Inside the rotated stage innerWidth is
+      // the SHORT edge, so a picker that correctly fills a 1180x545 battlefield reads as 1180 wide
+      // against a 545 "viewport" and fails. Third time this transposition has cost a cycle — the
+      // rule is the same every time: layout inside #tstage is measured in stage space.
+      const st=document.getElementById("tstage");
+      const sw=st?st.offsetWidth:innerWidth, sh=st?st.offsetHeight:innerHeight;
+      return {hasEntry:!!entry,on,off,fits,offTap,offMenu,above,worst,vh:sh,vw:sw,
+        allFit:sizes.every(x=>x[1]<=sh+2&&x[2]<=sw+2)};
     });
-    check(dev.name+": the scoreboard is reachable from the grid and toggles ("+v122.hasEntry+"/"+v122.on+"/"+v122.off+")",
-      v122.hasEntry&&v122.on&&v122.off&&v122.fits);
+    check(dev.name+": the scoreboard opens from the grid and FITS ("+v122.hasEntry+"/"+v122.on+")",
+      v122.hasEntry&&v122.on&&v122.fits);
+    check(dev.name+": v124 the scoreboard CLOSES — tap the panel ("+v122.offTap+
+      ") and the menu button ("+v122.offMenu+")",v122.off);
+    check(dev.name+": v124 the action grid outranks the scoreboard in the stack",v122.above);
+    // ---- v124: the contextual rail, the picker's escape hatch, the one-line HUD ----
+    const v124=await page.evaluate(async()=>{
+      const T=(el,x,y,id)=>new Touch({identifier:id,target:el,clientX:x,clientY:y});
+      const fire=(el,type,touches)=>el.dispatchEvent(new TouchEvent(type,
+        {bubbles:true,cancelable:true,touches,targetTouches:touches,changedTouches:touches}));
+      const wait=ms=>new Promise(r=>setTimeout(r,ms));
+      const rail=()=>[...document.querySelectorAll("#tctx .tctxb")].map(b=>b.textContent);
+      closeMenus();
+      await wait(300);
+      // AGE UP must be absent when the stockpile cannot pay, and present when it can — John's rule
+      const tc=teamTC(MYTEAM);
+      player.root.position.x=tc.x+2; player.root.position.z=tc.z+2;
+      for(const k in stock[MYTEAM])stock[MYTEAM][k]=0;
+      await wait(320);
+      const poor=rail();
+      const cost=AGES[teamAge[MYTEAM]+1].cost;
+      for(const k in cost)stock[MYTEAM][k]=cost[k]+500;
+      await wait(320);
+      const rich=rail();
+      const capped=rich.length<=3;
+      // the core three never move
+      const core=["tb-atk","tb-block","tb-menu"].every(id=>{
+        const e=document.getElementById(id); return e&&getComputedStyle(e).display!=="none";});
+      // the picker: opens full-stage, and CLOSE actually closes it
+      openBuildMenu(); await wait(260);
+      const pc=document.getElementById("tpickclose");
+      const closeShown=getComputedStyle(pc).display!=="none";
+      const bm=document.getElementById("buildmenu");
+      const tile=bm.querySelector(".opt");
+      const tileH=tile?tile.offsetHeight:0;
+      fire(pc,"touchend",[T(pc,0,0,60)]); await wait(260);
+      const closed=!menuOpen&&getComputedStyle(bm).display==="none";
+      // the HUD strip: resources and the age bar share a line, the map hides behind its button
+      const res=document.getElementById("resources"), age=document.getElementById("agebar");
+      const sameLine=Math.abs(res.offsetTop-age.offsetTop)<6&&age.offsetLeft>res.offsetLeft;
+      const mapHidden=getComputedStyle(document.getElementById("minimapwrap")).display==="none";
+      const mb=document.getElementById("tmap");
+      fire(mb,"touchend",[T(mb,0,0,61)]); await wait(220);
+      const mapShown=getComputedStyle(document.getElementById("minimapwrap")).display!=="none";
+      fire(mb,"touchend",[T(mb,0,0,62)]); await wait(160);
+      // the banner promotes a warn line out of the feed
+      msg("⚠ YOUR KING IS BADLY WOUNDED","warn"); await wait(240);
+      const bn=document.getElementById("tbanner");
+      return {poor,rich,capped,core,closeShown,closed,tileH,sameLine,mapHidden,mapShown,
+        banner:bn.classList.contains("on"),feed:document.getElementById("feed").children.length};
+    });
+    check(dev.name+": v124 rail — AGE UP appears ONLY when the team can pay ("+
+      JSON.stringify(v124.poor)+" -> "+JSON.stringify(v124.rich)+")",
+      !v124.poor.includes("AGE UP")&&v124.rich.includes("AGE UP"));
+    check(dev.name+": v124 rail — at most three contextual slots, core three always present",
+      v124.capped&&v124.core);
+    check(dev.name+": v124 picker — CLOSE exists while a menu is open and shuts it ("+
+      v124.closeShown+"/"+v124.closed+")",v124.closeShown&&v124.closed);
+    check(dev.name+": v124 picker — tiles are real touch targets ("+v124.tileH+"px tall)",
+      v124.tileH>=44);
+    check(dev.name+": v124 HUD — resources and the age bar share one line",v124.sameLine);
+    check(dev.name+": v124 HUD — the map hides behind its button and toggles ("+
+      v124.mapHidden+"/"+v124.mapShown+")",v124.mapHidden&&v124.mapShown);
+    check(dev.name+": v124 HUD — a warn line is promoted to the banner, feed stays short ("+
+      v124.feed+")",v124.banner&&v124.feed<=2);
     check(dev.name+": every build category fits the stage (worst: "+v122.worst[0]+" "+
       v122.worst[2]+"×"+v122.worst[1]+" in "+v122.vw+"×"+v122.vh+")",v122.allFit);
     await page.waitForTimeout(1200);

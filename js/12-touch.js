@@ -126,12 +126,21 @@
   // ---------- the performance tier ----------
   // The post stack (bloom -> grade -> vignette) is three extra full-screen passes; shadows are a
   // second render of everything near the player. ?gfx=high keeps them.
+  //
+  // v124 THE BLUR. v116 pinned the mobile pixel ratio at 0.7 as a guess, before anyone knew what a
+  // phone could do with this scene. Inside the 1180x545 rotated stage on a 3x handset that is about
+  // 826x382 real pixels stretched over a 2532px screen — John: "graphics feel a little blurry
+  // compared to the desktop version." His own read-out says 60 fps / min 50, so the guess was too
+  // conservative. Start SHARP and only give resolution back if the frame rate actually asks for it:
+  // a late-game 50v50 push may still need the old budget, and that is the case 0.7 was chosen for.
+  const PR_STEPS=[1.0,0.85,0.7];
+  let prStep=0;
   const LOW=q.get("gfx")!=="high";
   if(LOW){
     try{
       composer=null;                                // 09-main falls back to renderer.render()
       renderer.shadowMap.enabled=false;
-      renderer.setPixelRatio(Math.min(devicePixelRatio,0.7));
+      renderer.setPixelRatio(Math.min(devicePixelRatio,PR_STEPS[prStep]));
       if(typeof setHideD==="function")setHideD(105);
     }catch(e){console.warn("[touch] perf tier partial:",e);}
   }
@@ -140,22 +149,28 @@
   // A <meta viewport> change does not apply synchronously, so sizing the renderer on the next
   // line reads a stale innerWidth. Re-fit on a retry schedule and on every viewport event; some
   // in-app browsers fire neither resize nor orientationchange, hence the poll.
-  function fit(){
+  // force: v124's adaptive pixel ratio needs a resize even when the CSS size has NOT changed —
+  // setPixelRatio alone does not reallocate the drawing buffer.
+  function fit(force){
     layoutStage();
     applySafeArea();
     const s=stageSize();
     const w=Math.max(1,s.w), h=Math.max(1,s.h);
-    if(fit.last&&fit.last.w===w&&fit.last.h===h&&fit.last.rot===ROT)return;
+    if(!force&&fit.last&&fit.last.w===w&&fit.last.h===h&&fit.last.rot===ROT)return;
     fit.last={w,h,rot:ROT};
     camera.aspect=w/h; camera.updateProjectionMatrix();
     renderer.setSize(w,h,true);
     if(composer)composer.setSize(w,h);
   }
+  // NOTE: every wiring below calls fit with NO argument on purpose. Handing it straight to
+  // addEventListener would pass the Event object as `force` and re-allocate the drawing buffer on
+  // every scroll-driven viewport nudge.
+  const refit=()=>fit();
   addEventListener("resize",()=>{setViewport();fit();});
-  addEventListener("orientationchange",()=>{setViewport();setTimeout(fit,120);setTimeout(fit,400);});
-  if(window.visualViewport)visualViewport.addEventListener("resize",fit);
-  for(const d of [0,50,150,350,700,1200,2000])setTimeout(fit,d);
-  setInterval(fit,500); // backstop for browsers that fire no viewport events at all
+  addEventListener("orientationchange",()=>{setViewport();setTimeout(refit,120);setTimeout(refit,400);});
+  if(window.visualViewport)visualViewport.addEventListener("resize",refit);
+  for(const d of [0,50,150,350,700,1200,2000])setTimeout(refit,d);
+  setInterval(refit,500); // backstop for browsers that fire no viewport events at all
 
   // ---------- pointer lock does not exist here ----------
   mouseLocked=true;
@@ -171,17 +186,27 @@
   pad.innerHTML=
     '<div class="tzone" id="tzL"></div>'+
     '<div class="tzone" id="tzR"></div>'+
+    // v124 THE CONTEXTUAL RAIL. column-reverse, so the first child sits at the BOTTOM: the three
+    // core buttons never move (muscle memory is the whole point of a fixed rail) and the
+    // contextual slots stack ABOVE them, appearing and vanishing as you walk.
     '<div id="tbtns">'+
       '<div class="tbtn tbig" id="tb-atk">CHARGE</div>'+
       '<div class="tbtn" id="tb-block">BLOCK</div>'+
-      '<div class="tbtn" id="tb-e">E</div>'+
       '<div class="tbtn tmenu" id="tb-menu">\u2630</div>'+
       '<div class="tbtn tplace hide" id="tb-rot">\u21bb</div>'+
       '<div class="tbtn tplace hide" id="tb-cancel">\u2715</div>'+
+      '<div id="tctx"></div>'+
     '</div>'+
     '<div id="tgrid"><div class="tgwrap"><div class="tgtitle">ACTIONS</div><div class="tgrows"></div>'+
       '<div class="tgclose">CLOSE</div></div></div>'+
     '<div id="tauto"></div>'+
+    // v124: lives OUTSIDE #tbtns deliberately. syncPad hides the whole pad whenever a menu owns
+    // the screen, and CANCEL only appears while placing — so until now the only way out of a build
+    // menu on a phone was to pick something. Third instance of the same bug shape as the v118
+    // rotate gate and the v122 scoreboard: an interface with no escape hatch.
+    '<div id="tpickclose">✕ CLOSE</div>'+
+    '<div id="tbanner"></div>'+
+    '<div id="tmap">🗺</div>'+
     '<div id="ttop"><span id="tfps">--</span><span id="tflip">⟲</span><span id="tfull">⛶</span></div>';
   stage.appendChild(pad);
 
@@ -213,18 +238,41 @@
     background:rgba(20,24,20,.45);border:2px solid rgba(255,255,255,.55);
     text-shadow:0 1px 2px #000;letter-spacing:.5px}
   .tbtn.tbig{width:92px;height:92px;font-size:14px;background:rgba(120,30,26,.55)}
+  /* v124 THE DRAW RING — a conic sweep behind the FIRE label, driven by --draw in degrees.
+     Deliberately drawn on a ::before so it never fights the label's own text-shadow. */
+  .tbtn.tbig{position:relative;isolation:isolate}
+  .tbtn.tbig::before{content:"";position:absolute;inset:-4px;border-radius:50%;z-index:-1;
+    opacity:0;transition:opacity .12s linear}
+  .tbtn.tbig.drawing::before{opacity:1;
+    background:conic-gradient(rgba(255,226,170,.92) var(--draw,0deg),rgba(0,0,0,0) 0)}
+  .tbtn.tbig.full::before{background:conic-gradient(rgba(255,120,90,.95) 360deg,rgba(0,0,0,0) 0)}
   .tbtn.on{background:rgba(255,255,255,.45);color:#111;text-shadow:none}
   #ttop{position:absolute;left:50%;top:5px;transform:translateX(-50%);display:flex;gap:8px;align-items:center}
   #tfps{padding:3px 9px;border-radius:3px;color:#fff;background:rgba(0,0,0,.45);
     font:600 12px/1.4 ui-monospace,monospace}
   #tflip,#tfull{pointer-events:auto;padding:3px 9px;border-radius:3px;color:#fff;
     background:rgba(0,0,0,.45);font-size:14px}
+  /* v124 THE CONTEXTUAL SLOTS. John chose the parchment look so the controls read as part of the
+     game world rather than bolted on — but these are things a thumb hits while being charged, so
+     the ink stays near-black and the parchment near-opaque. Legibility beats theme at 60fps. */
+  #tctx{display:flex;flex-direction:column-reverse;align-items:center;gap:9px;pointer-events:none}
+  .tbtn.tctxb{pointer-events:auto;width:auto;min-width:78px;height:44px;border-radius:4px;
+    padding:0 12px;font:bold 12px/1 "Trebuchet MS",sans-serif;letter-spacing:1px;
+    background:rgba(232,217,176,.93);color:#2b1d12;border:2px solid #2b1d12;
+    text-shadow:none;box-shadow:0 3px 0 rgba(0,0,0,.45);
+    animation:ctxin .16s ease-out}
+  .tbtn.tctxb.on{background:#c9b177;color:#2b1d12}
+  @keyframes ctxin{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
   .tbtn.tmenu{width:52px;height:52px;font-size:20px;background:rgba(20,24,20,.55)}
   .tbtn.tplace{width:52px;height:52px;font-size:22px;background:rgba(30,60,110,.55)}
   #tb-cancel{background:rgba(120,40,34,.6)}
   .tbtn.hide{display:none}
   /* the action grid: one button, everything the 21 desktop hotkeys reach */
-  #tgrid{position:absolute;inset:0;z-index:45;display:none;align-items:center;justify-content:center;
+  /* v124: was z-index 45, UNDER the scoreboard's 55 — and both are centred, so an open scoreboard
+     covered the grid completely. The Scores toggle was correct and physically unreachable: tapping
+     the visible backdrop hit the grid's own dismiss handler, closing the grid and leaving the
+     scoreboard up. The grid must always win the stack; nothing it opens may ever bury it. */
+  #tgrid{position:absolute;inset:0;z-index:58;display:none;align-items:center;justify-content:center;
     background:rgba(10,14,8,.72);pointer-events:auto}
   #tgrid.on{display:flex}
   .tgwrap{background:#e8d9b0;border:3px solid #2b1d12;border-radius:5px;padding:14px 16px;
@@ -238,20 +286,48 @@
   .tgclose{margin-top:11px;text-align:center;padding:9px;border:2px solid #2b1d12;border-radius:4px;
     background:#c9b177;color:#2b1d12;font:bold 12px/1 "Trebuchet MS",sans-serif;letter-spacing:1px}
   /* what the automation is doing, so it never feels like the game is possessed */
-  #tauto{position:absolute;left:50%;bottom:78px;transform:translateX(-50%);padding:4px 12px;
+  /* v124: was bottom:78px, which sat straight on top of #playerhud's title — John's field shot
+     had "gathering" printed across the word VILLAGER. #playerhud is bottom-anchored and centred
+     too, so this has to clear its full scaled height (~62px) plus the safe-area inset. */
+  #tauto{position:absolute;left:50%;bottom:calc(112px + var(--sb));transform:translateX(-50%);
+    padding:4px 12px;
     border-radius:3px;color:#fff;background:rgba(0,0,0,.42);font-size:12px;display:none}
   #tauto.on{display:block}
   /* HUD triage — every left/top anchored panel is pushed clear of the notch via --sl/--st */
   #tstage{--sl:0px;--st:0px;--sr:0px;--sb:0px}
-  .touch-mode #resources{transform:scale(.8);transform-origin:top left;
-    left:calc(10px + var(--sl));top:calc(10px + var(--st))}
-  .touch-mode #roster{left:calc(10px + var(--sl));top:calc(58px + var(--st))}
-  .touch-mode #agebar{left:calc(10px + var(--sl));top:calc(96px + var(--st))}
-  .touch-mode #carry{left:calc(10px + var(--sl));top:calc(134px + var(--st))}
+  /* ---------- v124 ONE STRIP ----------
+     Four stacked panels down the left edge ate a quarter of a phone screen. Resources and the age
+     bar are the only two you want CONSTANTLY, so they share one line; roster and carry are
+     situational and now appear only when they have something to say (see syncHud below). */
+  .touch-mode #resources{transform:scale(.78);transform-origin:top left;
+    left:calc(10px + var(--sl));top:calc(8px + var(--st))}
+  .touch-mode #agebar{transform:scale(.78);transform-origin:top left;
+    left:calc(232px + var(--sl));top:calc(8px + var(--st))}
+  .touch-mode #roster{transform:scale(.78);transform-origin:top left;
+    left:calc(10px + var(--sl));top:calc(44px + var(--st));
+    opacity:0;transition:opacity .35s ease;pointer-events:none}
+  .touch-mode #roster.tshow{opacity:1}
+  .touch-mode #carry{transform:scale(.78);transform-origin:top left;
+    left:calc(10px + var(--sl));top:calc(76px + var(--st))}
+  /* THE BANNER — John: fewer lines, but the big ones unmissable */
+  #tbanner{position:absolute;left:50%;top:calc(84px + var(--st));transform:translateX(-50%) translateY(-8px);
+    z-index:44;padding:10px 22px;border-radius:4px;opacity:0;pointer-events:none;
+    background:rgba(232,217,176,.96);color:#2b1d12;border:2px solid #2b1d12;
+    box-shadow:0 3px 0 rgba(0,0,0,.45);max-width:70%;text-align:center;
+    font:bold 14px/1.25 "Trebuchet MS",sans-serif;
+    transition:opacity .18s ease,transform .18s ease}
+  #tbanner.on{opacity:1;transform:translateX(-50%) translateY(0)}
+  #tbanner.warn{background:rgba(150,58,44,.96);color:#ffe9df;border-color:#2b1d12}
+  /* THE MAP — behind a tap. John's pick: maximum clear screen during a fight. */
+  #tmap{position:absolute;z-index:31;right:calc(10px + var(--sr));top:calc(8px + var(--st));
+    width:44px;height:44px;border-radius:5px;pointer-events:auto;display:flex;
+    align-items:center;justify-content:center;font-size:20px;
+    background:rgba(20,24,20,.55);border:2px solid rgba(255,255,255,.55);color:#fff}
+  .touch-mode #minimapwrap{display:none}
+  .touch-mode.tmapon #minimapwrap{display:block;transform:scale(.92);transform-origin:top right;
+    right:calc(62px + var(--sr));top:calc(8px + var(--st))}
   .touch-mode #kings{top:calc(10px + var(--st))}
   .touch-mode #objective{transform:scale(.8);transform-origin:top center;top:calc(74px + var(--st))}
-  .touch-mode #minimapwrap{transform:scale(.62);transform-origin:top right;
-    right:calc(10px + var(--sr));top:calc(10px + var(--st))}
   .touch-mode #playerhud{transform:translateX(-50%) scale(.78);bottom:calc(4px + var(--sb))}
   .touch-mode #tbtns{right:calc(10px + var(--sr));bottom:calc(12px + var(--sb))}
   .touch-mode #ttop{top:calc(5px + var(--st))}
@@ -270,13 +346,60 @@
   /* v122 THE MENUS FIT NOW. #buildmenu/#classmenu/#smithmenu are fixed-size desktop panels — the
      DEFENSIVE category has the most rows and ran off the bottom of a phone. Cap them to the stage
      and let them scroll; the scoreboard gets the same treatment. */
-  .touch-mode #buildmenu,.touch-mode #classmenu,.touch-mode #smithmenu,.touch-mode #scoreboard{
+  /* ---------- v124 THE PICKER ----------
+     Build, Class, the Town Board and the Blacksmith were four separately-styled desktop panels —
+     the responsive pass on the watch list since v116. They all render the same .opt / .cost /
+     .cant markup, so ONE set of rules turns all four into the same full-screen picker: big tiles,
+     cost always legible, unaffordable obviously dead. Learn it once, it works everywhere — and
+     none of the menu LOGIC is touched, so the desktop build is byte-identical. */
+  .touch-mode #buildmenu,.touch-mode #classmenu,.touch-mode #smithmenu{
+    position:absolute;inset:0;max-width:none;max-height:none;transform:none;
+    border:0;border-radius:0;background:rgba(18,15,11,.94);
+    overflow-y:auto;-webkit-overflow-scrolling:touch;z-index:52;
+    padding:calc(6px + var(--st)) calc(14px + var(--sr)) calc(78px + var(--sb)) calc(14px + var(--sl))}
+  .touch-mode #buildmenu h3,.touch-mode #classmenu h3,.touch-mode #smithmenu h3{
+    position:sticky;top:0;margin:0 0 12px;padding:12px 4px;font-size:15px;letter-spacing:2px;
+    text-align:center;color:#e8d9b0;background:rgba(18,15,11,.97);
+    border-bottom:1px solid rgba(160,150,120,.35);z-index:2}
+  /* the tiles. A 1180-wide stage takes three across. */
+  .touch-mode #buildmenu .opt,.touch-mode #classmenu .opt,.touch-mode #smithmenu .opt{
+    display:inline-flex;flex-direction:column;align-items:flex-start;justify-content:space-between;
+    width:calc(33.33% - 14px);min-height:64px;margin:0 6px 10px;padding:10px 12px;vertical-align:top;
+    background:rgba(232,217,176,.95);color:#2b1d12;border:2px solid #2b1d12;border-radius:5px;
+    box-shadow:0 3px 0 rgba(0,0,0,.45);gap:6px;font-size:13px;line-height:1.25}
+  .touch-mode #buildmenu .opt small,.touch-mode #classmenu .opt small,
+  .touch-mode #smithmenu .opt small{display:block;opacity:.62;font-size:11px}
+  .touch-mode #buildmenu .opt .cost,.touch-mode #classmenu .opt .cost,
+  .touch-mode #smithmenu .opt .cost{align-self:stretch;text-align:right;font-size:12px;
+    padding-top:5px;border-top:1px solid rgba(43,29,18,.22)}
+  /* unaffordable is a STATE, not a whisper — .45 opacity over a battlefield read as "already built" */
+  .touch-mode #buildmenu .opt.cant,.touch-mode #classmenu .opt.cant,
+  .touch-mode #smithmenu .opt.cant{opacity:1;background:rgba(90,80,62,.6);color:#cfc4a6;
+    border-color:rgba(43,29,18,.5);box-shadow:none}
+  .touch-mode #buildmenu .opt.cant .cost,.touch-mode #classmenu .opt.cant .cost,
+  .touch-mode #smithmenu .opt.cant .cost{color:#ffb9a6}
+  /* the number badges are for a keyboard nobody here has */
+  .touch-mode #buildmenu .key,.touch-mode #classmenu .key,.touch-mode #smithmenu .key{display:none}
+  .touch-mode #buildmenu .hint,.touch-mode #classmenu .hint,.touch-mode #smithmenu .hint{
+    display:block;clear:both;padding:8px 4px;text-align:center;font-size:11px;color:#9c9075}
+  /* the escape hatch — see the note by #tpickclose in the markup */
+  #tpickclose{position:absolute;left:50%;bottom:calc(14px + var(--sb));transform:translateX(-50%);
+    display:none;z-index:57;padding:13px 30px;border-radius:5px;
+    background:#c9b177;color:#2b1d12;border:2px solid #2b1d12;
+    box-shadow:0 3px 0 rgba(0,0,0,.5);pointer-events:auto;
+    font:bold 13px/1 "Trebuchet MS",sans-serif;letter-spacing:2px}
+  #tpickclose.on{display:block}
+  .touch-mode #scoreboard{
     max-height:86%;max-width:92%;overflow-y:auto;-webkit-overflow-scrolling:touch;
     top:50%;left:50%;transform:translate(-50%,-50%);font-size:12.5px}
-  .touch-mode #buildmenu .opt,.touch-mode #classmenu .opt,.touch-mode #smithmenu .opt{
-    padding:7px 10px}
-  .touch-mode #buildmenu h3,.touch-mode #classmenu h3,.touch-mode #smithmenu h3{font-size:14px}
   .touch-mode #scoreboard{z-index:55}
+  /* v124: the affordance for "tap to close". A pseudo-element, deliberately — showScoreboard()
+     rebuilds innerHTML on every open, so any injected button element would be wiped. The whole
+     panel is the tap target; this only has to SAY so. */
+  .touch-mode #scoreboard.tscore::after{content:"\\2715  tap to close";position:sticky;bottom:0;
+    display:block;margin:10px -18px -12px;padding:8px;text-align:center;font-size:11px;
+    letter-spacing:1px;color:#d8cfae;background:rgba(12,10,8,.92);
+    border-top:1px solid rgba(160,150,120,.3)}
   `;
   document.head.appendChild(css);
   layoutStage();
@@ -338,11 +461,18 @@
     zone.addEventListener("touchcancel",end);
   }
 
-  // LEFT: movement, synthesised into the boolean keys the sim and the net packet already speak.
+  // LEFT: movement. v124 writes a REAL vector into moveVec — full 360 degrees, speed proportional
+  // to deflection. The boolean keys are still mirrored from it, because they remain the fallback an
+  // old host walks a guest with (and several bits of code still read keys.w to mean "am I moving").
+  moveVec.analog=true;
   makeStick("tzL","tsL",(ux,uy)=>{
+    moveVec.x=ux; moveVec.z=uy;
     const T=0.38;
     keys.a=ux<-T; keys.d=ux>T; keys.w=uy<-T; keys.s=uy>T;
-  },()=>{keys.w=keys.a=keys.s=keys.d=false;});
+  },()=>{
+    moveVec.x=moveVec.z=0;
+    keys.w=keys.a=keys.s=keys.d=false;
+  });
 
   // RIGHT: camera. Rate-based — held deflection turns at a speed, integrated per frame.
   // v119: HALVED on John's note (was 2.9 / 2.1 rad-per-sec at full deflection).
@@ -364,7 +494,7 @@
   //   lobbing siege, aiming  -> FIRE      (looses the stone at the mark)
   //   troops rallied to you  -> CHARGE    (the F warcry — the biggest thing a player does)
   //   otherwise              -> ATTACK    (razing buildings; auto-attack only handles UNITS)
-  let manualAtk=false;
+  let manualAtk=false, lastFill=-1;
   function bigMode(){
     if(placing)return "place";     // v121: laying a foundation owns the pad
     if(!player||!player.alive)return "atk";
@@ -404,10 +534,44 @@
     el.addEventListener("touchend",off,{passive:false});
     el.addEventListener("touchcancel",off,{passive:false});
   })();
-  // E is the game's whole verb set — gather, build, garrison, deposit, use a board. HELD in the
-  // sim, but several interactions fire on the key EDGE, so it needs the flag AND an event.
-  hold("tb-e",()=>{keys.e=true;dispatchEvent(new KeyboardEvent("keydown",{key:"e"}));},
-                ()=>{keys.e=false;dispatchEvent(new KeyboardEvent("keyup",{key:"e"}));});
+  // ---------- v124 THE CONTEXTUAL RAIL ----------
+  // John: "instead of pressing the hamburger button to age up near the town center, can we just
+  // have an age up button appear next to the other buttons when near the town center?" — and then
+  // the sharper version: it should appear only when the team can actually AFFORD it.
+  //
+  // Every slot dispatches the key the desktop build already listens for, exactly as the grid does,
+  // so there remains ONE implementation of every action and nothing can drift between platforms.
+  // E is in this pool rather than pinned to the rail now: with auto-gather doing the common case,
+  // a permanent E button was dead weight everywhere except the few spots it means something.
+  const ctxEl=document.getElementById("tctx");
+  let ctxSig="";
+  function syncCtx(){
+    const list=(typeof availableActions==="function")?availableActions(3):[];
+    const sig=list.map(a=>a.k).join("");
+    if(sig===ctxSig)return;              // rebuild only when the SET changes, not every frame
+    ctxSig=sig;
+    ctxEl.innerHTML=list.map(a=>
+      '<div class="tbtn tctxb" data-k="'+a.k+'">'+a.label+'</div>').join("");
+    for(const b of ctxEl.querySelectorAll(".tctxb")){
+      const k=b.dataset.k;
+      if(k==="e"){
+        // E is HELD in the sim (gather ticks while it is down) but several interactions fire on
+        // the key EDGE, so it needs the flag AND the events — same as the old fixed button.
+        b.addEventListener("touchstart",e=>{b.classList.add("on");keys.e=true;
+          dispatchEvent(new KeyboardEvent("keydown",{key:"e"}));e.preventDefault();},{passive:false});
+        const off=e=>{b.classList.remove("on");keys.e=false;
+          dispatchEvent(new KeyboardEvent("keyup",{key:"e"}));e.preventDefault();};
+        b.addEventListener("touchend",off,{passive:false});
+        b.addEventListener("touchcancel",off,{passive:false});
+      }else{
+        b.addEventListener("touchend",e=>{
+          e.preventDefault();
+          dispatchEvent(new KeyboardEvent("keydown",{key:k}));
+          setTimeout(()=>dispatchEvent(new KeyboardEvent("keyup",{key:k})),40);
+        },{passive:false});
+      }
+    }
+  }
   // v121 PLACEMENT. Desktop rotates a foundation with R and abandons it with Escape — a phone has
   // neither, so John could line up a wall and then had no way to turn it or back out. These two
   // appear only while a ghost is on the ground.
@@ -422,17 +586,24 @@
     if(placing)cancelPlacing(); else closeMenus();
   },{passive:false});
 
-  // ---------- THE ACTION GRID ----------
-  // 21 desktop hotkeys, one button. Each entry just dispatches the key the desktop build already
-  // listens for, so there is exactly one implementation of every action and nothing to drift.
+  // ---------- THE ACTION GRID — v124: OVERFLOW ONLY ----------
+  // Build, Class, Rally, Age Up and Interact were promoted to the contextual rail, where they cost
+  // one tap instead of two and only exist when they would work. What is left here is the rare
+  // stuff: the things you touch once a match or once a session. The grid stops being the primary
+  // interface and becomes a short settings-ish list — but it keeps a FULL copy of every action as
+  // a safety net, because a contextual rule that misjudges a situation must never strand you.
   const GRID=[
+    ["F","Charge",    "hurl them at your gaze"],
     ["B","Build",     "lay a foundation"],
     ["R","Class",     "change unit at a trainer"],
     ["G","Rally",     "call your 5 nearest"],
-    ["F","Charge",    "hurl them at your gaze"],
     ["T","Age Up",    "at your Town Centre"],
     ["E","Interact",  "quest board · blacksmith"],
-    ["V","Respawn",   "when you have fallen"],
+    // v124: this was labelled "Respawn", which it never was. Respawn is already AUTOMATIC — the
+    // unit loop counts respawnT down and calls respawnUnit at zero, for the player like anyone
+    // else. V picks WHERE you come back. John asked for auto-respawn; the game already did it and
+    // the button was lying about what it does.
+    ["V","Spawn Point","town centre / forward castle"],
     ["\u21b9","Scores", "the roster + kill tally"],
     ["M","Sound",     "volume + mute"],
     ["P","Pixel",     "retro filter"],
@@ -445,12 +616,14 @@
   // v122: the SCOREBOARD was unreachable on a phone — it is a HELD Tab on desktop, and a phone has
   // no Tab and no way to hold a menu entry. It becomes a toggle here.
   let scores=false;
+  function setScores(v){
+    scores=!!v;
+    if(typeof showScoreboard==="function")showScoreboard(scores);
+    const sb=document.getElementById("scoreboard");
+    if(sb)sb.classList.toggle("tscore",scores);
+  }
   function tapKey(k){
-    if(k==="\u21b9"){
-      scores=!scores;
-      if(typeof showScoreboard==="function")showScoreboard(scores);
-      return;
-    }
+    if(k==="\u21b9"){ setScores(!scores); return; }
     dispatchEvent(new KeyboardEvent("keydown",{key:k}));
     setTimeout(()=>dispatchEvent(new KeyboardEvent("keyup",{key:k})),40);
   }
@@ -459,13 +632,27 @@
     b.addEventListener("touchend",e=>{
       e.preventDefault(); gridOpen(false);
       const k=b.dataset.k;
-      if(scores&&k!=="\u21b9"){scores=false;if(typeof showScoreboard==="function")showScoreboard(false);}
+      if(scores&&k!=="\u21b9")setScores(false);
       tapKey(k);
     },{passive:false});
   grid.querySelector(".tgclose").addEventListener("touchend",e=>{e.preventDefault();gridOpen(false);},{passive:false});
   grid.addEventListener("touchend",e=>{if(e.target===grid){e.preventDefault();gridOpen(false);}},{passive:false});
+  // v124 THE THREE ESCAPES. One way out of a panel is one bug away from no way out \u2014 the v118
+  // rotate gate taught that, and the scoreboard repeated it. An open scoreboard now closes on:
+  //   1. a tap anywhere on it,  2. the visible X,  3. the menu button, which closes it before
+  //      it will open the grid again.
+  const sbEl=document.getElementById("scoreboard");
+  if(sbEl){
+    sbEl.addEventListener("touchend",e=>{
+      if(!scores)return;
+      e.preventDefault(); e.stopPropagation(); setScores(false);
+    },{passive:false});
+  }
   document.getElementById("tb-menu").addEventListener("touchend",e=>{
-    e.preventDefault();gridOpen(!grid.classList.contains("on"));},{passive:false});
+    e.preventDefault();
+    if(scores){setScores(false);return;}          // the scoreboard owns the first press
+    gridOpen(!grid.classList.contains("on"));
+  },{passive:false});
 
   // ---------- AUTO-GATHER + AUTO-ATTACK ----------
   // Both drive the SAME flags the desktop player sets by hand — player.facing, lmbHeld, keys.e —
@@ -550,6 +737,16 @@
     const mode=(player&&player.alive)?bigMode():"atk";
     const label=mode==="place"?"PLACE":mode==="fire"?"FIRE":mode==="charge"?"CHARGE":"ATTACK";
     if(bb.textContent!==label)bb.textContent=label;
+    // v124 THE DRAW RING. AIM latches (v121) so both thumbs stay free to steer; FIRE is the hold.
+    // The ring fills as the bow comes back, so the draw level is readable without looking away
+    // from the target — which is the whole reason it is on the button and not in the HUD.
+    const fill=(typeof drawFill==="function")?drawFill():0;
+    if(fill!==lastFill){
+      lastFill=fill;
+      bb.style.setProperty("--draw",(fill*360).toFixed(0)+"deg");
+      bb.classList.toggle("drawing",fill>0);
+      bb.classList.toggle("full",fill>=1);
+    }
     const blk=document.getElementById("tb-block");
     const bl=aimClass()?"AIM":"BLOCK";
     if(blk.textContent!==bl)blk.textContent=bl;
@@ -561,8 +758,22 @@
     const ph=!!placing;
     for(const id of ["tb-rot","tb-cancel"])
       document.getElementById(id).classList.toggle("hide",!ph);
-    document.getElementById("tb-e").classList.toggle("hide",ph);
+    syncCtx();   // v124: the rail re-reads what you can actually do
   }
+  // v124: the picker's escape hatch rides its own loop, because syncPad has already hidden every
+  // other control by the time a menu is open — which is exactly how "no way to close a build menu"
+  // survived three versions.
+  const pickClose=document.getElementById("tpickclose");
+  pickClose.addEventListener("touchend",e=>{
+    e.preventDefault();
+    if(typeof cancelPlacing==="function")cancelPlacing();
+    if(typeof closeMenus==="function")closeMenus();
+  },{passive:false});
+  (function syncPick(){
+    requestAnimationFrame(syncPick);
+    const open=(typeof menuOpen!=="undefined"&&!!menuOpen);
+    if(open!==syncPick.was){syncPick.was=open;pickClose.classList.toggle("on",open);}
+  })();
 
   // ---------- per-frame: integrate the look stick, report the frame rate ----------
   let fr=0,acc=0,worst=999,n=0;
@@ -580,11 +791,34 @@
     const fps=1/dt;
     if(dt<0.4&&fps<worst)worst=fps;
     if(acc>=500){
-      fpsEl.textContent=Math.round(fr/(acc/1000))+" fps (min "+Math.round(worst)+")"+(LOW?" low":" high");
+      const avg=fr/(acc/1000);
+      fpsEl.textContent=Math.round(avg)+" fps (min "+Math.round(worst)+")"+
+        (LOW?" low":" high")+(prStep?" ·"+PR_STEPS[prStep].toFixed(2):"");
       fr=0;acc=0;
       if(++n%20===0)worst=999;
+      stepPixelRatio(avg);
     }
   })();
+
+  // v124: give resolution back only when the frame rate genuinely asks. Two consecutive half-second
+  // windows under 45 fps step down; eight consecutive windows (4s) comfortably over 55 step back up.
+  // The asymmetry is deliberate — dropping should be quick, recovering should be slow, or the
+  // renderer oscillates every time you walk past a melee.
+  let prLow=0,prHigh=0;
+  function stepPixelRatio(avg){
+    if(!LOW)return;                       // ?gfx=high owns its own ratio
+    if(avg<45){ prHigh=0; if(++prLow>=2&&prStep<PR_STEPS.length-1){prLow=0;setPR(prStep+1);} }
+    else if(avg>55){ prLow=0; if(++prHigh>=8&&prStep>0){prHigh=0;setPR(prStep-1);} }
+    else { prLow=0; prHigh=0; }
+  }
+  function setPR(step){
+    prStep=step;
+    try{
+      renderer.setPixelRatio(Math.min(devicePixelRatio,PR_STEPS[step]));
+      fit(true);                          // setPixelRatio alone does not resize the backing store
+      console.log("[touch] pixel ratio ->",PR_STEPS[step]);
+    }catch(e){}
+  }
 
   // ---------- the controls yield to the menus ----------
   // Every menu and overlay is DOM. A stick held when one opens would leave the player walking
@@ -613,12 +847,49 @@
   // msg() trims to 6, which on a 1180-wide phone stage is a wall of text over the battlefield.
   // An observer trims to 3 without touching the shared msg() the desktop build relies on.
   const feedEl=document.getElementById("feed");
-  const FEED_MAX=3;
+  const FEED_MAX=2;   // v124: two, not three — the banner below carries anything that matters
+  // ---------- v124 THE BANNER ----------
+  // John: "fewer, but louder for the big ones." The feed is where routine chatter goes to be
+  // ignored; a king under attack or an age landing should not have to compete with it. msg() already
+  // classifies its own output — "warn" and "gold" are the two kinds the game reserves for things
+  // that change your decisions — so promote exactly those and leave msg() itself alone, which keeps
+  // the desktop build untouched.
+  const banner=document.getElementById("tbanner");
+  let bannerT=null;
+  function showBanner(text,warn){
+    banner.textContent=text;
+    banner.classList.toggle("warn",!!warn);
+    banner.classList.add("on");
+    clearTimeout(bannerT);
+    bannerT=setTimeout(()=>banner.classList.remove("on"),2600);
+  }
   if(feedEl&&typeof MutationObserver!=="undefined"){
     const trim=()=>{while(feedEl.children.length>FEED_MAX)feedEl.removeChild(feedEl.firstChild);};
-    new MutationObserver(trim).observe(feedEl,{childList:true});
+    new MutationObserver(muts=>{
+      for(const m of muts)for(const n of m.addedNodes){
+        if(!n.classList)continue;
+        if(n.classList.contains("warn")||n.classList.contains("gold"))
+          showBanner(n.textContent,n.classList.contains("warn"));
+      }
+      trim();
+    }).observe(feedEl,{childList:true});
     trim();
   }
+  // ---------- v124 the roster shows itself only when it changes ----------
+  const rosterEl=document.getElementById("roster");
+  if(rosterEl&&typeof MutationObserver!=="undefined"){
+    let rT=null;
+    new MutationObserver(()=>{
+      rosterEl.classList.add("tshow");
+      clearTimeout(rT);
+      rT=setTimeout(()=>rosterEl.classList.remove("tshow"),2800);
+    }).observe(rosterEl,{childList:true,characterData:true,subtree:true});
+  }
+  // ---------- v124 the map is behind a tap ----------
+  document.getElementById("tmap").addEventListener("touchend",e=>{
+    e.preventDefault();
+    document.documentElement.classList.toggle("tmapon");
+  },{passive:false});
 
   console.log("[touch] mobile active — gfx",LOW?"low":"high","rot",ROT?DIR:"none");
 })();

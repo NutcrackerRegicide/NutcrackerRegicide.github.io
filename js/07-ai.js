@@ -1,7 +1,29 @@
 /* REGICIDE PVP — 07-ai.js */
 // ---------- spawn the armies ----------
 const NAMES=["Aldric","Berta","Cedric","Dagny","Edmund","Freya","Godwin","Hilda","Ivo","Jorunn","Kettil","Leofric","Maren","Nils","Oswin","Petra","Quenna","Ragnar","Sigrid","Torvald","Una","Vidar","Wyn","Ysolde","Zorka"];
-function mkName(i){return NAMES[i%NAMES.length]+(i>=NAMES.length?" "+(Math.floor(i/NAMES.length)+1):"");}
+// ---------- v124 "ALEXANDER THE GREAT" ----------
+// John's format, and everyone on the field gets one — the kill feed reads properly now
+// ("Aldric the Bold slew Cassius the Vigilant") and the scoreboard looks like a roll of warriors
+// rather than a class register. Rolled once and FIXED for the match: an epithet that shifted as you
+// advanced would leave teammates tracking a name that no longer exists.
+//
+// The epithet is chosen by the SAME index as the name, not independently, so a given warrior is the
+// same warrior on every machine. That matters more than it looks: names ride the wire as strings on
+// join, but bots are named locally from their unit id on host AND guest, and two machines disagreeing
+// about who "Ragnar the Unbroken" is would show up in every kill message.
+const EPITHETS=["the Great","the Bold","the Unbroken","the Vigilant","the Grim","the Swift",
+  "the Stout","the Red","the Wanderer","the Younger","the Elder","the Fell","the Keen",
+  "the Quiet","the Wolf","the Hammer","the Proud","the Lucky","the Sly","the Iron",
+  "the Fearless","the Ready","the Stern","the Wise","the Bear","the Fair","the Hardy",
+  "the Long-Armed","the Black","the Steadfast"];
+function mkEpithet(i){return EPITHETS[i%EPITHETS.length];}
+function mkName(i){
+  const base=NAMES[i%NAMES.length];
+  // the pools are coprime-ish in length (25 names, 30 epithets), so the pairing does not repeat
+  // until 750 warriors — comfortably past a 100-unit field
+  const ep=EPITHETS[(i*7+Math.floor(i/NAMES.length))%EPITHETS.length];
+  return base+" "+ep;
+}
 function spawnTeam(team,count,nameOff){
   const tc=TCPOS[team];
   for(let i=0;i<count;i++){
@@ -1150,7 +1172,12 @@ function updateRoster(){
   let bv=0,bm=0,rv=0,rm=0;
   for(const u of units){
     if(!u.alive||u.isKing)continue;
-    if(u.team===BLUE){u.cls==="villager"?bv++:bm++;}else{u.cls==="villager"?rv++:rm++;}
+    // v124: there are THREE teams. The old two-way ternary sent every NEUTRAL creep — 24 live
+    // barbarians, wolves and vikings — into RED's column, and since no creep is a villager they
+    // all landed on RED's military count. John's field shots showed a constant 73-vs-49 gap that
+    // was exactly the wilds population. The wilds belong to nobody: count them for neither crown.
+    if(u.team===BLUE){u.cls==="villager"?bv++:bm++;}
+    else if(u.team===RED){u.cls==="villager"?rv++:rm++;}
   }
   document.getElementById("roster").innerHTML=
     "<span style='color:#3d6ef2'>■</span> ⛏ "+bv+" · ⚔ "+bm+" · "+AGES[teamAge[BLUE]].name.split(" ")[0].toUpperCase()+

@@ -68,9 +68,11 @@ function updatePlayer(dt){
   siegeAim=rmbHeld&&lobber&&player.alive&&!placing;
   aiming=rmbHeld&&!!player.ranged&&!lobber;
   document.getElementById("crosshair").classList.toggle("aim",aiming||siegeAim);
+  tickDraw(dt); // v124 THE DRAW — builds while primary is held, looses on release
   // movement (camera-relative; blocking slows you)
-  let mx=0,mz=0;
-  if(keys.w)mz-=1; if(keys.s)mz+=1; if(keys.a)mx-=1; if(keys.d)mx+=1;
+  const _mv=readMove();               // v124: one vector, keys or stick
+  let mx=_mv.mx, mz=_mv.mz;
+  const mag=_mv.mag;
   if(player.garrison){ // up in the tower: walk the deck, rain arrows from on high
     const gb=player.garrison;
     if(!gb.alive){
@@ -94,7 +96,8 @@ function updatePlayer(dt){
   }
   if(!player.garrison&&(mx||mz)){
     const dir=new THREE.Vector3(mx,0,mz).applyAxisAngle(new THREE.Vector3(0,1,0),camYaw);
-    moveUnit(player,dir.x,dir.z,dt*(player.blocking?0.55:1));
+    // moveUnit normalises the direction, so the analog deflection rides dt
+    moveUnit(player,dir.x,dir.z,dt*mag*(player.blocking?0.55:1));
   }
   if(player.cls==="priest")updatePriestChannel(dt,lmbHeld&&mouseLocked&&!placing&&!menuOpen);
   else if(((lmbHeld&&mouseLocked)||keys[" "])&&!placing)playerPrimary();
