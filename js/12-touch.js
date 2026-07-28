@@ -200,6 +200,9 @@
     '<div id="tgrid"><div class="tgwrap"><div class="tgtitle">ACTIONS</div><div class="tgrows"></div>'+
       '<div class="tgclose">CLOSE</div></div></div>'+
     '<div id="tauto"></div>'+
+    // v124.7: the draw ring on the FIRE button is under your thumb and behind your hand. John asked
+    // for it where he is already looking — directly above the unit panel.
+    '<div id="tdraw"><i></i><span></span></div>'+
     // v124: lives OUTSIDE #tbtns deliberately. syncPad hides the whole pad whenever a menu owns
     // the screen, and CANCEL only appears while placing — so until now the only way out of a build
     // menu on a phone was to pick something. Third instance of the same bug shape as the v118
@@ -322,7 +325,7 @@
   /* v124.6: the thumb zones stop at the strip. They sit at z-index 30 against the bar's 22, so
      without this a thumb aimed at the map or the fullscreen button would be swallowed by the
      camera stick instead — the same class of bug as the v117 pad over the start menu. */
-  .tzone{position:absolute;bottom:calc(var(--tbarh) + var(--sb));height:70%;pointer-events:auto}
+  .tzone{position:absolute;bottom:var(--tbarfull);height:70%;pointer-events:auto}
   #tzL{left:0;width:46%}
   #tzR{left:46%;width:36%}
   .tstick{position:absolute;left:0;top:0;display:none}
@@ -389,12 +392,31 @@
   /* v124: was bottom:78px, which sat straight on top of #playerhud's title — John's field shot
      had "gathering" printed across the word VILLAGER. #playerhud is bottom-anchored and centred
      too, so this has to clear its full scaled height (~62px) plus the safe-area inset. */
-  #tauto{position:absolute;left:50%;bottom:calc(var(--tbarh) + 68px + var(--sb));
+  #tauto{position:absolute;left:50%;bottom:calc(var(--tbarfull) + 68px);
     transform:translateX(-50%);padding:4px 12px;
     border-radius:3px;color:#fff;background:rgba(0,0,0,.42);font-size:12px;display:none}
+  /* THE DRAW BAR — sits directly above the unit panel, in the parchment language of the HUD */
+  #tdraw{position:absolute;left:50%;bottom:calc(var(--tbarfull) + 66px);
+    transform:translateX(-50%);width:232px;height:15px;display:none;align-items:center;
+    background:#5a4632;border:2px solid var(--ink);border-radius:3px;
+    box-shadow:0 2px 0 rgba(0,0,0,.45);overflow:hidden}
+  #tdraw.on{display:flex}
+  #tdraw>i{display:block;height:100%;width:0;background:#e0c23a;transition:width .06s linear}
+  #tdraw.full>i{background:#ff7a4a}
+  #tdraw>span{position:absolute;left:0;right:0;text-align:center;
+    font:bold 10px/1 "Trebuchet MS",sans-serif;letter-spacing:1px;color:#2b1d12}
+  /* below the minimum the bar reads as "this will not fire" rather than pretending it is charging */
+  #tdraw.weak>i{background:#8f8570}
   #tauto.on{display:block}
   /* HUD triage — every left/top anchored panel is pushed clear of the notch via --sl/--st */
-  #tstage{--sl:0px;--st:0px;--sr:0px;--sb:0px}
+  /* v124.7 BUG: --tbarfull was declared on .touch-mode (the <html> element) as
+     calc(var(--tbarh) + var(--sb)) — but --sb is declared HERE, on #tstage, a DESCENDANT. A custom
+     property on an ancestor cannot read one defined further down the tree: --sb resolved to nothing
+     on <html>, --tbarfull became invalid, and every calc() built on it silently fell back — which
+     put the picker's CLOSE button 46px BELOW the bottom of the screen. Both live on #tstage now,
+     beside the insets they depend on. */
+  #tstage{--sl:0px;--st:0px;--sr:0px;--sb:0px;
+    --tbarh:46px; --tbarfull:calc(var(--tbarh) + var(--sb))}
   /* ---------- v124 ONE STRIP ----------
      Four stacked panels down the left edge ate a quarter of a phone screen. Resources and the age
      bar are the only two you want CONSTANTLY, so they share one line; roster and carry are
@@ -416,12 +438,17 @@
      edge — the unit panel, the button rail, the automation caption, the picker's CLOSE and the two
      thumb zones — has to clear it, and the message feed swaps to the top where the strip used to
      be. --tbarh is the single number they all read, so the bar's height is changed in one place. */
-  .touch-mode{--tbarh:46px}
-  .touch-mode #tbar{position:absolute;left:var(--sl);right:var(--sr);bottom:var(--sb);top:auto;
-    z-index:22;display:flex;align-items:center;height:var(--tbarh);overflow:hidden;
+  /* v124.7: FLUSH. v124.6 sat the bar at bottom:var(--sb), which left the safe-area inset as a
+     visible strip of battlefield under it. The convention for an edge-anchored bar is the opposite:
+     the BACKGROUND runs to the physical edge and the inset becomes internal padding, so the bar
+     looks flush while its contents still clear the home indicator. --tbarfull is what everything
+     stacked above it now reads. */
+  .touch-mode #tbar{position:absolute;left:0;right:0;bottom:0;top:auto;
+    z-index:22;display:flex;align-items:center;overflow:hidden;
+    height:var(--tbarfull);padding:0 calc(4px + var(--sr)) var(--sb) calc(4px + var(--sl));
     background:var(--parch);border:0;border-top:3px solid var(--ink);border-radius:0;
     box-shadow:0 -3px 0 rgba(0,0,0,.35), inset 0 0 0 2px var(--parch2);
-    color:var(--ink);padding:0 4px}
+    color:var(--ink)}
   .touch-mode #tbar>*{position:static!important;transform:none!important;margin:0!important;
     display:flex!important;align-items:center;background:none!important;border:0!important;
     border-radius:0!important;box-shadow:none!important;padding:0 10px!important;
@@ -513,7 +540,7 @@
     transition:opacity .18s ease,transform .18s ease}
   #tbanner.on{opacity:1;transform:translateX(-50%) translateY(0)}
   .touch-mode.tmapon #minimapwrap{top:auto!important;
-    bottom:calc(var(--tbarh) + var(--sb) + 8px)!important;right:calc(10px + var(--sr))!important;
+    bottom:calc(var(--tbarfull) + 8px)!important;right:calc(10px + var(--sr))!important;
     transform-origin:bottom right!important}
   #tbanner.warn{background:rgba(150,58,44,.96);color:#ffe9df;border-color:#2b1d12}
   /* THE MAP — behind a tap. John's pick: maximum clear screen during a fight. */
@@ -527,9 +554,9 @@
   .touch-mode #objective{transform:scale(.8);transform-origin:top center;top:calc(74px + var(--st))}
   /* v124.6: everything bottom-anchored now sits above the strip */
   .touch-mode #playerhud{transform:translateX(-50%) scale(.78);
-    bottom:calc(var(--tbarh) + var(--sb) + 2px)}
+    bottom:calc(var(--tbarfull) + 2px)}
   .touch-mode #tbtns{right:calc(10px + var(--sr));
-    bottom:calc(var(--tbarh) + var(--sb) + 10px)}
+    bottom:calc(var(--tbarfull) + 10px)}
   /* THE FEED. v120 set a font-size on #feed, but .msg carries its own — so nothing changed and
      tutorial hints covered half the battlefield. Style the ENTRIES, cap the width, and clamp
      each one to two lines; the count is trimmed in JS below. */
@@ -611,7 +638,7 @@
   /* the escape hatch — see the note by #tpickclose in the markup */
   /* z-index 62: above the picker (52) AND above the scoreboard (55) and the grid (58). It is a
      direct child of #tstage now, so this number actually means something. */
-  #tpickclose{position:absolute;left:50%;bottom:calc(var(--tbarh) + var(--sb) + 12px);
+  #tpickclose{position:absolute;left:50%;bottom:calc(var(--tbarfull) + 12px);
     transform:translateX(-50%);
     display:none;z-index:62;padding:13px 30px;border-radius:5px;
     background:#c9b177;color:#2b1d12;border:2px solid #2b1d12;
@@ -714,14 +741,31 @@
   // steers: press to nock, slide to aim, lift to loose. One continuous gesture, which is how
   // twin-stick shooters have always done charge shots. The FIRE button still works for anyone who
   // reaches for it.
-  let stickDraw=false;
+  // v124.7: the v124.1 version armed the draw on ANY touch of the look zone, so John was loosing
+  // arrows every time he glanced around — "I am now firing arrows when I'm just trying to look."
+  // Two gates fix it without taking the gesture away:
+  //   ARM  — the thumb must rest for 200ms before the bow even starts coming back, so a flick to
+  //          look never begins a draw at all;
+  //   MIN  — releasing under a quarter draw CANCELS instead of firing. A slow camera pan crosses
+  //          the arm delay but nowhere near the minimum, so it still costs you no arrow.
+  // A tap on the FIRE button keeps looseing a weak shot: that press is unambiguous.
+  const DRAW_ARM=200, DRAW_MIN=0.25;
+  let stickDraw=false, stickDownAt=0, armTimer=null;
   function drawClass(){return typeof isDrawClass==="function"&&player&&isDrawClass(player.cls);}
   makeStick("tzR","tsR",(ux,uy)=>{
     lookX=ux;lookY=uy;
-    if(!stickDraw&&aiming&&drawClass()){stickDraw=true;}
+    if(!stickDraw&&!armTimer&&aiming&&drawClass()){
+      stickDownAt=performance.now();
+      armTimer=setTimeout(()=>{armTimer=null;if(aiming&&drawClass())stickDraw=true;},DRAW_ARM);
+    }
   },()=>{
     lookX=lookY=0;
-    if(stickDraw){stickDraw=false;}      // lifting the thumb looses it — tickDraw sees lmbHeld fall
+    if(armTimer){clearTimeout(armTimer);armTimer=null;}
+    if(stickDraw){
+      // under the minimum this was a look, not a shot — throw the charge away rather than loose it
+      if(player&&(player._drawT||0)/DRAW_FULL<DRAW_MIN)player._drawT=0;
+      stickDraw=false;                   // tickDraw sees lmbHeld fall and looses whatever is left
+    }
   });
 
   // ---------- the action pad ----------
@@ -978,6 +1022,21 @@
     // It feeds the SAME lmbHeld flag the button does, so tickDraw, the net packet and the host all
     // see one mechanism — there is no second code path for "drew with the stick".
     lmbHeld=manualAtk||autoFire||(stickDraw&&aiming&&drawClass());
+    // v124.7 THE HAUL. John: "when gathering, I can't see how many of each I have gathered, only
+    // when I'm full." The carry line lives in the bottom strip, which is the wrong place to watch
+    // while your eyes are on the tree — so the count rides the gathering caption itself.
+    if(m&&player&&player.carry){
+      const c=player.carry, cap=(typeof carryCap==="function")?carryCap(player):0;
+      const held=c.food+c.gold+c.stone+c.wood;
+      if(held>0){
+        const bits=[];
+        if(c.food) bits.push("🍖"+c.food);
+        if(c.gold) bits.push("🪙"+c.gold);
+        if(c.stone)bits.push("🪨"+c.stone);
+        if(c.wood) bits.push("🪵"+c.wood);
+        m+="  "+bits.join(" ")+(cap?"  ("+held+"/"+cap+")":"");
+      }
+    }
     if(m!==autoMsg){autoMsg=m;autoEl.textContent=m;autoEl.classList.toggle("on",!!m);}
     // the big button relabels itself for what it would actually do right now
     const bb=document.getElementById("tb-atk");
@@ -993,6 +1052,13 @@
       bb.style.setProperty("--draw",(fill*360).toFixed(0)+"deg");
       bb.classList.toggle("drawing",fill>0);
       bb.classList.toggle("full",fill>=1);
+      // v124.7: and the same number as a bar above the unit panel, where you are already looking
+      const dw=document.getElementById("tdraw");
+      dw.classList.toggle("on",fill>0);
+      dw.classList.toggle("full",fill>=1);
+      dw.classList.toggle("weak",fill>0&&fill<DRAW_MIN);
+      dw.firstChild.style.width=(fill*100).toFixed(0)+"%";
+      dw.lastChild.textContent=fill>=1?"FULL DRAW":(fill<DRAW_MIN?"…":Math.round(fill*100)+"%");
     }
     const blk=document.getElementById("tb-block");
     const bl=aimClass()?"AIM":"BLOCK";
@@ -1101,6 +1167,13 @@
   // classifies its own output — "warn" and "gold" are the two kinds the game reserves for things
   // that change your decisions — so promote exactly those and leave msg() itself alone, which keeps
   // the desktop build untouched.
+  // v124.7 WHAT EARNS THE MIDDLE OF THE SCREEN. v124 promoted every "warn" and "gold" line, and the
+  // AI's own scouting chatter is tagged gold — so "Red riders wheel toward their workers..." took
+  // over the centre of the battlefield every time a band changed its mind. John: "middle of screen
+  // should only be for most important messaging (when team or enemy ages up, when Vikings spawn)."
+  // An ALLOW-list, not a severity flag: severity is a property the sender chose for a feed line,
+  // and it turns out to be a poor proxy for "stop what you are doing and read this."
+  const BANNER_WORTHY=/\b(AGE|ERA|ADVANC|GRAND ARMY|VIKING|LONGSHIP|RAID LAND|KING IS BADLY WOUNDED|KING HAS FALLEN|REGICIDE|SLAIN THE|WAR IS WON)\b/i;
   const banner=document.getElementById("tbanner");
   let bannerT=null;
   function showBanner(text,warn){
@@ -1115,7 +1188,7 @@
     new MutationObserver(muts=>{
       for(const m of muts)for(const n of m.addedNodes){
         if(!n.classList)continue;
-        if(n.classList.contains("warn")||n.classList.contains("gold")){
+        if(BANNER_WORTHY.test(n.textContent||"")){
           showBanner(n.textContent,n.classList.contains("warn"));
           // v124.1: PROMOTED, not copied. v124 raised the line to the banner and left it in the
           // feed as well, so John read "Red riders wheel toward their workers..." twice on one

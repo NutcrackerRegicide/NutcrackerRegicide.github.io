@@ -489,10 +489,12 @@ const DEVICES=[
       // 2. a promoted line leaves the feed — it must not read twice on one screen
       const feed=document.getElementById("feed");
       feed.innerHTML="";
-      msg("Red riders wheel toward their workers...","gold");
+      // v124.7: use a line the ALLOW-list actually promotes. Routine AI chatter deliberately stays
+      // in the feed now, so testing the move with "Red riders wheel toward..." tested the old rule.
+      msg("⚑ Blue advances to the BRONZE AGE!","gold");
       await wait(260);
       const noDup=feed.children.length===0&&
-        /Red riders/.test(document.getElementById("tbanner").textContent);
+        /BRONZE/.test(document.getElementById("tbanner").textContent);
       // 3. the picker's CLOSE must be the TOPMOST thing at its own centre. It shipped inside
       //    #touchpad (z-index:30 => its own stacking context) so its z-index:57 could not climb
       //    past the menu's 52 — it rendered underneath and John could not leave the build menu.
@@ -569,7 +571,9 @@ const DEVICES=[
       const btnB=bx(document.getElementById("tbtns"));
       const feedB=bx(document.getElementById("feed"));
       const zLB=bx(document.getElementById("tzL"));
-      const atBottom=barB[1]+barB[3]>=stg.offsetHeight-4;
+      // v124.7: FLUSH to the physical edge, not to the safe-area inset — the inset is padding
+      // inside the bar now, so no strip of battlefield shows under it
+      const atBottom=barB[1]+barB[3]>=stg.offsetHeight-1;
       const stacked=hudB[1]+hudB[3]<=barB[1]+2&&btnB[1]+btnB[3]<=barB[1]+2;
       const feedTop=feedB[1]<stg.offsetHeight*0.35;
       // the thumb zones sit at z-index 30 against the bar's 22 — without a stop they would swallow
@@ -588,6 +592,7 @@ const DEVICES=[
       updateAgeHud(); await wait(60);
       const mineTicking=document.getElementById("agebar").textContent;
       ageResT[MYTEAM]=0; ageResT[foeTeam]=0; updateAgeHud();
+
       const ageOK=quiet===foeTicking&&                       // no enemy timer, ever
         !/\d+s/.test(quiet)&&/42s/.test(mineTicking)&&       // mine ticks, and only mine
         /BRONZE/.test(quiet)&&/IRON/.test(quiet)&&           // both ages named
@@ -599,6 +604,7 @@ const DEVICES=[
         kingsIn,kingsInside,topClean,barOnStage,topBoxes,
         hp0,hp1,hurt,refilled,glyphs,noBar,clipped,
         atBottom,stacked,feedTop,zoneClears,ageOK,quiet,mineTicking,
+
         shot:player.atkT>0,reset:player._drawT||0};
     });
     check(dev.name+": v124.1 HUD — resources, age, roster and carry are ONE strip on one row",
@@ -619,6 +625,65 @@ const DEVICES=[
       "strip so its buttons stay tappable",v1241.feedTop&&v1241.zoneClears);
     check(dev.name+": v124.6 age — your age, their age, and only YOUR countdown (\""+
       v1241.quiet+"\" -> \""+v1241.mineTicking+"\")",v1241.ageOK);
+    // ---- v124.7 — its OWN evaluate. Sharing one page.evaluate with the checks above meant this
+    // block inherited whatever they left behind (an AIM latch already on, a banner already showing,
+    // a player standing on the town centre) and three unrelated checks started failing for reasons
+    // that had nothing to do with the code under test. Isolated setup, isolated teardown.
+    const v1247=await page.evaluate(async()=>{
+      const T=(el,x,y,id)=>new Touch({identifier:id,target:el,clientX:x,clientY:y});
+      const fire=(el,t,tt)=>el.dispatchEvent(new TouchEvent(t,
+        {bubbles:true,cancelable:true,touches:tt,targetTouches:tt,changedTouches:tt}));
+      const wait=ms=>new Promise(r=>setTimeout(r,ms));
+      closeMenus(); cancelPlacing(); await wait(250);
+      // the banner is an ALLOW-list; the haul rides the caption; the draw demands intent
+      const feedEl2=document.getElementById("feed"), bnEl=document.getElementById("tbanner");
+      feedEl2.innerHTML=""; bnEl.classList.remove("on");
+      msg("Red riders wheel toward their workers...","gold"); await wait(200);
+      const chatterQuiet=!bnEl.classList.contains("on")&&feedEl2.children.length===1;
+      msg("⚑ Blue advances to the BRONZE AGE!","gold"); await wait(200);
+      const bigLoud=bnEl.classList.contains("on");
+      // the gathering caption must carry the count. Stand AWAY from the town centre or the haul is
+      // banked the instant it exists — that cost a debugging cycle.
+      setClass(player,"villager");
+      player.root.position.x=0; player.root.position.z=100;
+      player.carry.wood=17; player.carry.food=3;
+      player.gathering={amount:99,type:"wood",x:player.root.position.x,z:player.root.position.z};
+      await wait(360);
+      const cap=document.getElementById("tauto").textContent;
+      const haulShown=/17/.test(cap)&&/3/.test(cap)&&/20\)/.test(cap);
+      player.gathering=null; player.carry.wood=0; player.carry.food=0;
+      // a FLICK of the look stick must not loose an arrow; a real hold must
+      setClass(player,"archer"); player.atkT=0; player._drawT=0;
+      const blkEl=document.getElementById("tb-block");
+      // AIM is a LATCH (v121), so tapping it blindly turns it OFF when an earlier check left it on
+      // — which silently made every draw below fire nothing. Assert the state, don't toggle it.
+      for(let i=0;i<3&&!aiming;i++){
+        fire(blkEl,"touchstart",[T(blkEl,0,0,80+i)]); fire(blkEl,"touchend",[T(blkEl,0,0,80+i)]);
+        await wait(200);
+      }
+      const zr=document.getElementById("tzR"), zb=zr.getBoundingClientRect();
+      const zx=zb.left+zb.width*0.5, zy=zb.top+zb.height*0.5;
+      const drive=async(id,holdMs,steps)=>{
+        player.atkT=0; player._drawT=0;
+        fire(zr,"touchstart",[T(zr,zx,zy,id)]); await wait(holdMs);
+        for(let i=1;i<=steps;i++){fire(zr,"touchmove",[T(zr,zx+i*6,zy,id)]); await wait(110);}
+        const barOn=document.getElementById("tdraw").classList.contains("on");
+        fire(zr,"touchend",[T(zr,zx+steps*6,zy,id)]); await wait(320);
+        return {fired:player.atkT>0,barOn};
+      };
+      const flick=await drive(81,60,1);      // inside the arm delay
+      const pan=await drive(82,240,1);       // armed, but nowhere near the minimum
+      const real=await drive(83,250,7);      // a genuine draw
+      const drawSane=!flick.fired&&!pan.fired&&real.fired&&real.barOn;
+      return {chatterQuiet,bigLoud,haulShown,cap,drawSane,
+        flickFired:flick.fired,panFired:pan.fired,realFired:real.fired};
+    });
+    check(dev.name+": v124.7 banner — AI chatter stays in the feed, an age-up takes the centre",
+      v1247.chatterQuiet&&v1247.bigLoud);
+    check(dev.name+": v124.7 haul — the gathering caption carries the count (\""+
+      v1247.cap+"\")",v1247.haulShown);
+    check(dev.name+": v124.7 draw — a flick ("+v1247.flickFired+") and a slow pan ("+
+      v1247.panFired+") loose NOTHING; a real draw ("+v1247.realFired+") does",v1247.drawSane);
     check(dev.name+": v124.2 HUD — nothing in the top band overlaps: bar, read-out and map button "+
       JSON.stringify(v1241.topBoxes),v1241.topClean&&v1241.barOnStage);
     check(dev.name+": v124.1 picker — CLOSE is the topmost element at its own centre and escapes ("+
