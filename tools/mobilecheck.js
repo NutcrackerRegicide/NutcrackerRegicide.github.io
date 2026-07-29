@@ -446,12 +446,21 @@ const DEVICES=[
       const mapHidden=getComputedStyle(document.getElementById("minimapwrap")).display==="none";
       const mb=document.getElementById("tmap");
       fire(mb,"touchend",[T(mb,0,0,61)]); await wait(220);
-      const mapShown=getComputedStyle(document.getElementById("minimapwrap")).display!=="none";
+      const mapEl2=document.getElementById("minimapwrap");
+      const mapShown=getComputedStyle(mapEl2).display!=="none";
+      // v124.8: and it must open TOP-RIGHT, clear of the button rail — v124.6 dropped it straight
+      // under ATTACK, the one place a thumb is guaranteed to be
+      const mmB=[mapEl2.offsetLeft,mapEl2.offsetTop,mapEl2.offsetWidth,mapEl2.offsetHeight];
+      const railEl=document.getElementById("tbtns");
+      const railB=[railEl.offsetLeft,railEl.offsetTop,railEl.offsetWidth,railEl.offsetHeight];
+      const mapClear=mmB[1]<130&&(mmB[0]+mmB[2]<=railB[0]||railB[0]+railB[2]<=mmB[0]||
+        mmB[1]+mmB[3]<=railB[1]||railB[1]+railB[3]<=mmB[1]);
+      const mapDbg=JSON.stringify({mmB,railB});
       fire(mb,"touchend",[T(mb,0,0,62)]); await wait(160);
       // the banner promotes a warn line out of the feed
       msg("⚠ YOUR KING IS BADLY WOUNDED","warn"); await wait(240);
       const bn=document.getElementById("tbanner");
-      return {poor,rich,capped,core,closeShown,closed,tileH,sameLine,mapHidden,mapShown,
+      return {poor,rich,capped,core,closeShown,closed,tileH,sameLine,mapHidden,mapShown,mapClear,mapDbg,
         banner:bn.classList.contains("on"),feed:document.getElementById("feed").children.length};
     });
     check(dev.name+": v124 rail — AGE UP appears ONLY when the team can pay ("+
@@ -568,7 +577,8 @@ const DEVICES=[
       // ---- v124.6: the strip moved to the BOTTOM and the feed to the TOP ----
       const stg=document.getElementById("tstage");
       const hudB=bx(document.getElementById("playerhud"));
-      const btnB=bx(document.getElementById("tbtns"));
+      const btnsEl=document.getElementById("tbtns");
+      const btnB=bx(btnsEl);
       const feedB=bx(document.getElementById("feed"));
       const zLB=bx(document.getElementById("tzL"));
       // v124.7: FLUSH to the physical edge, not to the safe-area inset — the inset is padding
@@ -604,6 +614,7 @@ const DEVICES=[
         kingsIn,kingsInside,topClean,barOnStage,topBoxes,
         hp0,hp1,hurt,refilled,glyphs,noBar,clipped,
         atBottom,stacked,feedTop,zoneClears,ageOK,quiet,mineTicking,
+        barH:bar.offsetHeight,
 
         shot:player.atkT>0,reset:player._drawT||0};
     });
@@ -623,6 +634,8 @@ const DEVICES=[
       "stacked above it",v1241.atBottom&&v1241.stacked);
     check(dev.name+": v124.6 layout — the feed moved to the top, and the thumb zones stop at the "+
       "strip so its buttons stay tappable",v1241.feedTop&&v1241.zoneClears);
+    check(dev.name+": v124.8 layout — the strip is slim ("+v1241.barH+"px) and the map opens "+
+      "top-right, clear of the button rail "+v124.mapDbg,v1241.barH<=40&&v124.mapClear);
     check(dev.name+": v124.6 age — your age, their age, and only YOUR countdown (\""+
       v1241.quiet+"\" -> \""+v1241.mineTicking+"\")",v1241.ageOK);
     // ---- v124.7 — its OWN evaluate. Sharing one page.evaluate with the checks above meant this
@@ -650,7 +663,9 @@ const DEVICES=[
       player.gathering={amount:99,type:"wood",x:player.root.position.x,z:player.root.position.z};
       await wait(360);
       const cap=document.getElementById("tauto").textContent;
-      const haulShown=/17/.test(cap)&&/3/.test(cap)&&/20\)/.test(cap);
+      // v124.8: one resource reads "icon count/cap" with no repeated number; several fall back to
+      // per-icon counts plus a single running total
+      const haulShown=/🪵\s*17/.test(cap)&&/3/.test(cap)&&/20\/20/.test(cap)&&!/\(20/.test(cap);
       player.gathering=null; player.carry.wood=0; player.carry.food=0;
       // a FLICK of the look stick must not loose an arrow; a real hold must
       setClass(player,"archer"); player.atkT=0; player._drawT=0;

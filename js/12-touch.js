@@ -300,9 +300,24 @@
         }
       }
     }
+    // v124.8: the age line was still showing the DESKTOP copy until the first age event. 09-main
+    // calls updateAgeHud() during init — and 12-touch loads AFTER it, so "touch-mode" was not on
+    // <html> yet and the desktop branch won. Re-render once now, and again whenever the ages or
+    // your countdown actually change (the countdown ticks every second while advancing, and
+    // nothing else was refreshing it between age-ups).
+    let ageSig="";
+    function tickAgeLine(){
+      if(typeof teamAge==="undefined"||typeof updateAgeHud!=="function")return;
+      const foe=(MYTEAM===BLUE)?RED:BLUE;
+      const sig=teamAge[MYTEAM]+"/"+teamAge[foe]+"/"+Math.ceil(Math.max(0,ageResT[MYTEAM]||0));
+      if(sig===ageSig)return;
+      ageSig=sig;
+      try{updateAgeHud();}catch(e){}
+    }
     (function tickBar(){
       requestAnimationFrame(tickBar);
       drainCrowns();
+      tickAgeLine();
       if(carry)carry.classList.toggle("thidden",getComputedStyle(carry).display==="none"||
         !(typeof player!=="undefined"&&player&&player.carry&&
           (player.carry.food+player.carry.gold+player.carry.stone+player.carry.wood)>0));
@@ -416,7 +431,7 @@
      put the picker's CLOSE button 46px BELOW the bottom of the screen. Both live on #tstage now,
      beside the insets they depend on. */
   #tstage{--sl:0px;--st:0px;--sr:0px;--sb:0px;
-    --tbarh:46px; --tbarfull:calc(var(--tbarh) + var(--sb))}
+    --tbarh:34px; --tbarfull:calc(var(--tbarh) + var(--sb))}
   /* ---------- v124 ONE STRIP ----------
      Four stacked panels down the left edge ate a quarter of a phone screen. Resources and the age
      bar are the only two you want CONSTANTLY, so they share one line; roster and carry are
@@ -452,7 +467,7 @@
   .touch-mode #tbar>*{position:static!important;transform:none!important;margin:0!important;
     display:flex!important;align-items:center;background:none!important;border:0!important;
     border-radius:0!important;box-shadow:none!important;padding:0 10px!important;
-    white-space:nowrap;font-size:13px!important;line-height:1!important;max-width:none!important;
+    white-space:nowrap;font-size:12px!important;line-height:1!important;max-width:none!important;
     color:var(--ink)!important;opacity:1;transition:none;height:100%}
   .touch-mode #tbar>*+*{border-left:1px solid rgba(43,29,18,.22)!important}
   /* v124.2 PRIORITY INSIDE THE STRIP. The bar is capped so it never reaches the fps read-out, and
@@ -464,8 +479,8 @@
   .touch-mode #tbar #kings    {order:1;flex:0 0 auto}
   .touch-mode #tbar #agebar   {order:2;flex:0 0 auto;min-width:0;overflow:hidden;
     text-overflow:ellipsis;gap:7px}
-  .touch-mode #tbar .agemine{font-size:13px;letter-spacing:.5px}
-  .touch-mode #tbar .agefoe {font-size:13px;letter-spacing:.5px;color:#8a3a30}
+  .touch-mode #tbar .agemine{font-size:12px;letter-spacing:.5px}
+  .touch-mode #tbar .agefoe {font-size:12px;letter-spacing:.5px;color:#8a3a30}
   .touch-mode #tbar .agevs  {font-size:10px;opacity:.5;letter-spacing:1px}
   .touch-mode #tbar .agecd  {font-size:12px;font-weight:bold;color:#8a6a12;
     background:rgba(224,169,46,.22);padding:3px 6px;border-radius:3px}
@@ -480,7 +495,7 @@
   .touch-mode #tbar #tflip,.touch-mode #tbar #tfull{background:rgba(43,29,18,.10)!important;
     color:var(--ink)!important;padding:5px 8px!important;border-radius:3px;font-size:14px}
   .touch-mode #tbar #tmap{width:auto!important;height:auto!important;border:0!important;
-    background:none!important;color:var(--ink)!important;font-size:22px!important;
+    background:none!important;color:var(--ink)!important;font-size:19px!important;
     padding:0 8px!important}
   .touch-mode #tbar #agebar,.touch-mode #tbar #roster{font-size:11px!important}
   .touch-mode #tbar #carry{color:#e6c86a}
@@ -502,7 +517,7 @@
      Done with background-clip:text: the gradient is painted through the glyph's own shape, so the
      "sand" drains along the crown's silhouette rather than down a rectangle. --hp is written per
      frame in JS below. */
-  .touch-mode #tbar .kingbox .lbl{font-size:34px!important;margin:0!important;
+  .touch-mode #tbar .kingbox .lbl{font-size:25px!important;margin:0!important;
     line-height:1!important;letter-spacing:0!important;
     --hp:100%; --col:#6f86d6;
     /* the "spent" half is a light stone grey now that the bar is parchment — on the old dark bar
@@ -514,7 +529,7 @@
     color:transparent!important;-webkit-text-fill-color:transparent;
     filter:drop-shadow(0 1px 0 rgba(43,29,18,.55))}
   /* the number, in the king's own colour — John: "blue font next to blue king crown would say 50%" */
-  .touch-mode #tbar .kpct{font:bold 14px/1 "Trebuchet MS",sans-serif;letter-spacing:.5px;
+  .touch-mode #tbar .kpct{font:bold 12px/1 "Trebuchet MS",sans-serif;letter-spacing:.5px;
     min-width:38px;text-align:left}
   .touch-mode #tbar #kb0 .kpct{color:#2f57c9}
   .touch-mode #tbar #kb1 .kpct{color:#b4291b}
@@ -539,9 +554,7 @@
     font:bold 14px/1.25 "Trebuchet MS",sans-serif;
     transition:opacity .18s ease,transform .18s ease}
   #tbanner.on{opacity:1;transform:translateX(-50%) translateY(0)}
-  .touch-mode.tmapon #minimapwrap{top:auto!important;
-    bottom:calc(var(--tbarfull) + 8px)!important;right:calc(10px + var(--sr))!important;
-    transform-origin:bottom right!important}
+
   #tbanner.warn{background:rgba(150,58,44,.96);color:#ffe9df;border-color:#2b1d12}
   /* THE MAP — behind a tap. John's pick: maximum clear screen during a fight. */
   #tmap{position:absolute;z-index:31;right:calc(10px + var(--sr));top:calc(8px + var(--st));
@@ -549,8 +562,12 @@
     align-items:center;justify-content:center;font-size:20px;
     background:rgba(20,24,20,.55);border:2px solid rgba(255,255,255,.55);color:#fff}
   .touch-mode #minimapwrap{display:none}
+  /* v124.8: the map opens TOP-RIGHT. v124.6 moved it to the bottom to sit near its button when the
+     strip went down there — and put it straight under the ATTACK button, which is the one place on
+     the screen a thumb is guaranteed to be. The button can live at the bottom; the map it opens
+     should not. */
   .touch-mode.tmapon #minimapwrap{display:block;transform:scale(.92);transform-origin:top right;
-    right:calc(62px + var(--sr));top:calc(8px + var(--st))}
+    right:calc(10px + var(--sr));top:calc(10px + var(--st));bottom:auto!important;z-index:26}
   .touch-mode #objective{transform:scale(.8);transform-origin:top center;top:calc(74px + var(--st))}
   /* v124.6: everything bottom-anchored now sits above the strip */
   .touch-mode #playerhud{transform:translateX(-50%) scale(.78);
@@ -1029,12 +1046,17 @@
       const c=player.carry, cap=(typeof carryCap==="function")?carryCap(player):0;
       const held=c.food+c.gold+c.stone+c.wood;
       if(held>0){
+        // v124.8: "🪵68 (68/300)" said the same number twice. Carrying ONE thing — which is almost
+        // always — reads as icon + count-of-capacity and nothing else. The running total only earns
+        // its place when there are several kinds in the satchel and no single count is the answer.
         const bits=[];
-        if(c.food) bits.push("🍖"+c.food);
-        if(c.gold) bits.push("🪙"+c.gold);
-        if(c.stone)bits.push("🪨"+c.stone);
-        if(c.wood) bits.push("🪵"+c.wood);
-        m+="  "+bits.join(" ")+(cap?"  ("+held+"/"+cap+")":"");
+        if(c.food) bits.push(["🍖",c.food]);
+        if(c.gold) bits.push(["🪙",c.gold]);
+        if(c.stone)bits.push(["🪨",c.stone]);
+        if(c.wood) bits.push(["🪵",c.wood]);
+        m+="  "+(bits.length===1
+          ? bits[0][0]+" "+bits[0][1]+(cap?"/"+cap:"")
+          : bits.map(b=>b[0]+b[1]).join(" ")+(cap?"  "+held+"/"+cap:""));
       }
     }
     if(m!==autoMsg){autoMsg=m;autoEl.textContent=m;autoEl.classList.toggle("on",!!m);}
