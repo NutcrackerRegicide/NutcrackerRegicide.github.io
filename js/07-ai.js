@@ -1179,6 +1179,19 @@ function updateRoster(){
     if(u.team===BLUE){u.cls==="villager"?bv++:bm++;}
     else if(u.team===RED){u.cls==="villager"?rv++:rm++;}
   }
+  // v124.9: on a phone this line shows YOUR team only. Two reasons, and the second is the real one:
+  // the age was already spelled out in its own segment two boxes to the left, and knowing the
+  // enemy's exact villager/soldier split is information a player should have to SCOUT for. The
+  // desktop line still shows both — same argument applies there, but that is a balance change
+  // rather than a layout one, so it is John's call to make separately.
+  if(typeof document!=="undefined"&&document.documentElement&&
+     document.documentElement.classList.contains("touch-mode")){
+    const mv=(MYTEAM===BLUE)?bv:rv, mm=(MYTEAM===BLUE)?bm:rm;
+    const col=(MYTEAM===BLUE)?"#2f57c9":"#b4291b";
+    document.getElementById("roster").innerHTML=
+      "<span style='color:"+col+"'>■</span> ⛏ "+mv+" · ⚔ "+mm;
+    return;
+  }
   document.getElementById("roster").innerHTML=
     "<span style='color:#3d6ef2'>■</span> ⛏ "+bv+" · ⚔ "+bm+" · "+AGES[teamAge[BLUE]].name.split(" ")[0].toUpperCase()+
     " &nbsp;&nbsp;<span style='color:#d94a3d'>■</span> ⛏ "+rv+" · ⚔ "+rm+" · "+AGES[teamAge[RED]].name.split(" ")[0].toUpperCase();

@@ -236,10 +236,29 @@
     // rather than beside it.
     // v124.4: the read-out and the map button come INSIDE the bar too. They were the last two
     // things floating in the top band, which is what kept producing collisions with it.
-    for(const id of ["resources","agebar","roster","carry","kings","ttop","tmap"]){
-      const el=document.getElementById(id);
-      if(el)bar.appendChild(el);
+    // v124.9: the unit panel joins the strip too — one bar, not a bar with a box floating over it.
+    // v124.10: and it must sit DEAD CENTRE. Auto margins centre a flex item in the LEFTOVER space,
+    // which drifts every time a transient segment (roster, carry) appears or goes — the panel slid
+    // 66px right the moment the roster hid itself. Two wrapper groups of equal flex weight put it
+    // on the true centre line and hold it there whatever else is showing.
+    const gL=document.createElement("div"), gR=document.createElement("div");
+    gL.id="tbarL"; gR.id="tbarR";
+    bar.appendChild(gL);
+    const hud=document.getElementById("playerhud");
+    if(hud)bar.appendChild(hud);
+    bar.appendChild(gR);
+    for(const id of ["resources","kings"]){
+      const el=document.getElementById(id); if(el)gL.appendChild(el);
     }
+    // carry is deliberately NOT here: v124.7 put the haul on the gathering caption, where your eyes
+    // already are, so a second copy in the strip is just width spent on "Carrying: —".
+    for(const id of ["agebar","roster","ttop","tmap"]){
+      const el=document.getElementById(id); if(el)gR.appendChild(el);
+    }
+    // ...and the frame counter leaves it for the top centre, as plain lettering. It is a developer
+    // read-out, not a control: it does not need a box, and it was the widest thing in the strip.
+    const fps=document.getElementById("tfps");
+    if(fps)stage.appendChild(fps);
     // v124.2: "♔ KING OSRIC (YOUR KING)" is 210px of text that says the same thing every match.
     // Compress to the crown alone and carry the ONE bit that matters — whose king it is — in its
     // colour. Done with an observer rather than a one-off rewrite because 10-net relabels both
@@ -265,7 +284,6 @@
       shorten();
     }
     // carry and the roster only earn their segment when they have something to say
-    const carry=document.getElementById("carry");
     const roster=document.getElementById("roster");
     let rHot=0;
     if(roster&&typeof MutationObserver!=="undefined")
@@ -318,9 +336,6 @@
       requestAnimationFrame(tickBar);
       drainCrowns();
       tickAgeLine();
-      if(carry)carry.classList.toggle("thidden",getComputedStyle(carry).display==="none"||
-        !(typeof player!=="undefined"&&player&&player.carry&&
-          (player.carry.food+player.carry.gold+player.carry.stone+player.carry.wood)>0));
       if(roster)roster.classList.toggle("thidden",performance.now()-rHot>4000);
     })();
   })();
@@ -407,11 +422,11 @@
   /* v124: was bottom:78px, which sat straight on top of #playerhud's title — John's field shot
      had "gathering" printed across the word VILLAGER. #playerhud is bottom-anchored and centred
      too, so this has to clear its full scaled height (~62px) plus the safe-area inset. */
-  #tauto{position:absolute;left:50%;bottom:calc(var(--tbarfull) + 68px);
+  #tauto{position:absolute;left:50%;bottom:calc(var(--tbarfull) + 34px);
     transform:translateX(-50%);padding:4px 12px;
     border-radius:3px;color:#fff;background:rgba(0,0,0,.42);font-size:12px;display:none}
   /* THE DRAW BAR — sits directly above the unit panel, in the parchment language of the HUD */
-  #tdraw{position:absolute;left:50%;bottom:calc(var(--tbarfull) + 66px);
+  #tdraw{position:absolute;left:50%;bottom:calc(var(--tbarfull) + 10px);
     transform:translateX(-50%);width:232px;height:15px;display:none;align-items:center;
     background:#5a4632;border:2px solid var(--ink);border-radius:3px;
     box-shadow:0 2px 0 rgba(0,0,0,.45);overflow:hidden}
@@ -464,42 +479,66 @@
     background:var(--parch);border:0;border-top:3px solid var(--ink);border-radius:0;
     box-shadow:0 -3px 0 rgba(0,0,0,.35), inset 0 0 0 2px var(--parch2);
     color:var(--ink)}
-  .touch-mode #tbar>*{position:static!important;transform:none!important;margin:0!important;
+  .touch-mode #tbar>*,.touch-mode #tbarL>*,.touch-mode #tbarR>*{position:static!important;transform:none!important;margin:0!important;
     display:flex!important;align-items:center;background:none!important;border:0!important;
     border-radius:0!important;box-shadow:none!important;padding:0 10px!important;
     white-space:nowrap;font-size:12px!important;line-height:1!important;max-width:none!important;
     color:var(--ink)!important;opacity:1;transition:none;height:100%}
-  .touch-mode #tbar>*+*{border-left:1px solid rgba(43,29,18,.22)!important}
+  /* dividers go BETWEEN segments inside each group, not between the three top-level boxes */
+  .touch-mode #tbarL>*+*,.touch-mode #tbarR>*+*{
+    border-left:1px solid rgba(43,29,18,.22)!important}
+  .touch-mode #tbar>#playerhud{border-left:1px solid rgba(43,29,18,.22)!important;
+    border-right:1px solid rgba(43,29,18,.22)!important}
+  /* equal flex weight either side => the unit panel lands on the true centre line */
+  .touch-mode #tbarL,.touch-mode #tbarR{display:flex;align-items:center;height:100%;
+    flex:1 1 0;min-width:0;overflow:hidden}
+  .touch-mode #tbarR{justify-content:flex-end}
   /* v124.2 PRIORITY INSIDE THE STRIP. The bar is capped so it never reaches the fps read-out, and
      when the transient segments (roster, carry) appear the total exceeds that cap. Whatever gets
      clipped must be the LEAST important thing, not whatever happens to be last in the DOM — the
      first version clipped the king health bars, which are the whole objective of the game.
      Resources and the kings hold their size; the age bar and the transients give way. */
+  /* v124.9 THE UNIT PANEL, IN THE STRIP. Class name and a slim health bar; the key hints go —
+     "E gather · B build · Space attack" is desktop copy and there is no keyboard here. */
+  /* v124.10: CENTRED in the strip, not jammed against the left edge — it lived in the middle of
+     the screen for every version before this one and that is where the eye goes for it. Auto
+     margins on both sides split the strip's free space evenly around it, which centres it without
+     taking it out of the flow (absolute positioning would have let it ride over its neighbours the
+     moment a segment grew). For that to work nothing else may claim the slack, hence agebar losing
+     its flex-grow below. */
+  .touch-mode #tbar #playerhud{flex:0 0 auto;min-width:118px;gap:7px}
+  .touch-mode #tbar #playerhud #ptip{display:none!important}
+  .touch-mode #tbar #playerhud #pclass{font-size:11px!important;font-weight:bold;letter-spacing:.5px}
+  .touch-mode #tbar #playerhud .bar{width:56px;height:9px!important;border-width:1px!important;
+    border-radius:2px!important;background:#5a4632}
+  /* the frame counter: top centre, no box, deliberately faint */
+  .touch-mode #tfps{position:absolute;left:50%;top:calc(4px + var(--st));transform:translateX(-50%);
+    z-index:21;background:none!important;padding:0!important;pointer-events:none;
+    font:600 11px/1 ui-monospace,monospace!important;color:#f2ead4;opacity:.5;
+    text-shadow:0 1px 2px rgba(0,0,0,.7)}
   .touch-mode #tbar #resources{order:0;flex:0 0 auto}
   .touch-mode #tbar #kings    {order:1;flex:0 0 auto}
-  .touch-mode #tbar #agebar   {order:2;flex:0 0 auto;min-width:0;overflow:hidden;
+  .touch-mode #tbar #agebar   {order:3;flex:0 1 auto;min-width:0;overflow:hidden;
     text-overflow:ellipsis;gap:7px}
   .touch-mode #tbar .agemine{font-size:12px;letter-spacing:.5px}
   .touch-mode #tbar .agefoe {font-size:12px;letter-spacing:.5px;color:#8a3a30}
   .touch-mode #tbar .agevs  {font-size:10px;opacity:.5;letter-spacing:1px}
   .touch-mode #tbar .agecd  {font-size:12px;font-weight:bold;color:#8a6a12;
     background:rgba(224,169,46,.22);padding:3px 6px;border-radius:3px}
-  .touch-mode #tbar #roster   {order:3;flex:0 1 auto;min-width:0;overflow:hidden}
-  .touch-mode #tbar #carry    {order:4;flex:0 1 auto;min-width:0;overflow:hidden}
+  .touch-mode #tbar #roster   {order:4;flex:0 1 auto;min-width:0;overflow:hidden}
   /* the read-out and the map ride at the far right INSIDE the bar — margin-left:auto is what
      pushes them there, and it is why nothing can collide with them any more */
-  .touch-mode #tbar #ttop     {order:5;flex:0 0 auto;margin-left:auto!important;gap:8px}
-  .touch-mode #tbar #tmap     {order:6;flex:0 0 auto}
-  .touch-mode #tbar #tfps{background:none!important;color:var(--ink)!important;
-    font:600 11px/1 ui-monospace,monospace!important;padding:0!important;opacity:.62}
+  .touch-mode #tbar #ttop     {order:6;flex:0 0 auto;gap:8px}
+  .touch-mode #tbar #tmap     {order:7;flex:0 0 auto}
   .touch-mode #tbar #tflip,.touch-mode #tbar #tfull{background:rgba(43,29,18,.10)!important;
     color:var(--ink)!important;padding:5px 8px!important;border-radius:3px;font-size:14px}
   .touch-mode #tbar #tmap{width:auto!important;height:auto!important;border:0!important;
     background:none!important;color:var(--ink)!important;font-size:19px!important;
     padding:0 8px!important}
   .touch-mode #tbar #agebar,.touch-mode #tbar #roster{font-size:11px!important}
-  .touch-mode #tbar #carry{color:#e6c86a}
-  .touch-mode #tbar>.thidden{display:none!important}
+  /* v124.10: was "#tbar>.thidden" — the segments are one level deeper now that the balance groups
+     exist, so the hide silently stopped applying and an empty "Carrying: —" sat in the strip. */
+  .touch-mode #tbar .thidden{display:none!important}
   /* v124.2 THE KINGS, in the bar. Full-width titles ("KING OSRIC (YOUR KING)") cost 210px each and
      say the same thing every match — the crown, the colour and the bar carry all of it. */
   .touch-mode #tbar #kings{gap:8px!important;padding:0 10px!important}
@@ -570,8 +609,6 @@
     right:calc(10px + var(--sr));top:calc(10px + var(--st));bottom:auto!important;z-index:26}
   .touch-mode #objective{transform:scale(.8);transform-origin:top center;top:calc(74px + var(--st))}
   /* v124.6: everything bottom-anchored now sits above the strip */
-  .touch-mode #playerhud{transform:translateX(-50%) scale(.78);
-    bottom:calc(var(--tbarfull) + 2px)}
   .touch-mode #tbtns{right:calc(10px + var(--sr));
     bottom:calc(var(--tbarfull) + 10px)}
   /* THE FEED. v120 set a font-size on #feed, but .msg carries its own — so nothing changed and
@@ -587,7 +624,22 @@
   .touch-mode #feed .msg{font-size:10.5px;padding:3px 7px;line-height:1.32;
     max-height:2.9em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
     overflow:hidden;text-overflow:ellipsis}
-  .touch-mode #helptoggle,.touch-mode #help,.touch-mode #questhud{display:none !important}
+  .touch-mode #helptoggle,.touch-mode #help{display:none !important}
+  /* ---------- v124.10 THE QUEST, PINNED ----------
+     John: "can we pin whatever quest is active to the message board section, thought to use
+     hamburger menu to track right now." It was hidden outright on touch since v116 — the panel is
+     desktop-positioned beside the unit box, which on a phone landed under the button rail. It
+     belongs with the feed: the top-left corner is where you already look for "what is going on",
+     and a quest is a standing instruction rather than a passing line. */
+  .touch-mode #questhud{position:absolute!important;display:block!important;
+    left:calc(14px + var(--sl))!important;top:calc(12px + var(--st))!important;
+    bottom:auto!important;min-width:0!important;max-width:300px!important;
+    padding:5px 9px!important;z-index:12}
+  .touch-mode #qlvl{font-size:10.5px!important}
+  .touch-mode #qtext{font-size:11px!important;margin-top:2px!important}
+  .touch-mode #qbuffs{font-size:10px!important}
+  /* and the feed drops below it, so the two share the corner instead of fighting for it */
+  .touch-mode #feed{top:calc(66px + var(--st))!important}
   /* ---------- v124.1 THE MAIN MENU FITS ----------
      John: "some stuff is off screen at game start and gets even worse if you open up play with
      friends, host, join game as the menu just continues to expand vertically but the screen has no

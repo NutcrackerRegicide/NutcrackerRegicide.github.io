@@ -490,11 +490,19 @@ const DEVICES=[
       // TRANSPOSED on-screen box, so a bar that is correctly one row deep reads as 490 tall in
       // portrait. Fourth time this has cost a cycle. Layout inside #tstage is measured in LAYOUT
       // space; the bar is position:absolute, so it is its children's offsetParent.
-      const vis=bar?[...bar.children].filter(c=>getComputedStyle(c).display!=="none"):[];
+      // v124.10: the strip gained two balance-group wrappers, so the segments are grandchildren.
+      // Ask about the LEAF segments and about containment, not direct parentage.
+      const segIds=["resources","agebar","roster","playerhud","kings"];
+      const vis=bar?segIds.map(id=>document.getElementById(id))
+        .filter(c=>c&&getComputedStyle(c).display!=="none"):[];
+      // offsetTop, NOT getBoundingClientRect: inside the rotated portrait stage the rect is the
+      // transposed on-screen box. The balance-group wrappers are position:static, so a segment's
+      // offsetParent is still #tbar and offsetTop already means what we want. FIFTH time this
+      // transposition has cost a cycle — the rule never changes: layout inside #tstage is
+      // measured in LAYOUT space.
       const oneRow=!!bar&&vis.length>0&&vis.every(c=>
-        c.offsetTop>=-2&&c.offsetTop+c.offsetHeight<=bar.offsetHeight+2);
-      const holds=bar?["resources","agebar","roster","carry"]
-        .every(id=>document.getElementById(id).parentElement===bar):false;
+        c.offsetTop>=-3&&c.offsetTop+c.offsetHeight<=bar.offsetHeight+3);
+      const holds=bar?segIds.every(id=>bar.contains(document.getElementById(id))):false;
       // 2. a promoted line leaves the feed — it must not read twice on one screen
       const feed=document.getElementById("feed");
       feed.innerHTML="";
@@ -543,9 +551,9 @@ const DEVICES=[
       // the bar spans the stage.
       const topEl=document.getElementById("ttop"), mapEl=document.getElementById("tmap");
       const barB=bx(bar),topB=bx(topEl),mapB=bx(mapEl);
-      const swallowed=topEl.parentElement===bar&&mapEl.parentElement===bar;
+      const swallowed=bar.contains(topEl)&&bar.contains(mapEl);
       const spansStage=bar.offsetWidth>=document.getElementById("tstage").offsetWidth-4;
-      const kingsIn=document.getElementById("kings").parentElement===bar;
+      const kingsIn=bar.contains(document.getElementById("kings"));
       // v124.3 THE CROWN IS THE METER — it must track the king's health, keep the right glyph, and
       // stop keeping a separate bar. The glyph check matters: the first version re-read ownership
       // from its own rewritten text, so every crown flipped to the enemy's on the next observer
@@ -569,8 +577,8 @@ const DEVICES=[
       const c0=carryEl.className, r0=rosterEl.className;
       carryEl.classList.remove("thidden"); rosterEl.classList.remove("thidden");
       await wait(60);
-      const kb=bx(document.getElementById("kings"));
-      const kingsInside=kb[0]+kb[2]<=bar.offsetWidth+2;   // not clipped by the bar's overflow
+      const kEl=document.getElementById("kings");
+      const kingsInside=kEl.offsetLeft+kEl.offsetWidth<=bar.offsetWidth+2&&kEl.offsetLeft>=-2;
       carryEl.className=c0; rosterEl.className=r0;
       // inside the bar they must still not sit on top of EACH OTHER
       const topClean=swallowed&&spansStage&&!ov(topB,mapB);
@@ -584,7 +592,30 @@ const DEVICES=[
       // v124.7: FLUSH to the physical edge, not to the safe-area inset — the inset is padding
       // inside the bar now, so no strip of battlefield shows under it
       const atBottom=barB[1]+barB[3]>=stg.offsetHeight-1;
-      const stacked=hudB[1]+hudB[3]<=barB[1]+2&&btnB[1]+btnB[3]<=barB[1]+2;
+      // v124.9: the unit panel is a SEGMENT of the strip now, not a box stacked above it — so the
+      // question changed from "does it clear the bar" to "is it in the bar". The button rail is
+      // still stacked above.
+      const hudEl=document.getElementById("playerhud");
+      const hudInBar=hudEl.parentElement===bar;
+      const stacked=hudInBar&&btnB[1]+btnB[3]<=barB[1]+2;
+      // v124.10: and DEAD CENTRE, held there by the two equal-weight balance groups whatever
+      // transient segments are showing — auto margins drifted 66px when the roster hid itself
+      const hudCentred=Math.abs((hudEl.offsetLeft+hudEl.offsetWidth/2)-
+        bar.offsetWidth/2)<6;
+      // the active quest is pinned by the feed instead of buried in the action grid
+      const qEl=document.getElementById("questhud"), fEl=document.getElementById("feed");
+      const questPinned=getComputedStyle(qEl).display!=="none"&&qEl.offsetTop<120&&
+        qEl.offsetLeft<200&&qEl.offsetTop+qEl.offsetHeight<=fEl.offsetTop+2;
+      // and the frame counter left the strip for the top centre, as bare lettering
+      const fpsEl2=document.getElementById("tfps");
+      const fpsOut=fpsEl2.parentElement.id==="tstage"&&
+        fpsEl2.offsetTop<80&&
+        getComputedStyle(fpsEl2).backgroundColor==="rgba(0, 0, 0, 0)";
+      // your team only: no enemy composition, no repeated age name
+      updateRoster();
+      const rosterTxt=document.getElementById("roster").textContent;
+      const rosterMine=!/BRONZE|STONE|IRON|CLASSICAL|MEDIEVAL|ENLIGHT/i.test(rosterTxt)&&
+        (rosterTxt.match(/⛏/g)||[]).length===1&&(rosterTxt.match(/⚔/g)||[]).length===1;
       const feedTop=feedB[1]<stg.offsetHeight*0.35;
       // the thumb zones sit at z-index 30 against the bar's 22 — without a stop they would swallow
       // taps meant for the map and fullscreen buttons now living down there
@@ -614,7 +645,7 @@ const DEVICES=[
         kingsIn,kingsInside,topClean,barOnStage,topBoxes,
         hp0,hp1,hurt,refilled,glyphs,noBar,clipped,
         atBottom,stacked,feedTop,zoneClears,ageOK,quiet,mineTicking,
-        barH:bar.offsetHeight,
+        fpsOut,rosterMine,rosterTxt,hudCentred,questPinned,barH:bar.offsetHeight,
 
         shot:player.atkT>0,reset:player._drawT||0};
     });
@@ -630,8 +661,16 @@ const DEVICES=[
       v1241.noBar&&v1241.clipped);
     check(dev.name+": v124.3 crown — yours stays ♔ and theirs stays ♚, and a dying king pulses",
       v1241.glyphs&&v1241.hurt);
-    check(dev.name+": v124.6 layout — the strip is at the BOTTOM with the unit panel and rail "+
-      "stacked above it",v1241.atBottom&&v1241.stacked);
+    check(dev.name+": v124.9 layout — the strip is at the BOTTOM, the unit panel is IN it and the "+
+      "rail sits above",v1241.atBottom&&v1241.stacked);
+    check(dev.name+": v124.10 layout — the unit panel sits DEAD CENTRE of the strip",
+      v1241.hudCentred);
+    check(dev.name+": v124.10 quest — the active posting is pinned above the feed, not buried in "+
+      "the action grid",v1241.questPinned);
+    check(dev.name+": v124.9 HUD — the frame counter is bare lettering at the top centre, out of "+
+      "the strip",v1241.fpsOut);
+    check(dev.name+": v124.9 roster — YOUR team only, no enemy composition, no repeated age (\""+
+      v1241.rosterTxt+"\")",v1241.rosterMine);
     check(dev.name+": v124.6 layout — the feed moved to the top, and the thumb zones stop at the "+
       "strip so its buttons stay tappable",v1241.feedTop&&v1241.zoneClears);
     check(dev.name+": v124.8 layout — the strip is slim ("+v1241.barH+"px) and the map opens "+
