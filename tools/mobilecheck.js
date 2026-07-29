@@ -604,8 +604,24 @@ const DEVICES=[
         bar.offsetWidth/2)<6;
       // the active quest is pinned by the feed instead of buried in the action grid
       const qEl=document.getElementById("questhud"), fEl=document.getElementById("feed");
-      const questPinned=getComputedStyle(qEl).display!=="none"&&qEl.offsetTop<120&&
+      const qcs=getComputedStyle(qEl);
+      const questPinned=qcs.display!=="none"&&qEl.offsetTop<120&&
         qEl.offsetLeft<200&&qEl.offsetTop+qEl.offsetHeight<=fEl.offsetTop+2;
+      // v124.11: dressed as a feed LINE — same background and left-border accent — and ONE line.
+      // Compared against the .msg CONSTANTS rather than a live probe element: the feed's observer
+      // trims itself to two children, so an injected probe was being removed before it could be
+      // measured and getComputedStyle on the detached node returned nothing.
+      // "one line" is a PROPERTY, not a measurement: line-height computes to "normal" here, so
+      // parseFloat gave NaN and every comparison against it was quietly false. Assert the thing
+      // that actually guarantees it — the text cannot wrap, and it is not overflowing.
+      const questLikeMsg=qcs.backgroundColor==="rgba(30, 22, 12, 0.82)"&&
+        qcs.borderLeftWidth==="4px"&&
+        qcs.whiteSpace==="nowrap"&&qEl.scrollHeight<=qEl.clientHeight+2;
+      const questDbg=JSON.stringify({bg:qcs.backgroundColor,bl:qcs.borderLeftWidth,
+        h:qEl.offsetHeight,lh:qcs.lineHeight,fs:qcs.fontSize});
+      // the health bar is a real bar now, not a token 56px sliver
+      const hpBar=document.querySelector("#playerhud .bar");
+      const hpWide=hpBar.offsetWidth>=120&&hpBar.offsetHeight>=11;
       // and the frame counter left the strip for the top centre, as bare lettering
       const fpsEl2=document.getElementById("tfps");
       const fpsOut=fpsEl2.parentElement.id==="tstage"&&
@@ -645,7 +661,8 @@ const DEVICES=[
         kingsIn,kingsInside,topClean,barOnStage,topBoxes,
         hp0,hp1,hurt,refilled,glyphs,noBar,clipped,
         atBottom,stacked,feedTop,zoneClears,ageOK,quiet,mineTicking,
-        fpsOut,rosterMine,rosterTxt,hudCentred,questPinned,barH:bar.offsetHeight,
+        fpsOut,rosterMine,rosterTxt,hudCentred,questPinned,questLikeMsg,hpWide,questDbg,
+        hpW:hpBar.offsetWidth,barH:bar.offsetHeight,
 
         shot:player.atkT>0,reset:player._drawT||0};
     });
@@ -667,6 +684,9 @@ const DEVICES=[
       v1241.hudCentred);
     check(dev.name+": v124.10 quest — the active posting is pinned above the feed, not buried in "+
       "the action grid",v1241.questPinned);
+    check(dev.name+": v124.11 quest — styled as a feed line and kept to ONE line "+v1241.questDbg,
+      v1241.questLikeMsg);
+    check(dev.name+": v124.11 HUD — the health bar is full width ("+v1241.hpW+"px)",v1241.hpWide);
     check(dev.name+": v124.9 HUD — the frame counter is bare lettering at the top centre, out of "+
       "the strip",v1241.fpsOut);
     check(dev.name+": v124.9 roster — YOUR team only, no enemy composition, no repeated age (\""+

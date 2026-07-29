@@ -509,8 +509,10 @@
   .touch-mode #tbar #playerhud{flex:0 0 auto;min-width:118px;gap:7px}
   .touch-mode #tbar #playerhud #ptip{display:none!important}
   .touch-mode #tbar #playerhud #pclass{font-size:11px!important;font-weight:bold;letter-spacing:.5px}
-  .touch-mode #tbar #playerhud .bar{width:56px;height:9px!important;border-width:1px!important;
-    border-radius:2px!important;background:#5a4632}
+  /* v124.11: 56px was a token gesture — the strip has room and this is the one number you check
+     mid-fight. Nearly triple, and taller so the fill reads at a glance. */
+  .touch-mode #tbar #playerhud .bar{width:150px;height:13px!important;border-width:2px!important;
+    border-radius:3px!important;background:#5a4632}
   /* the frame counter: top centre, no box, deliberately faint */
   .touch-mode #tfps{position:absolute;left:50%;top:calc(4px + var(--st));transform:translateX(-50%);
     z-index:21;background:none!important;padding:0!important;pointer-events:none;
@@ -631,15 +633,26 @@
      desktop-positioned beside the unit box, which on a phone landed under the button rail. It
      belongs with the feed: the top-left corner is where you already look for "what is going on",
      and a quest is a standing instruction rather than a passing line. */
+  /* v124.11: dressed as a FEED LINE, not a panel. John: "format of quest table should match format
+     of message board... quest should just be one line." It shares the corner with the feed, so
+     looking like a different species of object made the corner read as two competing widgets.
+     Same background, same left-border accent (gold, since a quest IS the standing objective), same
+     type size — it just never scrolls away. */
   .touch-mode #questhud{position:absolute!important;display:block!important;
     left:calc(14px + var(--sl))!important;top:calc(12px + var(--st))!important;
-    bottom:auto!important;min-width:0!important;max-width:300px!important;
-    padding:5px 9px!important;z-index:12}
-  .touch-mode #qlvl{font-size:10.5px!important}
-  .touch-mode #qtext{font-size:11px!important;margin-top:2px!important}
-  .touch-mode #qbuffs{font-size:10px!important}
-  /* and the feed drops below it, so the two share the corner instead of fighting for it */
-  .touch-mode #feed{top:calc(66px + var(--st))!important}
+    bottom:auto!important;min-width:0!important;max-width:380px!important;
+    background:rgba(30,22,12,.82)!important;color:#f2e7c8!important;
+    border:0!important;border-left:4px solid var(--gold)!important;border-radius:3px!important;
+    box-shadow:none!important;padding:5px 10px!important;z-index:12;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* ONE line: the level and the posting sit inline instead of stacking */
+  .touch-mode #qlvl,.touch-mode #qtext{display:inline!important;font-size:12px!important;
+    margin:0!important;color:#f2e7c8!important;font-weight:normal!important}
+  .touch-mode #qlvl{color:#e8c53a!important;font-weight:bold!important}
+  .touch-mode #qlvl::after{content:" · "; opacity:.45}
+  .touch-mode #qbuffs{display:none!important}   /* buffs live on the scoreboard, not the corner */
+  /* and the feed drops below it, so the two stack like one column of lines */
+  .touch-mode #feed{top:calc(44px + var(--st))!important}
   /* ---------- v124.1 THE MAIN MENU FITS ----------
      John: "some stuff is off screen at game start and gets even worse if you open up play with
      friends, host, join game as the menu just continues to expand vertically but the screen has no
