@@ -136,12 +136,43 @@
   const PR_STEPS=[1.0,0.85,0.7];
   let prStep=0;
   const LOW=q.get("gfx")!=="high";
+
+  // ---------- v124.13 BATTERY SAVER ----------
+  // John: "this game seems to drain iPhone battery pretty fast." It will — a 3D WebGL scene on a
+  // phone is expensive by nature — but the audit found three avoidable costs:
+  //   1. NO FRAME CAP. rAF was given its head, so a 120Hz ProMotion handset rendered 120 frames a
+  //      second for a game that reads fine at 30.
+  //   2. NOTHING PAUSED when backgrounded. rAF stops on its own, but the audio graph kept running
+  //      and the host's 33ms sim interval kept firing with the screen off.
+  //   3. v124 took the pixel ratio from a fixed 0.7 to 1.0 — (1/0.7)^2 = 2.04x the pixels shaded
+  //      every frame. That was the sharpness John asked for, and it is the single biggest change
+  //      in drain between v123 and v124. It has to be HIS choice, not a number I pick quietly.
+  // So: one switch that bundles all three, defaulting ON so a stranger's phone is not cooked by a
+  // game they opened out of curiosity — with a one-tap escape for when he wants to look at it.
+  let saver=true;
+  try{const v=localStorage.getItem("reg_saver"); if(v!==null)saver=v==="1";}catch(_){}
+  if(q.get("saver")==="0")saver=false;
+  if(q.get("saver")==="1")saver=true;
+  const SAVER_FPS=30, FULL_FPS=60;   // FULL is still capped: 120Hz buys nothing here
+  function saverPR(){return saver?2:0;}          // index into PR_STEPS: 0.7 vs 1.0
+  function saverHide(){return saver?88:105;}     // pull the cull line in a little
+  function applySaver(){
+    try{
+      prStep=saverPR(); prChanges=0; prLastAt=performance.now();
+      renderer.setPixelRatio(Math.min(devicePixelRatio,PR_STEPS[prStep]));
+      if(typeof setHideD==="function")setHideD(saverHide());
+      fit(true);
+      try{localStorage.setItem("reg_saver",saver?"1":"0");}catch(_){}
+      console.log("[touch] battery saver",saver?"ON":"OFF");
+    }catch(e){}
+  }
   if(LOW){
     try{
       composer=null;                                // 09-main falls back to renderer.render()
       renderer.shadowMap.enabled=false;
-      renderer.setPixelRatio(Math.min(devicePixelRatio,PR_STEPS[prStep]));
-      if(typeof setHideD==="function")setHideD(105);
+      renderer.setPixelRatio(Math.min(devicePixelRatio,PR_STEPS[saverPR()]));
+      prStep=saverPR();
+      if(typeof setHideD==="function")setHideD(saverHide());
     }catch(e){console.warn("[touch] perf tier partial:",e);}
   }
 
@@ -171,6 +202,59 @@
   if(window.visualViewport)visualViewport.addEventListener("resize",refit);
   for(const d of [0,50,150,350,700,1200,2000])setTimeout(refit,d);
   setInterval(refit,500); // backstop for browsers that fire no viewport events at all
+
+  // ---------- v124.13 THE FRAME CAP ----------
+  // Wrap requestAnimationFrame itself rather than touching 09-main's loop: the cap then applies to
+  // every rAF consumer in the game at once, desktop stays byte-identical (this file never loads
+  // there), and there is exactly one place to change the rule. A skipped frame re-requests without
+  // running its callback, so the sim's own clock.getDelta() simply sees a longer dt — no drift.
+  // The gate has to be per-FRAME, not per-callback. The first version kept one `last` timestamp
+  // and re-requested any callback that arrived early — but this game has five independent rAF
+  // consumers (the sim tick, the touch tick, syncPad, syncPick, tickBar). They shared that one
+  // timestamp, so whichever fired first claimed the slot and starved the rest: the read-out stopped
+  // updating entirely and the game would have crawled. Batch every callback registered for a frame
+  // and release them TOGETHER when the interval is up.
+  // (Safe to return 0 rather than a real handle: nothing in this codebase calls
+  // cancelAnimationFrame — checked before writing this.)
+  (function capFrames(){
+    const raf=window.requestAnimationFrame.bind(window);
+    let pending=[], scheduled=false, last=0;
+    function pump(t){
+      scheduled=false;
+      const want=1000/((saver?SAVER_FPS:FULL_FPS)+0.5);
+      if(t-last<want){ if(pending.length){scheduled=true;raf(pump);} return; }
+      last=t;
+      const run=pending; pending=[];
+      for(const cb of run){ try{cb(t);}catch(e){} }
+    }
+    window.requestAnimationFrame=function(cb){
+      pending.push(cb);
+      if(!scheduled){scheduled=true;raf(pump);}
+      return 0;
+    };
+  })();
+
+  // ---------- v124.13 STOP WORKING WHEN NOBODY IS LOOKING ----------
+  // rAF halts on its own when the page hides, so rendering stops — but the WebAudio graph keeps
+  // running and, for a host, the 33ms sim interval keeps firing with the screen off. Suspend the
+  // audio context on hide and resume on show. The sim is deliberately left alone for a HOST: its
+  // guests are still playing and would freeze.
+  document.addEventListener("visibilitychange",()=>{
+    const hidden=document.visibilityState==="hidden";
+    try{
+      const ac=(typeof Sound!=="undefined")&&(Sound.ctx||Sound.context||Sound._ctx);
+      if(ac&&ac.state){
+        if(hidden&&ac.state==="running"&&ac.suspend)ac.suspend();
+        else if(!hidden&&ac.state==="suspended"&&ac.resume)ac.resume();
+      }
+    }catch(e){}
+    // and stop the music element outright — an <audio> tag plays on regardless of rAF
+    try{
+      const mu=document.querySelector("audio");
+      if(mu){ if(hidden&&!mu.paused){mu._wasPlaying=true;mu.pause();}
+              else if(!hidden&&mu._wasPlaying){mu._wasPlaying=false;mu.play().catch(()=>{});} }
+    }catch(e){}
+  });
 
   // ---------- pointer lock does not exist here ----------
   mouseLocked=true;
@@ -977,6 +1061,7 @@
     ["\u21b9","Scores", "the roster + kill tally"],
     ["M","Sound",     "volume + mute"],
     ["P","Pixel",     "retro filter"],
+    ["⚡","Battery","30fps + softer · saves power"],
     ["H","Help",      "the key list"]
   ];
   const grid=document.getElementById("tgrid");
@@ -994,6 +1079,13 @@
   }
   function tapKey(k){
     if(k==="\u21b9"){ setScores(!scores); return; }
+    if(k==="\u26a1"){
+      saver=!saver; applySaver();
+      if(typeof msg==="function")
+        msg(saver?"\u26a1 Battery saver ON \u2014 30fps, softer picture."
+                 :"\u26a1 Battery saver OFF \u2014 full frame rate and sharpness.","gold");
+      return;
+    }
     dispatchEvent(new KeyboardEvent("keydown",{key:k}));
     setTimeout(()=>dispatchEvent(new KeyboardEvent("keyup",{key:k})),40);
   }
@@ -1192,8 +1284,11 @@
     if(dt<0.4&&fps<worst)worst=fps;
     if(acc>=500){
       const avg=fr/(acc/1000);
+      // v124.12: the change COUNT rides the read-out too. If the flashing ever comes back this is
+      // the one number that says whether the ratio is the culprit — it climbs on every reallocation.
       fpsEl.textContent=Math.round(avg)+" fps (min "+Math.round(worst)+")"+
-        (LOW?" low":" high")+(prStep?" ·"+PR_STEPS[prStep].toFixed(2):"");
+        (saver?" ⚡":"")+(LOW?" low":" high")+
+        (prStep?" ·"+PR_STEPS[prStep].toFixed(2):"")+(prChanges?" ×"+prChanges:"");
       fr=0;acc=0;
       if(++n%20===0)worst=999;
       stepPixelRatio(avg);
@@ -1204,19 +1299,37 @@
   // windows under 45 fps step down; eight consecutive windows (4s) comfortably over 55 step back up.
   // The asymmetry is deliberate — dropping should be quick, recovering should be slow, or the
   // renderer oscillates every time you walk past a melee.
-  let prLow=0,prHigh=0;
+  // v124.12 THE BLACK FLASHES. John: "getting a lot of black screen flashes on mobile." Mine.
+  // EVERY ratio change calls setPixelRatio + setSize, which REALLOCATES the WebGL drawing buffer —
+  // and a reallocated buffer shows one undrawn frame. That is the flash. One is invisible; a
+  // stream of them is what he saw.
+  //
+  // The v124 thresholds made a stream inevitable: step down after 1s under 45, back up after 4s
+  // over 55. A phone reporting "60 fps (min 20)" sits exactly in that trap — the average clears 55
+  // while walking, then a melee drags it under 45 — so it paced up and down forever, one black
+  // frame each way.
+  //
+  // Three changes, and the third is the one that actually guarantees it stops:
+  //   1. A WIDE dead band (38 / 58) instead of a 10-point gap, so ordinary swings sit inside it.
+  //   2. Long confirmation — 3s to drop, 10s to recover — plus a 12s cooldown between ANY changes.
+  //   3. A HARD BUDGET. After PR_MAX_CHANGES the ratio is frozen for the match. If my thresholds
+  //      are still wrong for a device I have never held, the flashing ends anyway. An adaptive
+  //      system that cannot stop adapting is worse than a fixed guess.
+  const PR_DOWN=38, PR_UP=58, PR_DOWN_WINS=6, PR_UP_WINS=20, PR_COOLDOWN=12000, PR_MAX_CHANGES=4;
+  let prLow=0,prHigh=0,prChanges=0,prLastAt=0;
   function stepPixelRatio(avg){
-    if(!LOW)return;                       // ?gfx=high owns its own ratio
-    if(avg<45){ prHigh=0; if(++prLow>=2&&prStep<PR_STEPS.length-1){prLow=0;setPR(prStep+1);} }
-    else if(avg>55){ prLow=0; if(++prHigh>=8&&prStep>0){prHigh=0;setPR(prStep-1);} }
+    if(!LOW||prChanges>=PR_MAX_CHANGES)return;   // ?gfx=high owns its own ratio; budget spent = done
+    if(performance.now()-prLastAt<PR_COOLDOWN)return;
+    if(avg<PR_DOWN){ prHigh=0; if(++prLow>=PR_DOWN_WINS&&prStep<PR_STEPS.length-1){prLow=0;setPR(prStep+1);} }
+    else if(avg>PR_UP){ prLow=0; if(++prHigh>=PR_UP_WINS&&prStep>0){prHigh=0;setPR(prStep-1);} }
     else { prLow=0; prHigh=0; }
   }
   function setPR(step){
-    prStep=step;
+    prStep=step; prChanges++; prLastAt=performance.now();
     try{
       renderer.setPixelRatio(Math.min(devicePixelRatio,PR_STEPS[step]));
       fit(true);                          // setPixelRatio alone does not resize the backing store
-      console.log("[touch] pixel ratio ->",PR_STEPS[step]);
+      console.log("[touch] pixel ratio ->",PR_STEPS[step],"("+prChanges+"/"+PR_MAX_CHANGES+")");
     }catch(e){}
   }
 

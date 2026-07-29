@@ -1371,16 +1371,21 @@ global.__G.setGameOver(false); // staged fights ahead — the mute stays off
     const rows=NET.readSnapRows(s), i=rows.findIndex(w=>w[0]===wk.id);
     const oldPulse=(rows[i][2]>>3)&3;
     NET.mode="guest";
+    // The re-trigger is read off SWING, not attackAnimT: triggerAttackAnim only moves
+    // attackAnimT when a mixer clip or the baked pool is loaded, and baked playback is
+    // disabled in index.html — a procedural clubman would fail an animT assertion for a
+    // reason that has nothing to do with the pulse. Swing is the arm the pulse re-arms.
+    // Park it well ABOVE the 0.05 floor so ONLY a pulse change can reset it to 0.25.
     // same pulse arrives while the local arm is still up → NO re-trigger (echoes would loop the arm)
-    wk.swing=0.25; wk.attackAnimT=0; wk._pulse=oldPulse;
+    wk.swing=0.9; wk.attackAnimT=0; wk._pulse=oldPulse;
     s.q=NET.lastQ+1; NET.applySnap(s);
-    const noRetrig=wk.attackAnimT===0;
+    const noRetrig=wk.swing===0.9;
     // the NEXT half-second of work bumps the pulse → the statue swings again
     rows[i][2]=(rows[i][2]&~24)|(((oldPulse+1)&3)<<3);
     s.ub=NET.packRows(rows); s.q=NET.lastQ+1;
     NET.applySnap(s);
     check("v95 work pulse: same pulse holds, bumped pulse re-swings the statue",
-      noRetrig&&wk.attackAnimT>0&&wk.swing>=0.25);
+      noRetrig&&wk.swing===0.25&&wk._pulse===((oldPulse+1)&3));
     wk.alive=false;
   }
   // ---- stale-authority guard: a backlog snapshot may not yank our body into the past ----

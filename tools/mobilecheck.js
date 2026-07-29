@@ -424,9 +424,34 @@ const DEVICES=[
       await wait(320);
       const poor=rail();
       const cost=AGES[teamAge[MYTEAM]+1].cost;
-      for(const k in cost)stock[MYTEAM][k]=cost[k]+500;
+      // Funding the team funds its AI DIRECTOR, which starts its own advance on the next think and
+      // PAYS FOR IT IMMEDIATELY (v107: T pays up front). The treasury then reads as unaffordable
+      // and the clock as already-running — so the rail correctly hides AGE UP and this check was
+      // failing on the code being right. Re-grant and re-zero immediately before reading, so the
+      // state the predicate sees is the state the check intends to test.
+      // ...and hold the director off entirely. Re-funding alone was not enough: it thinks again
+      // between the grant and the read, starts its own advance and pays for it, so the predicate
+      // sees "already advancing" and correctly hides AGE UP.
+      const myD=directors.find(d=>d.team===MYTEAM);
+      const savedThink=myD?myD.nextThink:0;
+      if(myD)myD.nextThink=1e9;
+      const fund=()=>{for(const k in cost)stock[MYTEAM][k]=cost[k]*3+500; ageResT[MYTEAM]=0;};
+      fund();
       await wait(320);
+      fund();
+      await wait(140);
       const rich=rail();
+      if(myD)myD.nextThink=savedThink;
+      const whyNot=JSON.stringify({
+        tcD:(()=>{const tc=teamTC(MYTEAM);return tc?Math.round(Math.sqrt(dist2(
+          player.root.position.x,player.root.position.z,tc.x,tc.z))):-1;})(),
+        nxt:!!AGES[teamAge[MYTEAM]+1], res:+(ageResT[MYTEAM]||0).toFixed(1),
+        afford:AGES[teamAge[MYTEAM]+1]?canAfford(MYTEAM,AGES[teamAge[MYTEAM]+1].cost):null,
+        alive:!!(player&&player.alive), menu:!!menuOpen, placing:!!placing});
+      // and DRAIN it again: leaving the team rich lets the director keep starting fresh advances
+      // for the rest of the run, which broke the age-line check two blocks later.
+      for(const k in stock[MYTEAM])stock[MYTEAM][k]=0;
+      ageResT[MYTEAM]=0;
       const capped=rich.length<=3;
       // the core three never move
       const core=["tb-atk","tb-block","tb-menu"].every(id=>{
@@ -460,11 +485,11 @@ const DEVICES=[
       // the banner promotes a warn line out of the feed
       msg("⚠ YOUR KING IS BADLY WOUNDED","warn"); await wait(240);
       const bn=document.getElementById("tbanner");
-      return {poor,rich,capped,core,closeShown,closed,tileH,sameLine,mapHidden,mapShown,mapClear,mapDbg,
+      return {poor,rich,capped,core,closeShown,closed,tileH,sameLine,mapHidden,mapShown,mapClear,mapDbg,whyNot,
         banner:bn.classList.contains("on"),feed:document.getElementById("feed").children.length};
     });
     check(dev.name+": v124 rail — AGE UP appears ONLY when the team can pay ("+
-      JSON.stringify(v124.poor)+" -> "+JSON.stringify(v124.rich)+")",
+      JSON.stringify(v124.poor)+" -> "+JSON.stringify(v124.rich)+" "+v124.whyNot+")",
       !v124.poor.includes("AGE UP")&&v124.rich.includes("AGE UP"));
     check(dev.name+": v124 rail — at most three contextual slots, core three always present",
       v124.capped&&v124.core);
@@ -702,7 +727,7 @@ const DEVICES=[
     // a player standing on the town centre) and three unrelated checks started failing for reasons
     // that had nothing to do with the code under test. Isolated setup, isolated teardown.
     const v1247=await page.evaluate(async()=>{
-      const T=(el,x,y,id)=>new Touch({identifier:id,target:el,clientX:x,clientY:y});
+      const TP=(el,x,y,id)=>new Touch({identifier:id,target:el,clientX:x,clientY:y});
       const fire=(el,t,tt)=>el.dispatchEvent(new TouchEvent(t,
         {bubbles:true,cancelable:true,touches:tt,targetTouches:tt,changedTouches:tt}));
       const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -732,30 +757,72 @@ const DEVICES=[
       // AIM is a LATCH (v121), so tapping it blindly turns it OFF when an earlier check left it on
       // — which silently made every draw below fire nothing. Assert the state, don't toggle it.
       for(let i=0;i<3&&!aiming;i++){
-        fire(blkEl,"touchstart",[T(blkEl,0,0,80+i)]); fire(blkEl,"touchend",[T(blkEl,0,0,80+i)]);
+        fire(blkEl,"touchstart",[TP(blkEl,0,0,80+i)]); fire(blkEl,"touchend",[TP(blkEl,0,0,80+i)]);
         await wait(200);
       }
       const zr=document.getElementById("tzR"), zb=zr.getBoundingClientRect();
       const zx=zb.left+zb.width*0.5, zy=zb.top+zb.height*0.5;
       const drive=async(id,holdMs,steps)=>{
         player.atkT=0; player._drawT=0;
-        fire(zr,"touchstart",[T(zr,zx,zy,id)]); await wait(holdMs);
-        for(let i=1;i<=steps;i++){fire(zr,"touchmove",[T(zr,zx+i*6,zy,id)]); await wait(110);}
+        fire(zr,"touchstart",[TP(zr,zx,zy,id)]); await wait(holdMs);
+        for(let i=1;i<=steps;i++){fire(zr,"touchmove",[TP(zr,zx+i*6,zy,id)]); await wait(110);}
         const barOn=document.getElementById("tdraw").classList.contains("on");
-        fire(zr,"touchend",[T(zr,zx+steps*6,zy,id)]); await wait(320);
+        fire(zr,"touchend",[TP(zr,zx+steps*6,zy,id)]); await wait(320);
         return {fired:player.atkT>0,barOn};
       };
+      // ---- v124.13: the battery saver, and the frame cap that must not starve anything ----
+      const dpr0=renderer.getPixelRatio(), hide0=HIDE_D;
+      const mbEl=document.getElementById("tb-menu");
+      fire(mbEl,"touchstart",[TP(mbEl,0,0,90)]); fire(mbEl,"touchend",[TP(mbEl,0,0,90)]);
+      await wait(260);
+      const saverEntry=[...document.querySelectorAll("#tgrid .tgb")]
+        .find(x=>/Battery/.test(x.textContent));
+      let dpr1=dpr0,hide1=hide0;
+      if(saverEntry){
+        fire(saverEntry,"touchend",[TP(saverEntry,0,0,91)]);
+        await wait(420);
+        dpr1=renderer.getPixelRatio(); hide1=HIDE_D;
+      }
+      // THE REGRESSION GUARD. The first frame cap kept ONE timestamp shared across all five rAF
+      // consumers, so whichever fired first claimed the slot and starved the others — the fps
+      // read-out simply stopped updating. If that ever comes back, this catches it: the read-out
+      // is driven by the touch tick, so a stale value means a starved loop.
+      // Watch BOTH loops by their own evidence, not by a string changing: a steady frame rate
+      // renders the identical read-out every window, so "the text changed" proved nothing.
+      //   touch tick  -> the read-out has been written at all (it boots as "--")
+      //   sim tick    -> the match clock T is advancing
+      const fpsEl3=document.getElementById("tfps");
+      // The Touch helper in this block is named TP, not T, precisely so it cannot shadow the
+      // game's match clock — the first version compared a function to a number and reported a
+      // starved loop while both loops were running perfectly.
+      const t0=T;      // the game's match clock — the Touch helper is TP here, no shadow
+      await wait(900);
+      const loopAlive=fpsEl3.textContent!=="--"&&T>t0;
+      const loopDbg=JSON.stringify({fps:fpsEl3.textContent,dT:+(T-t0).toFixed(2)});
+      const saverWorks=!!saverEntry&&dpr1!==dpr0&&hide1!==hide0;
+      // put it back the way we found it
+      if(saverEntry){
+        fire(mbEl,"touchstart",[TP(mbEl,0,0,92)]); fire(mbEl,"touchend",[TP(mbEl,0,0,92)]);
+        await wait(220);
+        const e2=[...document.querySelectorAll("#tgrid .tgb")].find(x=>/Battery/.test(x.textContent));
+        if(e2){fire(e2,"touchend",[TP(e2,0,0,93)]); await wait(320);}
+      }
       const flick=await drive(81,60,1);      // inside the arm delay
       const pan=await drive(82,240,1);       // armed, but nowhere near the minimum
       const real=await drive(83,250,7);      // a genuine draw
       const drawSane=!flick.fired&&!pan.fired&&real.fired&&real.barOn;
-      return {chatterQuiet,bigLoud,haulShown,cap,drawSane,
+      return {chatterQuiet,bigLoud,haulShown,cap,drawSane,saverWorks,loopAlive,loopDbg,
+        dprPair:dpr0+"->"+dpr1,hidePair:hide0+"->"+hide1,
         flickFired:flick.fired,panFired:pan.fired,realFired:real.fired};
     });
     check(dev.name+": v124.7 banner — AI chatter stays in the feed, an age-up takes the centre",
       v1247.chatterQuiet&&v1247.bigLoud);
     check(dev.name+": v124.7 haul — the gathering caption carries the count (\""+
       v1247.cap+"\")",v1247.haulShown);
+    check(dev.name+": v124.13 battery — the saver toggle moves pixel ratio and cull distance ("+
+      v1247.dprPair+" / "+v1247.hidePair+")",v1247.saverWorks);
+    check(dev.name+": v124.13 frame cap — every rAF consumer still runs (the read-out keeps "+
+      "updating, so no loop is starved) "+v1247.loopDbg,v1247.loopAlive);
     check(dev.name+": v124.7 draw — a flick ("+v1247.flickFired+") and a slow pan ("+
       v1247.panFired+") loose NOTHING; a real draw ("+v1247.realFired+") does",v1247.drawSane);
     check(dev.name+": v124.2 HUD — nothing in the top band overlaps: bar, read-out and map button "+
