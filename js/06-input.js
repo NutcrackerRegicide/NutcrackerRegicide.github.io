@@ -940,10 +940,21 @@ function toggleHelp(){
 document.getElementById("helptoggle").addEventListener("click",toggleHelp);
 
 // Megabonk crunch: low-res render upscaled with nearest-neighbor
+// v124.13a: TWO fixes, both from the same misconception — that this function owns the pixel ratio.
+//   1. CHUNK is expressed as a DIVISOR of whatever ratio the game is already running at, instead
+//      of a hardcoded 0.3. Switching the filter off used to restore a flat 1.0, which threw away
+//      the mobile Battery Saver's 0.7 every time — the filter was quietly undoing the toggle.
+//   2. John: "can we make pixel mode half as pixelated?" The chunk was 1/0.3 = 3.33 screen pixels
+//      per rendered one. Halved to 1.67, which stays unmistakably retro without turning a 50v50
+//      battlefield into porridge. Expressed as a divisor so it means the same thing on a phone at
+//      0.70 (-> 0.42) as on a desktop at 1.0 (-> 0.60).
+const PIXEL_CHUNK=1.67;
 let pixelMode=false;
 function togglePixel(){
   pixelMode=!pixelMode;
-  const pr=pixelMode?0.3:Math.min(devicePixelRatio,1);
+  const base=(typeof window.__basePR==="number"&&window.__basePR>0)
+    ? window.__basePR : Math.min(devicePixelRatio,1);
+  const pr=pixelMode?base/PIXEL_CHUNK:base;
   renderer.setPixelRatio(pr);
   if(composer&&composer.setPixelRatio)composer.setPixelRatio(pr);
   renderer.domElement.style.imageRendering=pixelMode?"pixelated":"auto";

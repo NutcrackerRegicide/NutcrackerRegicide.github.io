@@ -604,6 +604,30 @@ const DEVICES=[
       await wait(60);
       const kEl=document.getElementById("kings");
       const kingsInside=kEl.offsetLeft+kEl.offsetWidth<=bar.offsetWidth+2&&kEl.offsetLeft>=-2;
+      // ---- v124.13a THE FOUR-DIGIT STOCKPILE ----
+      // John: "some things get pushed off screen where they are not visible (red king crown) ...
+      // due to there being 4 digit resources." Being inside #tbar was never enough: the left
+      // balance group is flex:1 1 0 with overflow:hidden, so it clips its own last child once the
+      // numbers grow. The v124.9 check above measured against the BAR and passed the whole time
+      // the crown was being cut in half. Measure against the GROUP, with a mid-game treasury.
+      const gLEl=document.getElementById("tbarL");
+      // Write the digits STRAIGHT into the read-outs rather than funding the treasury: a funded
+      // team advances the age within the same second and spends it back down, so two of the three
+      // devices measured a 1-digit strip and the check silently stopped testing anything.
+      // The question here is purely "does this width fit", so hand it the width.
+      const rIds=["rfood","rgold","rstone","rwood"];
+      const rOld=rIds.map(id=>{const e=document.getElementById(id);return e?e.textContent:null;});
+      for(const id of rIds){const e=document.getElementById(id); if(e)e.textContent="24680";}
+      await wait(120);
+      const gRight=gLEl.offsetLeft+gLEl.clientWidth;
+      const crowns=[...document.querySelectorAll("#kings .kingbox")];
+      const crownBoxes=crowns.map(c=>[c.offsetLeft,c.offsetWidth]);
+      const crownsWhole=crowns.length===2&&crowns.every(c=>
+        c.offsetWidth>0&&c.offsetLeft>=gLEl.offsetLeft-2&&c.offsetLeft+c.offsetWidth<=gRight+2);
+      const fatRes=document.getElementById("resources").textContent.replace(/\s+/g," ").trim();
+      const fatWide=/24680.*24680.*24680.*24680/.test(fatRes);   // the check really did run wide
+      rIds.forEach((id,n)=>{const e=document.getElementById(id); if(e&&rOld[n]!==null)e.textContent=rOld[n];});
+      await wait(120);
       carryEl.className=c0; rosterEl.className=r0;
       // inside the bar they must still not sit on top of EACH OTHER
       const topClean=swallowed&&spansStage&&!ov(topB,mapB);
@@ -683,7 +707,7 @@ const DEVICES=[
         hits:ov(topB,mapB)?"ttop/map":""};
       const barOnStage=barB[0]+barB[2]<=document.getElementById("tstage").offsetWidth+2;
       return {oneRow,holds,noDup,reachable,escaped,drew,camMoved,fill,
-        kingsIn,kingsInside,topClean,barOnStage,topBoxes,
+        kingsIn,kingsInside,crownsWhole,crownBoxes,fatRes,fatWide,gRight,topClean,barOnStage,topBoxes,
         hp0,hp1,hurt,refilled,glyphs,noBar,clipped,
         atBottom,stacked,feedTop,zoneClears,ageOK,quiet,mineTicking,
         fpsOut,rosterMine,rosterTxt,hudCentred,questPinned,questLikeMsg,hpWide,questDbg,
@@ -697,6 +721,9 @@ const DEVICES=[
       v1241.noDup);
     check(dev.name+": v124.2 HUD — the king bars live IN the strip and are not clipped by it ("+
       v1241.kingsIn+"/"+v1241.kingsInside+")",v1241.kingsIn&&v1241.kingsInside);
+    check(dev.name+": v124.13a HUD — a five-digit treasury does NOT clip a crown out of the strip "+
+      JSON.stringify({res:v1241.fatRes,crowns:v1241.crownBoxes,groupRight:v1241.gRight}),
+      v1241.crownsWhole&&v1241.fatWide);
     check(dev.name+": v124.3 crown — the glyph IS the health meter, draining as the king is hurt ("+
       v1241.hp0+"% / "+v1241.hp1+"%, refills "+v1241.refilled+", separate bar gone "+v1241.noBar+")",
       Math.abs(v1241.hp0-62)<1.5&&Math.abs(v1241.hp1-18)<1.5&&v1241.refilled&&
@@ -800,6 +827,32 @@ const DEVICES=[
       const loopAlive=fpsEl3.textContent!=="--"&&T>t0;
       const loopDbg=JSON.stringify({fps:fpsEl3.textContent,dT:+(T-t0).toFixed(2)});
       const saverWorks=!!saverEntry&&dpr1!==dpr0&&hide1!==hide0;
+      // ---- v124.13a THE HALF-RATE TRAP ----
+      // John: "there is no way to get back to 60fps." The gate was 1000/(target+0.5) = 16.53ms
+      // against a 60Hz display's 16.67ms nominal frame — 0.14ms of margin, less than the jitter
+      // in a real rAF timestamp. Every jittered frame was rejected and the next candidate was a
+      // whole vsync later, so the cap silently delivered HALF the target.
+      // Frame counting cannot test this here (software GL never reaches 60), but the threshold is
+      // arithmetic and the threshold IS the bug. Two properties, both necessary:
+      //   loose enough — admits a nominal frame with real margin (>=2ms, well over the jitter)
+      //   tight enough — still rejects the next display rate up (2x the target)
+      const capOff=window.__capInfo?window.__capInfo():null;   // saver is OFF at this point
+      let capOn=null;
+      if(saverEntry){                                          // flip back ON and read again
+        fire(mbEl,"touchstart",[TP(mbEl,0,0,94)]); fire(mbEl,"touchend",[TP(mbEl,0,0,94)]);
+        await wait(220);
+        const e3=[...document.querySelectorAll("#tgrid .tgb")].find(x=>/Battery/.test(x.textContent));
+        if(e3){fire(e3,"touchend",[TP(e3,0,0,95)]); await wait(320);}
+        capOn=window.__capInfo?window.__capInfo():null;
+        // ...and back OFF so the restore block below lands where it expects to
+        fire(mbEl,"touchstart",[TP(mbEl,0,0,96)]); fire(mbEl,"touchend",[TP(mbEl,0,0,96)]);
+        await wait(220);
+        const e4=[...document.querySelectorAll("#tgrid .tgb")].find(x=>/Battery/.test(x.textContent));
+        if(e4){fire(e4,"touchend",[TP(e4,0,0,97)]); await wait(320);}
+      }
+      const capSane=!!capOff&&!!capOn&&[capOff,capOn].every(c=>
+        c.want<=c.period-2 && c.want>c.period/2);
+      const capDbg=JSON.stringify({off:capOff,on:capOn});
       // put it back the way we found it
       if(saverEntry){
         fire(mbEl,"touchstart",[TP(mbEl,0,0,92)]); fire(mbEl,"touchend",[TP(mbEl,0,0,92)]);
@@ -807,11 +860,38 @@ const DEVICES=[
         const e2=[...document.querySelectorAll("#tgrid .tgb")].find(x=>/Battery/.test(x.textContent));
         if(e2){fire(e2,"touchend",[TP(e2,0,0,93)]); await wait(320);}
       }
+      // ---- v124.13a THE PIXEL FILTER MUST GIVE THE RATIO BACK ----
+      // togglePixel restored a hardcoded Math.min(devicePixelRatio,1) when switched off, so on a
+      // phone every use of the retro filter silently cancelled the Battery Saver's 0.7 and left
+      // the game rendering twice the pixels — with nothing on screen to say so. It reads the
+      // saver's base ratio now. Saver is back ON here, so base is 0.7.
+      const prBase=renderer.getPixelRatio();
+      const tapGrid=async (re,id)=>{
+        fire(mbEl,"touchstart",[TP(mbEl,0,0,id)]); fire(mbEl,"touchend",[TP(mbEl,0,0,id)]);
+        await wait(240);
+        const e=[...document.querySelectorAll("#tgrid .tgb")].find(x=>re.test(x.textContent));
+        if(e){fire(e,"touchend",[TP(e,0,0,id+1)]); await wait(320);}
+        return !!e;
+      };
+      const pxFound=await tapGrid(/Pixel/,110);
+      const prPixel=renderer.getPixelRatio();
+      const pxNearest=renderer.domElement.style.imageRendering==="pixelated";
+      await tapGrid(/Pixel/,112);
+      const prBack=renderer.getPixelRatio();
+      // chunkier than the base, and the base comes back EXACTLY — not a hardcoded 1.0
+      const pixelSane=pxFound&&pxNearest&&prPixel<prBase&&Math.abs(prBack-prBase)<1e-6;
+      // and the chunk itself is the halved one John asked for: ~1.67 screen pixels per rendered
+      // pixel, not the old 3.33
+      const chunk=prPixel>0?prBase/prPixel:0;
+      const pixelHalved=chunk>1.5&&chunk<1.9;
+      const pixelDbg=JSON.stringify({base:+prBase.toFixed(3),pixel:+prPixel.toFixed(3),
+        back:+prBack.toFixed(3),chunk:+chunk.toFixed(2)});
       const flick=await drive(81,60,1);      // inside the arm delay
       const pan=await drive(82,240,1);       // armed, but nowhere near the minimum
       const real=await drive(83,250,7);      // a genuine draw
       const drawSane=!flick.fired&&!pan.fired&&real.fired&&real.barOn;
       return {chatterQuiet,bigLoud,haulShown,cap,drawSane,saverWorks,loopAlive,loopDbg,
+        capSane,capDbg,pixelSane,pixelHalved,pixelDbg,
         dprPair:dpr0+"->"+dpr1,hidePair:hide0+"->"+hide1,
         flickFired:flick.fired,panFired:pan.fired,realFired:real.fired};
     });
@@ -823,6 +903,12 @@ const DEVICES=[
       v1247.dprPair+" / "+v1247.hidePair+")",v1247.saverWorks);
     check(dev.name+": v124.13 frame cap — every rAF consumer still runs (the read-out keeps "+
       "updating, so no loop is starved) "+v1247.loopDbg,v1247.loopAlive);
+    check(dev.name+": v124.13a frame cap — the gate admits its OWN target rate and still rejects "+
+      "the next one up (this is what halved 60 to 30) "+v1247.capDbg,v1247.capSane);
+    check(dev.name+": v124.13a pixel filter — it hands the saver's ratio back when switched off "+
+      "instead of a hardcoded 1.0 "+v1247.pixelDbg,v1247.pixelSane);
+    check(dev.name+": v124.13a pixel filter — the crunch is HALVED (~1.67 screen px per rendered "+
+      "px, was 3.33)",v1247.pixelHalved);
     check(dev.name+": v124.7 draw — a flick ("+v1247.flickFired+") and a slow pan ("+
       v1247.panFired+") loose NOTHING; a real draw ("+v1247.realFired+") does",v1247.drawSane);
     check(dev.name+": v124.2 HUD — nothing in the top band overlaps: bar, read-out and map button "+

@@ -158,8 +158,12 @@
   function saverHide(){return saver?88:105;}     // pull the cull line in a little
   function applySaver(){
     try{
-      prStep=saverPR(); prChanges=0; prLastAt=performance.now();
-      renderer.setPixelRatio(Math.min(devicePixelRatio,PR_STEPS[prStep]));
+      prStep=saverPR();
+      const pr=Math.min(devicePixelRatio,PR_STEPS[prStep]);
+      // v124.13a: 06-input's pixel filter used to restore a hardcoded 1.0 when switched off,
+      // which quietly threw away the saver's ratio. It now reads this instead.
+      window.__basePR=pr;
+      if(typeof pixelMode==="undefined"||!pixelMode)renderer.setPixelRatio(pr);
       if(typeof setHideD==="function")setHideD(saverHide());
       fit(true);
       try{localStorage.setItem("reg_saver",saver?"1":"0");}catch(_){}
@@ -170,8 +174,9 @@
     try{
       composer=null;                                // 09-main falls back to renderer.render()
       renderer.shadowMap.enabled=false;
-      renderer.setPixelRatio(Math.min(devicePixelRatio,PR_STEPS[saverPR()]));
       prStep=saverPR();
+      window.__basePR=Math.min(devicePixelRatio,PR_STEPS[prStep]);
+      renderer.setPixelRatio(window.__basePR);
       if(typeof setHideD==="function")setHideD(saverHide());
     }catch(e){console.warn("[touch] perf tier partial:",e);}
   }
@@ -216,12 +221,21 @@
   // and release them TOGETHER when the interval is up.
   // (Safe to return 0 rather than a real handle: nothing in this codebase calls
   // cancelAnimationFrame — checked before writing this.)
+  // v124.13a THE HALF-RATE TRAP — John: "there is no way to get back to 60fps."
+  // The gate was `1000/(target+0.5)`: 16.53ms for a 60fps target. A 60Hz display delivers frames
+  // 16.67ms apart NOMINALLY, but the real timestamps jitter by a millisecond either way — so any
+  // frame arriving at 16.4ms was rejected, and the next candidate was a whole vsync later at
+  // 33.3ms. The cap silently halved 60 to 30, and 30 to 20 (which is exactly the "min 20" that
+  // has been sitting in his read-out). A frame-rate gate must be LOOSE enough to admit the frame
+  // it wants and tight enough to reject the next one up; 0.8 of the period clears both, because
+  // the interval it must reject is always at most half the one it must accept.
+  const CAP_SLACK=0.8;
   (function capFrames(){
     const raf=window.requestAnimationFrame.bind(window);
     let pending=[], scheduled=false, last=0;
     function pump(t){
       scheduled=false;
-      const want=1000/((saver?SAVER_FPS:FULL_FPS)+0.5);
+      const want=(1000/(saver?SAVER_FPS:FULL_FPS))*CAP_SLACK;
       if(t-last<want){ if(pending.length){scheduled=true;raf(pump);} return; }
       last=t;
       const run=pending; pending=[];
@@ -231,6 +245,12 @@
       pending.push(cb);
       if(!scheduled){scheduled=true;raf(pump);}
       return 0;
+    };
+    // exposed for the harness: the gate cannot be measured by counting frames under software GL,
+    // but its THRESHOLD is the whole bug and that is pure arithmetic.
+    window.__capInfo=function(){
+      const target=saver?SAVER_FPS:FULL_FPS;
+      return {target:target, want:(1000/target)*CAP_SLACK, period:1000/target};
     };
   })();
 
@@ -331,7 +351,20 @@
     const hud=document.getElementById("playerhud");
     if(hud)bar.appendChild(hud);
     bar.appendChild(gR);
-    for(const id of ["resources","kings"]){
+    // v124.13a THE CROWNS GO FIRST. John: "some things get pushed off screen where they are not
+    // visible (red king crown) ... due to there being 4 digit resources." The left group is
+    // flex:1 1 0 with overflow:hidden, so once its contents outgrow their half of the strip the
+    // browser clips the LAST child — and with resources first, that was the red crown. Both
+    // stockpiles crossing 1000 is not an edge case, it is the mid-game.
+    // Two changes, and the ordering is the one that actually guarantees it:
+    //   1. The kings lead the group and never shrink. Whatever else happens, the objective of the
+    //      game stays on screen.
+    //   2. Resources follow and are allowed to shrink, so a 5-digit stockpile costs a clipped
+    //      digit on the least urgent number rather than a whole crown.
+    // (Done by DOM order, not the `order` property: the divider rule is "#tbarL>*+*", which paints
+    // on the second CHILD, so reordering visually with `order` would have hung a stray divider off
+    // the left edge of the strip.)
+    for(const id of ["kings","resources"]){
       const el=document.getElementById(id); if(el)gL.appendChild(el);
     }
     // carry is deliberately NOT here: v124.7 put the haul on the gathering caption, where your eyes
@@ -565,7 +598,7 @@
     color:var(--ink)}
   .touch-mode #tbar>*,.touch-mode #tbarL>*,.touch-mode #tbarR>*{position:static!important;transform:none!important;margin:0!important;
     display:flex!important;align-items:center;background:none!important;border:0!important;
-    border-radius:0!important;box-shadow:none!important;padding:0 10px!important;
+    border-radius:0!important;box-shadow:none!important;padding:0 7px!important;
     white-space:nowrap;font-size:12px!important;line-height:1!important;max-width:none!important;
     color:var(--ink)!important;opacity:1;transition:none;height:100%}
   /* dividers go BETWEEN segments inside each group, not between the three top-level boxes */
@@ -602,8 +635,11 @@
     z-index:21;background:none!important;padding:0!important;pointer-events:none;
     font:600 11px/1 ui-monospace,monospace!important;color:#f2ead4;opacity:.5;
     text-shadow:0 1px 2px rgba(0,0,0,.7)}
-  .touch-mode #tbar #resources{order:0;flex:0 0 auto}
-  .touch-mode #tbar #kings    {order:1;flex:0 0 auto}
+  /* v124.13a: kings hold their size, resources give way — see the ordering note in oneBar().
+     tabular-nums stops the whole strip twitching sideways every time a digit ticks over. */
+  .touch-mode #tbar #kings    {order:0;flex:0 0 auto}
+  .touch-mode #tbar #resources{order:1;flex:0 1 auto;min-width:0;overflow:hidden;
+    font-variant-numeric:tabular-nums;gap:6px!important}
   .touch-mode #tbar #agebar   {order:3;flex:0 1 auto;min-width:0;overflow:hidden;
     text-overflow:ellipsis;gap:7px}
   .touch-mode #tbar .agemine{font-size:12px;letter-spacing:.5px}
@@ -627,7 +663,9 @@
   .touch-mode #tbar .thidden{display:none!important}
   /* v124.2 THE KINGS, in the bar. Full-width titles ("KING OSRIC (YOUR KING)") cost 210px each and
      say the same thing every match — the crown, the colour and the bar carry all of it. */
-  .touch-mode #tbar #kings{gap:8px!important;padding:0 10px!important}
+  /* v124.13a: 10px either side + an 8px gap was 36px of air around two glyphs. Trimmed to buy
+     the resource block room before anything has to shrink at all. */
+  .touch-mode #tbar #kings{gap:5px!important;padding:0 7px!important}
   /* the king boxes are GRANDchildren of the strip, so the "#tbar>*" reset above never reached
      them and each crown kept sitting on its own parchment panel */
   .touch-mode #tbar .kingbox{width:auto!important;padding:0!important;display:flex!important;
@@ -654,7 +692,7 @@
     color:transparent!important;-webkit-text-fill-color:transparent;
     filter:drop-shadow(0 1px 0 rgba(43,29,18,.55))}
   /* the number, in the king's own colour — John: "blue font next to blue king crown would say 50%" */
-  .touch-mode #tbar .kpct{font:bold 12px/1 "Trebuchet MS",sans-serif;letter-spacing:.5px;
+  .touch-mode #tbar .kpct{font:bold 11px/1 "Trebuchet MS",sans-serif;letter-spacing:0;
     min-width:38px;text-align:left}
   .touch-mode #tbar #kb0 .kpct{color:#2f57c9}
   .touch-mode #tbar #kb1 .kpct{color:#b4291b}
@@ -1284,11 +1322,11 @@
     if(dt<0.4&&fps<worst)worst=fps;
     if(acc>=500){
       const avg=fr/(acc/1000);
-      // v124.12: the change COUNT rides the read-out too. If the flashing ever comes back this is
-      // the one number that says whether the ratio is the culprit — it climbs on every reallocation.
-      fpsEl.textContent=Math.round(avg)+" fps (min "+Math.round(worst)+")"+
-        (saver?" ⚡":"")+(LOW?" low":" high")+
-        (prStep?" ·"+PR_STEPS[prStep].toFixed(2):"")+(prChanges?" ×"+prChanges:"");
+      // v124.13a: the read-out names the MODE, not just the numbers. "30 fps" on its own gave no
+      // way to tell a device that cannot do better from a cap that was silently halving it.
+      fpsEl.textContent=Math.round(avg)+" fps (min "+Math.round(worst)+") "+
+        (saver?"⚡saver "+SAVER_FPS:"full "+FULL_FPS)+
+        " ·"+PR_STEPS[prStep].toFixed(2)+(LOW?"":" high");
       fr=0;acc=0;
       if(++n%20===0)worst=999;
       stepPixelRatio(avg);
@@ -1315,23 +1353,17 @@
   //   3. A HARD BUDGET. After PR_MAX_CHANGES the ratio is frozen for the match. If my thresholds
   //      are still wrong for a device I have never held, the flashing ends anyway. An adaptive
   //      system that cannot stop adapting is worse than a fixed guess.
-  const PR_DOWN=38, PR_UP=58, PR_DOWN_WINS=6, PR_UP_WINS=20, PR_COOLDOWN=12000, PR_MAX_CHANGES=4;
-  let prLow=0,prHigh=0,prChanges=0,prLastAt=0;
-  function stepPixelRatio(avg){
-    if(!LOW||prChanges>=PR_MAX_CHANGES)return;   // ?gfx=high owns its own ratio; budget spent = done
-    if(performance.now()-prLastAt<PR_COOLDOWN)return;
-    if(avg<PR_DOWN){ prHigh=0; if(++prLow>=PR_DOWN_WINS&&prStep<PR_STEPS.length-1){prLow=0;setPR(prStep+1);} }
-    else if(avg>PR_UP){ prLow=0; if(++prHigh>=PR_UP_WINS&&prStep>0){prHigh=0;setPR(prStep-1);} }
-    else { prLow=0; prHigh=0; }
-  }
-  function setPR(step){
-    prStep=step; prChanges++; prLastAt=performance.now();
-    try{
-      renderer.setPixelRatio(Math.min(devicePixelRatio,PR_STEPS[step]));
-      fit(true);                          // setPixelRatio alone does not resize the backing store
-      console.log("[touch] pixel ratio ->",PR_STEPS[step],"("+prChanges+"/"+PR_MAX_CHANGES+")");
-    }catch(e){}
-  }
+  // v124.13a THE ADAPTIVE RATIO IS RETIRED.
+  // It was introduced in v124 to answer "the picture is blurry", tuned twice, and caused a bug
+  // both times: v124.12's black flashes (every change reallocates the drawing buffer) and then
+  // this round's confusion — John toggled the saver OFF and the controller quietly stepped the
+  // ratio back DOWN to 0.70 behind him, so the switch looked broken. Now that there is an
+  // explicit user-facing dial, a second invisible one guessing against it is strictly worse.
+  // The ratio is whatever the Battery toggle says and it never moves on its own: two states,
+  // both deterministic, zero reallocations after the first frame, and no more flashes by
+  // construction. If a device genuinely cannot hold 60, the saver is one tap away and the
+  // read-out says which mode it is in.
+  function stepPixelRatio(){}
 
   // ---------- the controls yield to the menus ----------
   // Every menu and overlay is DOM. A stick held when one opens would leave the player walking
