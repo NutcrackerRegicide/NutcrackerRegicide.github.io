@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "peerjs-js-binarypack": "^2.1.0",
     "playwright-core": "^1.62.0",
     "three": "^0.128.0"
   }

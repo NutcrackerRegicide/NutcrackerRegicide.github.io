@@ -1795,7 +1795,7 @@ global.__G.setGameOver(false);
     NET.mode="host";
     const s=NET.packSnap();
     check("v126 wire: every snapshot carries `ht`, the host's own monotonic clock",typeof s.ht==="number");
-    check("v126 wire: PROTO is still 25 — `ht` is additive, so a v125 peer simply ignores it",NET.PROTO===25);
+    check("v127 wire: PROTO is 26 — the envelope delta OMITS fields, which an older peer misreads",NET.PROTO===26);
     // the version stamp is READ from the page, not frozen in the recorder. Every log John
     // field-tested on v125.1 said ver:"v98", because that literal was written in v98 and never
     // touched again — a flight recorder you have to take somebody's word about.
@@ -1808,6 +1808,106 @@ global.__G.setGameOver(false);
     // …and degrades honestly when there is no page to read (headless, or a stripped build)
     check("v126 net log: with no verstamp in the DOM it says so rather than guessing",NET.logVer()==="unknown");
     NET.mode="guest";
+  }
+}
+
+// ================= v127: THE DIET AND THE GLIDE =================
+{
+  const G=global.__G;
+  // ---- the envelope ships on change, not on schedule ----
+  // Measured with PeerJS's own serializer (tools/netprofile.js): stock0+stock1+carry cost
+  // 69 B/snap and were byte-identical to the previous snapshot 100% of a 300-snapshot sample —
+  // ~1.0 KB/s per guest of pure repetition, on a host whose send buffer was at or over
+  // BUF_FAST_MAX for 11–13% of John's session. The rows have shipped on change since v95; this
+  // is the envelope finally doing the same.
+  {
+    NET.mode="host";
+    NET._lastRow=null;                        // force the init snapshot (which is also a keyframe)
+    NET._lastStock=undefined;NET._lastCarry=undefined;
+    const first=NET.packSnap();
+    check("v127 envelope: the first snapshot is a keyframe and carries the whole treasury",
+      !!first.stock0&&!!first.stock1&&typeof first.stock0.f==="number");
+    // walk to just before the next keyframe so `full` cannot mask the delta
+    let lean=null,fat=0;
+    for(let i=0;i<12;i++){const s=NET.packSnap();if(s.stock0)fat++;else lean=s;}
+    check("v127 envelope: with the treasury unchanged, later snapshots omit it ("+fat+
+      " of 12 still carried it)",!!lean&&fat<=1);
+    // …and a real change ships immediately, not at the next keyframe
+    G.stock[G.BLUE].food+=777;
+    const changed=NET.packSnap();
+    check("v127 envelope: a spent or earned coin ships on the very next snapshot",
+      !!changed.stock0&&changed.stock0.f===Math.floor(G.stock[G.BLUE].food));
+    // the keyframe heals a drop — this is the whole reason omitting is safe on a lossy lane
+    let healed=false;
+    for(let i=0;i<20;i++){const s=NET.packSnap();if(s.stock0)healed=true;}
+    check("v127 envelope: an omitted treasury is re-sent by the 1Hz keyframe, so a dropped packet heals",healed);
+    // ares drops to ~2Hz because the guest already ticks the countdown down itself
+    let aresN=0; for(let i=0;i<30;i++){if(NET.packSnap().ares)aresN++;}
+    check("v127 envelope: `ares` rides ~2Hz, not "+NET.SNAP_HZ+"Hz ("+aresN+" of 30 snapshots)",
+      aresN>0&&aresN<=30*(3/NET.SNAP_HZ)+2);
+  }
+  // ---- a guest must tolerate every one of those absences ----
+  // THE FAILURE MODE THIS GUARDS is not hypothetical: the pre-v127 line was
+  // `stock[BLUE].food=s.stock0.f` with no guard, so a lean snapshot would have written NaN
+  // into the treasury and every HUD figure downstream of it. That is why PROTO moved to 26.
+  {
+    NET.mode="host"; NET._lastRow=null;
+    const s=NET.packSnap();
+    NET.mode="guest";
+    delete s.stock0; delete s.stock1; delete s.carry; delete s.ares;
+    s.q=NET.lastQ+1;
+    const f0=G.stock[G.BLUE].food, r0=G.ageResT[G.BLUE];
+    let threw=false;
+    try{NET.applySnap(s);}catch(e){console.error("  lean snapshot threw:",e.message);threw=true;}
+    check("v127 lean snapshot: a guest applies one with no treasury, carry or countdown and keeps its own figures",
+      !threw&&G.stock[G.BLUE].food===f0&&!isNaN(G.stock[G.BLUE].food)&&G.ageResT[G.BLUE]===r0);
+  }
+  // ---- the glide carries on instead of parking ----
+  // A far unit ships every AOI_FAR_EVERY-th snap (~266ms at 15Hz) and the glide finishes in
+  // gapAvg (~76ms measured in the field), so the old code left it standing perfectly still for
+  // two thirds of its life and then jerking forward. Every dropped snapshot added another
+  // freeze, and John's guests logged ~1,400 sequence holes each.
+  {
+    const realNow=NET.now; let clk=7e6; NET.now=()=>clk;
+    NET.mode="guest";
+    const mover=G.units.find(u=>u.alive&&!u.isPlayer&&!u.garrison);
+    const startX=40, startZ=40, step=1.5; // 1.5 units per arrival, due east
+    mover.netX=startX;mover.netZ=startZ;mover.netPX=startX;mover.netPZ=startZ;
+    mover.netVX=0;mover.netVZ=0;mover.netAt=clk;mover.gmv=true;
+    mover.root.position.set(startX,0,startZ);
+    NET.gapAvg=80;
+    // two arrivals, 80ms apart, establish the leg
+    const arrive=(x,z)=>{
+      const legMs=clk-(mover.netAt||clk);
+      mover.netPX=mover.root.position.x;mover.netPZ=mover.root.position.z;
+      if(legMs>=8&&legMs<=1000){mover.netVX=(x-mover.netX)/legMs;mover.netVZ=(z-mover.netZ)/legMs;}
+      mover.netX=x;mover.netZ=z;mover.netAt=clk;
+    };
+    clk+=80; arrive(startX+step,startZ);
+    clk+=80; arrive(startX+step*2,startZ);
+    check("v127 glide: the velocity of the leg just walked is derived from the wire, not shipped ("+
+      (Math.round(mover.netVX*1e4)/1e4)+" u/ms)",Math.abs(mover.netVX-step/80)<1e-6&&mover.netVZ===0);
+    // now let the feed go quiet for four glide-lengths, as an AOI-far unit's does
+    clk+=80; NET.guestFrame(1/60); const atGlideEnd=mover.root.position.x;
+    clk+=120; NET.guestFrame(1/60); const later=mover.root.position.x;
+    check("v127 glide: a MOVING body keeps walking past the end of the glide instead of parking ("+
+      (Math.round(atGlideEnd*100)/100)+" → "+(Math.round(later*100)/100)+")",
+      later>atGlideEnd+0.1);
+    // …but the extrapolation is bounded, or a unit that stopped would be flung across the map
+    clk+=4000; NET.guestFrame(1/60);
+    const drift=mover.root.position.x-mover.netX;
+    const cap=mover.netVX*NET.EXTRAP_MAX_MS; // exactly one EXTRAP_MAX_MS of the last leg, no more
+    check("v127 glide: the carry-on is capped at EXTRAP_MAX_MS — four seconds of silence still drifts only "+
+      (Math.round(drift*100)/100)+" units (cap "+(Math.round(cap*100)/100)+")",
+      Math.abs(drift-cap)<0.01);
+    // and a body the host says is STANDING STILL does not drift at all
+    mover.gmv=false; mover.netAt=clk;
+    mover.netPX=mover.root.position.x;mover.netPZ=mover.root.position.z;
+    mover.netX=mover.root.position.x;mover.netZ=mover.root.position.z;
+    clk+=2000; NET.guestFrame(1/60);
+    const still=Math.abs(mover.root.position.x-mover.netX)<0.001;
+    check("v127 glide: a body the host reports as still stays still, however long the feed is quiet",still);
+    NET.now=realNow;
   }
 }
 
@@ -2090,11 +2190,17 @@ global.__G.setGameOver(false);
   check("v107 advance: a guest countdown reaching 0 does NOT flip the age (host's snap does)",
     G.teamAge[0]===3&&G.ageResT[0]===0);
   // the countdown rides the wire: world payload + snap payload both carry `ares`
+  // v127: `ares` is no longer on EVERY snapshot — it rides ~2Hz now, because the guest already
+  // ticks the countdown down itself between arrivals (tickAgeResearch(dt,false)) and 15Hz of
+  // authoritative overwrite was fighting its own smoothing. So force the keyframe rather than
+  // asserting against whichever phase this call happens to land on: what matters is that the
+  // field still CARRIES the countdown, not that it is present 15 times a second.
   G.ageResT[0]=42.5;
   const w=G.NET.packWorld(1);
-  let snapAres=null; try{const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
-  check("v115 net: PROTO 25 (a replanted world changes node indices) and `ares` still rides the payloads",
-    G.NET.PROTO===25&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
+  let snapAres=null;
+  try{G.NET._lastRow=null;const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
+  check("v115/v127 net: PROTO 26 (the envelope delta omits fields) and `ares` still rides both payloads",
+    G.NET.PROTO===26&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
     Array.isArray(snapAres)&&Math.abs(snapAres[0]-42.5)<0.06);
   G.ageResT[0]=0;
 

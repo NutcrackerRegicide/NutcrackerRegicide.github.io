@@ -7,7 +7,12 @@
 
 var NET={
   mode:"solo",          // "solo" | "host" | "guest"
-  PROTO:25,             // bumped whenever the wire format changes OR the generated world does.
+  PROTO:26,             // bumped whenever the wire format changes OR the generated world does.
+                        // v127: 25 → 26. The envelope (stock0/stock1/carry/ares) went from
+                        // "every snapshot" to "when it changes, plus the 1Hz keyframe". A v126
+                        // guest reads s.stock0.f with no guard, so an absent field would write
+                        // NaN into the treasury — a MISREAD, which is what this number is for.
+                        // `ht` in v126 needed no bump because an old peer simply ignored it.
                         // v107: the 90s age research (`ares` in snaps + world). v114: the map went
                         // flush with forest — `nodes` is indexed by position in a DETERMINISTIC
                         // world build, so a v113 client and a v114 client disagree about which
@@ -48,6 +53,7 @@ var NET={
   // no absolute offset, immune to whatever the sim clock is doing.
   AGE_FRESH_MS:600,     // a snapshot older than this may not leash-yank the player body
   HOFF_DECAY_MS:20000,  // …and the baseline re-floors this often, so slow drift can't poison it
+  EXTRAP_MAX_MS:260,    // v127: a remote body keeps walking its last leg this long past the glide, rather than freezing until the next row (~1 AOI_FAR_EVERY period at SNAP_HZ)
   LANE_WEDGE_MS:2500,   // host: a lane whose bufferedAmount hasn't MOVED this long is dead, not busy
   REDIAL_MS:1200,       // guest: fast lane claims open but nothing has arrived ON IT this long
   DIAL_TIMEOUT_MS:6000, // …and only one dial may be in flight at a time, for this long
@@ -1035,13 +1041,40 @@ NET.packSnap=function(){
   const s={t:"snap",q:NET._q++,T:r1(T),
     ht:Math.round(NET.now()),
     ages:[teamAge[BLUE],teamAge[RED]],
-    ares:[r1(ageResT[BLUE]),r1(ageResT[RED])],over:gameOver?1:0, // v107: the 90s advance countdown
-    stock0:{f:Math.floor(stock[BLUE].food),g:Math.floor(stock[BLUE].gold),
-            s:Math.floor(stock[BLUE].stone),w:Math.floor(stock[BLUE].wood)},
-    stock1:{f:Math.floor(stock[RED].food),g:Math.floor(stock[RED].gold),
-            s:Math.floor(stock[RED].stone),w:Math.floor(stock[RED].wood)},
-    ub,un:rows.length,
-    carry};
+    over:gameOver?1:0,
+    ub,un:rows.length};
+  // ---- v127: THE ENVELOPE GOES ON THE SAME DIET THE ROWS HAVE BEEN ON SINCE v95 ----
+  // Unit rows ship only when they change; building rows ship only when they change; and then
+  // `stock0`, `stock1`, `carry` and `ares` were re-sent in full FIFTEEN TIMES A SECOND. Measured
+  // with PeerJS's own serializer (tools/netprofile.js): 69 B/snap for stock+carry alone, and in
+  // a 300-snapshot sample they were byte-identical to the previous snapshot 100% of the time —
+  // about 1.0 KB/s per guest of pure repetition, on a host whose send buffer was at or over
+  // BUF_FAST_MAX for 11–13% of John's session. `ares` is worse than redundant: the guest already
+  // interpolates the countdown locally via tickAgeResearch(dt,false), so 15Hz of authoritative
+  // overwrite was fighting its own smoothing.
+  //
+  // The healing story is the one the rows already use — `full` is the every-15th-snap keyframe,
+  // so anything dropped is re-sent within a second. A guest applies only the fields present.
+  // THIS IS WHY PROTO WENT TO 26: a v125/v126 guest does `stock[BLUE].food=s.stock0.f` with no
+  // guard, so an absent field would write NaN into the treasury rather than being ignored. That
+  // is a misread, which is exactly the case the bump rule exists for — and the hall list already
+  // refuses a mismatched peer with "⚠ other version" instead of letting it join and break.
+  const stockKey=Math.floor(stock[BLUE].food)+","+Math.floor(stock[BLUE].gold)+","+
+    Math.floor(stock[BLUE].stone)+","+Math.floor(stock[BLUE].wood)+"|"+
+    Math.floor(stock[RED].food)+","+Math.floor(stock[RED].gold)+","+
+    Math.floor(stock[RED].stone)+","+Math.floor(stock[RED].wood);
+  if(full||NET._lastStock!==stockKey){
+    NET._lastStock=stockKey;
+    s.stock0={f:Math.floor(stock[BLUE].food),g:Math.floor(stock[BLUE].gold),
+              s:Math.floor(stock[BLUE].stone),w:Math.floor(stock[BLUE].wood)};
+    s.stock1={f:Math.floor(stock[RED].food),g:Math.floor(stock[RED].gold),
+              s:Math.floor(stock[RED].stone),w:Math.floor(stock[RED].wood)};
+  }
+  const carryKey=JSON.stringify(carry);
+  if(full||NET._lastCarry!==carryKey){NET._lastCarry=carryKey;s.carry=carry;}
+  // the countdown only needs to ARRIVE; between arrivals the guest ticks it down itself
+  if(full||(NET._snapN%Math.max(1,Math.round(NET.SNAP_HZ/2)))===0)
+    s.ares=[r1(ageResT[BLUE]),r1(ageResT[RED])]; // v107: the 90s advance countdown, now at ~2Hz
   if(NET._snapN%3===0){ // 5Hz is plenty for scores/levels — tags cache by text anyway
     s.sc=[[NET.myName,Math.round(player.score||0),player.team,player.id,player.lvl||0]];
     for(const k in NET.remotes){const rr=NET.remotes[k];if(rr.unit)s.sc.push([rr.name,Math.round(rr.unit.score||0),rr.unit.team,rr.unit.id,rr.unit.lvl||0]);}
@@ -1058,7 +1091,14 @@ NET.packSnap=function(){
     if(brows.length){s.bb=NET.packBldRows(brows);s.bn=brows.length;}
   }
   if(NET._fx.length)s.fx=NET._fx.splice(0,NET._fx.length); // batched arrow theatre rides the snap
-  s.bs=ub.byteLength+(s.bb?s.bb.byteLength:0)+(s.sc?s.sc.length*22:0)+(s.fx?s.fx.length*10:0)+140; // wire-size estimate for the guest's readout
+  // wire-size estimate for the guest's KB/s readout. v127: it used to add a flat 140 for the
+  // envelope and never counted `carry` at all, which was harmless while every envelope field
+  // shipped every snap and actively misleading now that most of them don't. Measured against
+  // PeerJS's own serializer (tools/netprofile.js) the fixed part is ~45B; the rest is counted
+  // only when actually present. Still an estimate — netprofile is the instrument — but an
+  // estimate that moves when the thing it measures moves.
+  s.bs=ub.byteLength+(s.bb?s.bb.byteLength:0)+(s.sc?s.sc.length*22:0)+(s.fx?s.fx.length*10:0)+
+    (s.stock0?42:0)+(s.carry?14*Object.keys(carry).length:0)+(s.ares?8:0)+45;
   return s;
 };
 
@@ -1346,7 +1386,10 @@ NET.applySnap=function(s){
     ageResT[BLUE]=s.ares[0];ageResT[RED]=s.ares[1];
     if(Math.ceil(ageResT[MYTEAM])!==wasSec)updateAgeHud();
   }
-  stock[BLUE].food=s.stock0.f;stock[BLUE].gold=s.stock0.g;stock[BLUE].stone=s.stock0.s;stock[BLUE].wood=s.stock0.w;
+  // v127: the treasury is a DELTA now — absent means unchanged, not zero. The old line read
+  // s.stock0.f unguarded, which is precisely why PROTO had to move: an old guest meeting a lean
+  // snapshot would have written NaN into the stockpile and every HUD figure downstream of it.
+  if(s.stock0){stock[BLUE].food=s.stock0.f;stock[BLUE].gold=s.stock0.g;stock[BLUE].stone=s.stock0.s;stock[BLUE].wood=s.stock0.w;}
   if(s.stock1){stock[RED].food=s.stock1.f;stock[RED].gold=s.stock1.g;stock[RED].stone=s.stock1.s;stock[RED].wood=s.stock1.w;}
   for(const rec of NET.readSnapRows(s)){ // v95: rows arrive as packed binary
     const [id,ci,fl,x10,z10,f100,hp,maxHp,rT,gar1,cg]=rec;
@@ -1359,9 +1402,24 @@ NET.applySnap=function(s){
       if(freshAuth){u.authX=x;u.authZ=z;u.authAt=nowP;}
     }else{ // everyone else glides from WHERE THEY'RE DRAWN to the new truth —
            // a burst of late snapshots can never teleport them
+      // ---- v127: remember the LEG we just walked, so the glide can carry on past its end ----
+      // The old glide finished in gapAvg and then clamped, which parked the unit until the next
+      // row arrived. Under the AOI far-stagger that is one row every 4th snap (~266ms) against a
+      // ~76ms glide: 190ms frozen, every time, on every distant unit — plus one extra freeze per
+      // dropped snapshot, and John's guests logged ~1,400 sequence holes each. `netVX`/`netVZ` is
+      // the velocity of the leg that just ended, which guestFrame extrapolates along instead of
+      // stopping. Derived here rather than shipped: it costs no bytes and it cannot disagree with
+      // the positions it was measured from.
       if(typeof u.netX!=="number"||dist2(u.root.position.x,u.root.position.z,x,z)>24*24){
         u.netPX=x;u.netPZ=z; // genuine teleport/respawn: snap
-      }else{u.netPX=u.root.position.x;u.netPZ=u.root.position.z;}
+        u.netVX=0;u.netVZ=0;  // …and a teleport has no velocity worth carrying
+      }else{
+        u.netPX=u.root.position.x;u.netPZ=u.root.position.z;
+        const legMs=nowP-(u.netAt||nowP);
+        if(legMs>=8&&legMs<=1000){ // ignore duplicate-frame arrivals and post-stall gaps alike
+          u.netVX=(x-u.netX)/legMs; u.netVZ=(z-u.netZ)/legMs; // units per ms, from the wire's own numbers
+        }else{u.netVX=0;u.netVZ=0;}
+      }
       u.netX=x;u.netZ=z;u.netF=f;u.netAt=nowP;
     }
     // v109 THE VOICES: the guest FEELS the hit — host-side impacts/pain never reach us, so a
@@ -1481,9 +1539,26 @@ NET.guestFrame=function(dt){
     if(u!==player&&typeof u.netX==="number"){
       // glide from the drawn position to the newest truth over one smoothed
       // arrival interval — packet bursts stretch the glide instead of snapping it
-      const a=Math.min(1,(NET.now()-(u.netAt||0))/NET.gapAvg);
+      const since=NET.now()-(u.netAt||0);
+      const a=Math.min(1,since/NET.gapAvg);
       u.root.position.x=u.netPX+(u.netX-u.netPX)*a;
       u.root.position.z=u.netPZ+(u.netZ-u.netPZ)*a;
+      // ---- v127: CARRY ON WALKING instead of standing still waiting for the next row ----
+      // `a` clamps at 1, so the old code reached the truth in gapAvg and then FROZE the unit
+      // until the next row landed. A far unit ships every AOI_FAR_EVERY-th snap (~266ms at
+      // 15Hz) and the glide takes ~76ms: two thirds of that unit's life was spent standing
+      // perfectly still, then jerking forward. Every dropped snapshot adds another freeze.
+      //
+      // So past the end of the glide, keep moving along the leg just walked — but only while
+      // the host still says this body is MOVING (bit 2 of the flags byte, held in `gmv`), and
+      // only for EXTRAP_MAX_MS, because a unit that stopped or turned must not be flung onward
+      // for ever. Overshoot is self-correcting and costs nothing: the next arrival sets netPX
+      // to WHEREVER THE UNIT IS DRAWN and glides from there, so a wrong guess is absorbed by
+      // the same smoothing that handles a late packet. That property is why this is safe at all.
+      if(a>=1&&u.gmv&&(u.netVX||u.netVZ)){
+        const ex=Math.min(since-NET.gapAvg,NET.EXTRAP_MAX_MS);
+        if(ex>0){u.root.position.x+=u.netVX*ex;u.root.position.z+=u.netVZ*ex;}
+      }
       u.facing=u.netF;
     }
     if(u.garrison&&u.garrison.alive){ // sentries walk the deck: snapshot x/z, deck height
