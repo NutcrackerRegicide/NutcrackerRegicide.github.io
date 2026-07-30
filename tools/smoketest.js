@@ -56,7 +56,20 @@ try{(0,eval)(bundle);}catch(e){console.error("LOAD FAIL:",e.message);process.exi
 console.log("all scripts loaded");
 const {units,buildings,neutralMarkets,buildingMesh,makeBuilding,makeUnit,tradeGold,tick,
   teamAge,stock,updateBot,tryMeleeAttack,lineUnitFor,CLS,clock,isSiege,nodes,BLD}=global.__G;
-clock.getDelta=()=>1/30; // fixed timestep: frames = real sim-time, not wall-clock
+// ---- fixed timestep, and a WALL CLOCK THAT KEEPS UP WITH IT ----
+// v126: the net layer's cadence and diagnostics moved from accumulated sim `dt` to wall time
+// (NET.now), because on a real loaded host those are NOT the same thing — 09-main clamps dt to
+// 0.05, so a host at 10–19 fps ran both at 0.74–0.85× and the flight recorder's own "per second"
+// silently meant "per sim second". In here, though, `dt` is pinned and no real time passes at
+// all, so a bare performance.now() would freeze every net timer: hundreds of ticks would send
+// zero snapshots and any test that leans on the feed flowing would quietly stop testing it.
+// Advancing a synthetic wall clock in lockstep with getDelta models the case v126 restores —
+// a healthy host whose sim clock and wall clock agree (simR ≈ 1.0) — and keeps the harness
+// deterministic. Individual blocks still override NET.now to test a specific timing edge;
+// they save and restore it, landing back on this.
+let __wall=1e6;
+clock.getDelta=()=>{__wall+=1000/30;return 1/30;};
+global.__G.NET.now=()=>__wall;
 // ---- assertions ----
 let fails=0;
 function check(name,cond){console.log((cond?"  PASS":"  FAIL")+" — "+name);if(!cond)fails++;}
@@ -1322,11 +1335,14 @@ global.__G.setGameOver(false); // staged fights ahead — the mute stays off
   // ---- stale inputs stop the body: no runaway ghost-walking on a clogged uplink ----
   {
     const su=G.makeUnit(0,"villager",-40,64,{name:"Staller",bot:null}); su.alive=true; su.garrison=null;
-    const sr={unit:su,conn:{open:true,send(){}},input:{w:1,yaw:0},inputAt:performance.now()};
+    // v126: stamp inputAt off NET.now, not performance.now. The whole net layer reads wall time
+    // through that seam now, and the harness drives it — mixing the two clocks here made a
+    // freshly-stamped input look ~970 SECONDS old and the body refused to walk at all.
+    const sr={unit:su,conn:{open:true,send(){}},input:{w:1,yaw:0},inputAt:NET.now(),rtt:0};
     const x0=su.root.position.z;
     for(let i=0;i<10;i++)NET.driveRemote(sr,0.05);
     const walked=Math.abs(su.root.position.z-x0)>0.5;
-    sr.inputAt=performance.now()-5000; // the uplink died 5s ago
+    sr.inputAt=NET.now()-5000; // the uplink died 5s ago
     const x1=su.root.position.z;
     for(let i=0;i<10;i++)NET.driveRemote(sr,0.05);
     check("v95 stale inputs: fresh keys walk ("+walked+"), dead keys stop the body",
@@ -1389,21 +1405,60 @@ global.__G.setGameOver(false); // staged fights ahead — the mute stays off
     wk.alive=false;
   }
   // ---- stale-authority guard: a backlog snapshot may not yank our body into the past ----
+  // v126 REWRITTEN, because the mechanism changed and this test was asserting the mechanism.
+  // v95 compared two SIM clocks (our estT vs the snapshot's T); v126 compares the host's own
+  // monotonic `ht` against itself. The old test faked age by rolling s2.T back three seconds —
+  // under v126 that snapshot is correctly judged FRESH, because its ht says it left the host a
+  // moment ago and a sim clock running slow is not the same thing as a stale packet. That
+  // distinction IS the fix (John's guests refused authority on ~88% of a perfectly live feed),
+  // so the test now fakes age the honest way: by rolling `ht` back.
   {
+    const realNow=NET.now;
+    let clk=1e6; NET.now=()=>clk; // a clock we control — age is now a wall-clock measurement
     NET.mode="host"; NET._lastRow=null;
-    const s1=NET.packSnap(), s2=NET.packSnap();
+    const s1=NET.packSnap(), s2=NET.packSnap(), s3=NET.packSnap();
     NET.mode="guest";
     const pl=units.find(u=>u.isPlayer); pl.alive=true;
+    NET._hOff=undefined;NET._hOffAt=0; // a fresh baseline for the delay floor
     pl.authX=undefined; pl.authAt=0;
-    NET.estT=s1.T; s1.q=NET.lastQ+1;
-    NET.applySnap(s1); // clocks aligned → fresh → authority arms
+    s1.q=NET.lastQ+1;
+    NET.applySnap(s1); // arrival == ht → zero age → fresh → authority arms
     const armed=typeof pl.authX==="number";
     pl.authX=undefined; pl.authAt=0;
-    s2.T=Math.round((s2.T-3)*10)/10; s2.q=NET.lastQ+1; // a snapshot born three seconds ago
-    NET.estT=s1.T;
+    clk+=3000; s2.q=NET.lastQ+1;     // three seconds pass; s2's ht is three seconds old
     NET.applySnap(s2); // world state applies, the leash does NOT re-arm
-    check("v95 stale authority: fresh snaps arm the leash, 3s-old backlog snaps cannot",
-      armed&&pl.authX===undefined);
+    const blocked=pl.authX===undefined;
+    // …and the delay FLOOR must not have absorbed it: a snapshot minted at the new clock is
+    // fresh again immediately. (If _hOff had been re-floored by the 3s sample, this would fail.)
+    NET.mode="host"; const s4=NET.packSnap(); NET.mode="guest";
+    s4.q=NET.lastQ+1; NET.applySnap(s4);
+    const recovered=typeof pl.authX==="number";
+    check("v126 snapshot age: a live feed arms the leash, a 3s-old ht cannot, and the next live snap re-arms",
+      armed&&blocked&&recovered);
+    // ---- the v125 fallback: a host with no `ht` on the wire still gets the old sim-clock test ----
+    // This path is not decoration — it is what a v126 guest does against a v125 host, and PROTO
+    // stays 25 precisely so that pairing is legal. It must keep working.
+    {
+      pl.authX=undefined; pl.authAt=0;
+      NET._hasHt=false;
+      NET.mode="host"; const l1=NET.packSnap(), l2=NET.packSnap(); NET.mode="guest";
+      delete l1.ht; delete l2.ht;               // pretend a v125 host minted these
+      NET.estT=l1.T; l1.q=NET.lastQ+1;
+      NET.applySnap(l1);
+      const legacyArmed=typeof pl.authX==="number";
+      pl.authX=undefined; pl.authAt=0;
+      l2.T=Math.round((l2.T-3)*10)/10; l2.q=NET.lastQ+1; // born three sim-seconds ago
+      NET.estT=l1.T;
+      NET.applySnap(l2);
+      check("v126 legacy path: against a v125 host (no ht) the old sim-clock guard still gates the leash",
+        legacyArmed&&pl.authX===undefined);
+    }
+    // leave no authority armed — the gather-theatre block below stands still next to a node,
+    // and a live leash would drag the body out of reach and silently zero its swing
+    pl.authX=undefined; pl.authAt=0; NET._hasHt=true;
+    NET.mode="host"; const s5=NET.packSnap(); NET.mode="guest"; s5.q=NET.lastQ+1; NET.applySnap(s5);
+    pl.authX=undefined; pl.authAt=0;
+    NET.now=realNow;
   }
   // ---- gather theatre: the guest's own pick swings; the ore stays host-authoritative ----
   {
@@ -1544,13 +1599,24 @@ global.__G.setGameOver(false);
   // guest sampler: one row per second of guest frames, with the counters aboard
   {
     NET.mode="guest";
+    // v126: the sampler is wall-clocked now, so step NET.now instead of trusting 40 tight-loop
+    // frames to take a real second. They never did — this check used to pass only because
+    // whatever ran before it happened to burn ~1s of wall time, which is not a test, it is a
+    // coincidence that had been holding for 28 versions.
+    const realNow=NET.now; let clk=15e5; NET.now=()=>clk;
     const r0=NET.LOG.rows.length;
     NET._cDup=(NET._cDup||0); // ensure counters exist
-    for(let i=0;i<40;i++)NET.guestFrame(1/30); // ~1.3s → at least one sampled row
+    NET._pingW=clk;
+    for(let i=0;i<40;i++){clk+=1000/30;NET.guestFrame(1/30);} // ~1.3s of wall time → one sampled row
     const grow=NET.LOG.rows.slice(r0).filter(r=>r.role==="g");
     check("v98 net log: the guest samples a row per second ("+grow.length+" new)",
       grow.length>=1&&typeof grow[0].snaps==="number"&&typeof grow[0].ping==="number"&&
       typeof grow[0].qgap==="number"&&typeof grow[0].fps==="number"&&grow[0].fps>0);
+    check("v126 net log: the guest row carries the measured window and the snapshot age (win="+
+      (grow[0]&&grow[0].win)+", age="+(grow[0]&&grow[0].age)+")",
+      !!grow[0]&&grow[0].win>=990&&grow[0].win<=1050&&typeof grow[0].age==="number"&&
+      typeof grow[0].ageMax==="number");
+    NET.now=realNow;
   }
   // dup + gap counters feed the log
   {
@@ -1566,17 +1632,35 @@ global.__G.setGameOver(false);
     sB.q=NET.lastQ+1; NET.applySnap(sB); // tidy the sequence forward
   }
   // host sampler: per-guest sent/skip/ping aboard the row
+  // v126: the ticker is WALL time now, not accumulated sim dt, so the old `NET._diagT=0.95`
+  // nudge has nothing to nudge. Drive NET.now instead — which is also the point of the seam:
+  // a harness that steps the clock by hand cannot accidentally pass because the block before
+  // it happened to take a second of real time (the guest sampler check below was doing that).
   {
     NET.mode="host";
+    const realNow=NET.now;
+    let clk=2e6; NET.now=()=>clk;
     const hu=G.makeUnit(0,"villager",-50,55,{name:"LogGuest",bot:null}); hu.remote="log-peer"; hu.alive=true;
     NET.remotes["log-peer"]={conn:{open:true,send(){}},unit:hu,input:{},name:"LogGuest",rtt:87,sentF:12,skipF:3};
     const r0=NET.LOG.rows.length;
-    NET._diagT=0.95; NET.hostFrame(0.06); // tips the 1s ticker
+    NET._diagW=clk; NET._snapW=clk; NET._simT0=undefined;
+    clk+=1000;                       // one wall second passes
+    NET.hostFrame(0.06);             // …and the ticker fires on it
     const hrow=NET.LOG.rows.slice(r0).find(r=>r.role==="h");
     check("v98 net log: the host row carries per-guest sent/skip/ping",
       !!hrow&&hrow.g&&hrow.g.LogGuest&&hrow.g.LogGuest.sent===12&&hrow.g.LogGuest.skipF===3&&hrow.g.LogGuest.ping===87);
     check("v98 net log: the 1s ticker resets the send window",NET.remotes["log-peer"].sentF===0);
+    // v126: `win` is the measured window, not an assumed 1000 — every rate in the row is per
+    // `win`. The host rows in John's v125.1 logs were up to 2.04s apart while claiming to be
+    // one second, which inflated fps and sent/s by up to 2× exactly when the host was worst.
+    check("v126 net log: the host row reports the window it actually measured (win="+(hrow&&hrow.win)+")",
+      !!hrow&&hrow.win>=990&&hrow.win<=1010);
+    // and simR: the sim clock's rate against wall time. 0.85 in John's session; the one number
+    // that makes a clamped-dt host self-evident instead of something you have to derive.
+    check("v126 net log: the host row reports simR, the sim clock's rate against wall time",
+      !!hrow&&typeof hrow.simR==="number");
     delete NET.remotes["log-peer"]; hu.remote=null; hu.alive=false;
+    NET.now=realNow;
   }
   // saveLog: a well-formed payload even headless (download guarded)
   {
@@ -1587,6 +1671,144 @@ global.__G.setGameOver(false);
       p.rows.length>=2&&p.events.some(e=>e.k==="test-probe"));
   }
   NET.mode="guest";
+}
+
+// ================= v126: THE LANES =================
+// Everything in this block is a fix for something John's three field logs (one host, two
+// guests, same 24-minute playthrough) proved was happening. The numbers in the comments are
+// measured from those files, not estimated.
+{
+  const G=global.__G;
+  // a stand-in lane: records what it was sent, and lets a test pin bufferedAmount where it likes
+  const mkLane=()=>{const L={open:true,sent:[],dataChannel:{bufferedAmount:0},closed:false,
+    send(o){L.sent.push(o);},close(){L.closed=true;L.open=false;}};return L;};
+  const mkRemote=(name,fast,conn)=>{
+    const u=G.makeUnit(0,"villager",-60,60,{name,bot:null}); u.remote="peer-"+name; u.alive=true;
+    return {conn,fast,unit:u,input:{},name,rtt:0};
+  };
+  // ---- the reliable mirror is 1Hz, not every 4th snap ----
+  // Was `o.q%4===0`: 3.75Hz of full snapshots duplicated onto the RETRANSMITTING lane, which
+  // applySnap then discarded at `q<=lastQ`. Measured cost: 17% of Petra's arrivals and 20% of
+  // John's, thrown away — paid for while the host's send buffer sat at ≥16KB for 11–13% of
+  // seconds. MIRROR_EVERY keeps a 1Hz trickle so a silently-dying fast lane still delivers a
+  // world until the guest redials, and stops being the reason the buffer is full.
+  {
+    NET.mode="host";
+    const fast=mkLane(), conn=mkLane();
+    const saveR=NET.remotes; NET.remotes={"peer-M":mkRemote("Mirror",fast,conn)};
+    for(let q=0;q<60;q++)NET.bcastFast({t:"snap",q});
+    const onFast=fast.sent.length, onRel=conn.sent.length;
+    check("v126 mirror: 60 snaps → all 60 on the fast lane, "+onRel+" mirrored on the reliable one (was 15)",
+      onFast===60&&onRel===Math.ceil(60/NET.MIRROR_EVERY)&&onRel===4);
+    check("v126 mirror: MIRROR_EVERY is a whole multiple of SNAP_HZ, so the trickle is exactly 1Hz",
+      NET.MIRROR_EVERY===NET.SNAP_HZ);
+    // the mirror must NOT sit inside the redial window, or a healthy link redials on schedule
+    check("v126 mirror: the 1Hz mirror period does not fall inside REDIAL_MS (that is why the redial watches the fast lane by name)",
+      (1000/NET.SNAP_HZ)*NET.MIRROR_EVERY>=1000&&NET.REDIAL_MS>=1000);
+    NET.remotes=saveR;
+  }
+  // ---- a wedged lane gets dropped instead of skipped against for ever ----
+  // John, at t+87s: buf pinned at EXACTLY 16855 for 11 straight seconds, sent:0, skipF:15/s,
+  // while his body sat frozen on stale inputs. A DataChannel reporting open with a
+  // bufferedAmount that never moves is dead, not busy. The guest has had `redial` for this
+  // since v98; the host had nothing at all.
+  {
+    NET.mode="host";
+    const realNow=NET.now; let clk=3e6; NET.now=()=>clk;
+    const fast=mkLane(), conn=mkLane();
+    fast.dataChannel.bufferedAmount=16855; // exactly John's wedged figure
+    const r=mkRemote("Wedge",fast,conn);
+    const saveR=NET.remotes; NET.remotes={"peer-W":r};
+    for(let q=0;q<10;q++)NET.bcastFast({t:"snap",q});      // buffer never moves…
+    const stillUp=!!(r.fast&&r.fast.open), skipped=r.skipF;
+    clk+=NET.LANE_WEDGE_MS+200;                            // …for longer than LANE_WEDGE_MS
+    NET.bcastFast({t:"snap",q:99});
+    check("v126 wedged lane: a pinned buffer is tolerated briefly ("+skipped+" skips), then the lane is dropped and closed",
+      stillUp&&skipped>=10&&r.fast===null&&fast.closed===true);
+    check("v126 wedged lane: the reliable relay picks up the very snap that dropped it — no gap for the guest",
+      conn.sent.some(o=>o.q===99));
+    check("v126 wedged lane: the drop lands in the event stream",
+      NET.LOG.events.some(e=>e.k==="lane-wedged"));
+    // …and a lane that DRAINS is never dropped, however long it was choked before
+    const fast2=mkLane(), conn2=mkLane();
+    fast2.dataChannel.bufferedAmount=16855;
+    const r2=mkRemote("Drain",fast2,conn2);
+    NET.remotes={"peer-D":r2};
+    for(let q=0;q<10;q++)NET.bcastFast({t:"snap",q});
+    fast2.dataChannel.bufferedAmount=0;                    // it drains
+    NET.bcastFast({t:"snap",q:50});
+    fast2.dataChannel.bufferedAmount=16855;                // and chokes again on the same figure
+    clk+=NET.LANE_WEDGE_MS+200;
+    for(let q=51;q<54;q++)NET.bcastFast({t:"snap",q});
+    check("v126 wedged lane: a lane that drained is watched afresh — a later choke on the SAME byte count still starts a new timer",
+      r2.fast===fast2&&fast2.closed===false);
+    NET.remotes=saveR; NET.now=realNow;
+  }
+  // ---- one dial at a time ----
+  // Two callers (the 1200ms redial and the 5s retry) with no idea about each other. Petra:
+  // 38 redials, 37 fast-ups, 38 fast-downs in 24 minutes — a lane that never settled, plus a
+  // host that (before this version) never closed the lane each new dial replaced.
+  {
+    let dials=0;
+    const realPeer=NET.peer, realNow=NET.now, realMode=NET.mode;
+    let clk=4e6; NET.now=()=>clk;
+    NET.mode="guest"; NET._code="regicide-test"; NET._dialAt=0; NET.fast=null;
+    NET.peer={connect(){dials++;return {on(){}};}};
+    NET.dialFast(); NET.dialFast(); NET.dialFast();   // a dogpile
+    const afterPile=dials;
+    clk+=NET.DIAL_TIMEOUT_MS+100;                    // the attempt is never going to land
+    NET.dialFast();
+    check("v126 dial guard: three dials in a row make ONE connection ("+afterPile+"), and a timed-out attempt may retry ("+dials+")",
+      afterPile===1&&dials===2);
+    NET.peer=realPeer; NET.now=realNow; NET.mode=realMode; NET._dialAt=0;
+  }
+  // ---- the input-staleness cliff became a ramp, and the ledge moved with the ping ----
+  // Both guests spent 13–15% of their seconds past the old fixed 600ms (inAge p90 1470ms and
+  // 1162ms, against pings whose p90 was 537ms and 737ms). A guest must not be declared silent
+  // faster than their own network can speak, and the body should stumble rather than freeze.
+  {
+    NET.mode="host";
+    const realNow=NET.now; let clk=5e6; NET.now=()=>clk;
+    const fast=mkLane(), conn=mkLane();
+    const r=mkRemote("Ramp",fast,conn);
+    const saveR=NET.remotes; NET.remotes={"peer-R":r};
+    r.input={w:1,seq:1}; r.rtt=0; r.inputAt=clk;
+    const holds=[];
+    for(const age of [0,NET.INPUT_STALE_MS+NET.INPUT_EASE_MS/2,NET.INPUT_STALE_MS+NET.INPUT_EASE_MS+50]){
+      r.inputAt=clk-age; NET.driveRemote(r,1/60); holds.push(r._hold);
+    }
+    check("v126 input ramp: current inputs hold full speed ("+holds[0]+"), mid-ramp is partial ("+
+      Math.round(holds[1]*100)/100+"), past the ramp is a dead stop ("+holds[2]+")",
+      holds[0]===1&&holds[1]>0&&holds[1]<1&&holds[2]===0);
+    // the ledge tracks the round trip: a 700ms input age is NOT stale for a 400ms-ping guest
+    r.rtt=400; r.inputAt=clk-700; NET.driveRemote(r,1/60);
+    const tolerant=r._hold;
+    r.rtt=0;   r.inputAt=clk-700; NET.driveRemote(r,1/60);
+    const strict=r._hold;
+    check("v126 input ramp: 700ms of silence is full speed at 400ms ping ("+tolerant+") but already easing at 0 ping ("+
+      Math.round(strict*100)/100+")",
+      tolerant===1&&strict<1);
+    NET.remotes=saveR; NET.now=realNow;
+  }
+  // ---- the wire itself ----
+  {
+    NET.mode="host";
+    const s=NET.packSnap();
+    check("v126 wire: every snapshot carries `ht`, the host's own monotonic clock",typeof s.ht==="number");
+    check("v126 wire: PROTO is still 25 — `ht` is additive, so a v125 peer simply ignores it",NET.PROTO===25);
+    // the version stamp is READ from the page, not frozen in the recorder. Every log John
+    // field-tested on v125.1 said ver:"v98", because that literal was written in v98 and never
+    // touched again — a flight recorder you have to take somebody's word about.
+    const realQS=global.document.querySelector;
+    global.document.querySelector=sel=>(sel===".verstamp"?{textContent:"  v126 — THE HONEST CLOCK  "}:realQS(sel));
+    const p=NET.saveLog();
+    global.document.querySelector=realQS;
+    check("v126 net log: the payload reads the build's own verstamp instead of a frozen literal (ver="+p.meta.ver+")",
+      p.meta.ver==="v126 — THE HONEST CLOCK"&&p.meta.logfmt===2&&p.meta.mirrorEvery===NET.MIRROR_EVERY);
+    // …and degrades honestly when there is no page to read (headless, or a stripped build)
+    check("v126 net log: with no verstamp in the DOM it says so rather than guessing",NET.logVer()==="unknown");
+    NET.mode="guest";
+  }
 }
 
 // ================= v99: THE QUEST DRAFT, THE OX CART & THE PLUNDER =================
@@ -1636,6 +1858,39 @@ global.__G.setGameOver(false);
     G.tickBoardBang(0.05);
     check("v99 board bang: '!' shows while questless, clears once a posting is taken",
       shown&&bang.visible===false);
+    // ---- v126: …AND THE GUEST'S FRAME HAS TO BE THE ONE THAT CALLS IT ----
+    // John, after the v125.1 playthrough: "as a guest I could not see the exclamation point
+    // over the question board." He could not, because `tickBoardBang` was called from exactly
+    // one place — tickBody's host/solo branch — and a guest returns from tickBody well before
+    // it. The group was never constructed at all.
+    //
+    // THE TEST ABOVE COULD NOT HAVE CAUGHT THAT, and that is the lesson worth keeping: it calls
+    // tickBoardBang by hand, so it proves the driver works and says nothing about whether
+    // anybody drives it. This one goes through NET.guestFrame — the real frame — so the
+    // assertion is "a guest standing questless SEES the marker", not "the function functions".
+    {
+      const realNow=NET.now; let clk=6e6; NET.now=()=>clk;
+      NET.mode="guest";
+      pl.alive=true; pl.quest=null; pl.lvl=0;
+      G.closeMenus(); G.cancelPlacing();
+      const kk=G.keys; kk.w=kk.a=kk.s=kk.d=kk.e=false;
+      let gShown=false,overBoard=false,cleared=false,ok=true;
+      try{
+        clk+=1000/30; NET.guestFrame(1/30);
+        const gb=G.getBoardBang();
+        gShown=!!gb&&gb.visible===true;
+        const brd=G.boardFor(pl.team); // the bang tracks boardFor(MYTEAM), which is our team as a guest
+        overBoard=!!gb&&!!brd&&Math.hypot(gb.position.x-brd.x,gb.position.z-brd.z)<0.01;
+        pl.quest={i:0,prog:0};
+        clk+=1000/30; NET.guestFrame(1/30);
+        cleared=!!gb&&gb.visible===false;
+      }catch(e){console.error("  guest board bang threw:",e.message);ok=false;}
+      check("v126 board bang: a GUEST's own frame raises the '!' while questless ("+gShown+
+        "), over their own board ("+overBoard+"), and clears it on a posting ("+cleared+")",
+        ok&&gShown&&overBoard&&cleared);
+      pl.quest=null;
+      NET.now=realNow;
+    }
     pl.quest=qSave; pl.lvl=lSave; pl.alive=aSave;
   }
   // ---- the ox cart: pit-trained, timber-only, four per swing, 300 bed ----

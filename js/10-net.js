@@ -29,8 +29,28 @@ var NET={
   BUF_REL_MAX:16384,    // NEVER queue a snap behind a reliable-lane backlog — that backlog was THE freeze
   AOI_NEAR:60,          // units within 60 of any guest body refresh every snap…
   AOI_FAR_EVERY:4,      // …distant ones every 4th (structural changes — death/class/garrison — always ship at once)
+  MIRROR_EVERY:15,      // v126: snaps ALSO sent on the reliable lane while the fast one is healthy — 1Hz liveness, was every 4th (a fifth of the stream, discarded on arrival)
   INPUT_STALE_MS:600,   // a guest whose inputs stop arriving stops walking (no runaway ghosts)
+  INPUT_EASE_MS:250,    // v126: …and eases to that stop over this long instead of dropping dead mid-stride
   AUTH_FRESH_S:0.6,     // authority older than this (vs the guest's clock) may not yank the player — backlog ≠ truth
+  // ---- v126: THE HONEST AGE CLOCK ----
+  // v95 measured snapshot age as (our sim clock) − (the snapshot's sim clock). Both sides
+  // advance their sim clock by a dt that 09-main CLAMPS to 0.05 — so a host under load
+  // (10–19 fps: frames longer than 50ms) silently deletes the excess and its match clock
+  // falls behind wall time (measured: 0.85× over 24 min, 0.74× at 20 fps). The guest, at
+  // 60–90 fps, never hits the clamp and runs at 1.0×. lagT therefore grew ~0.15s/s from
+  // nothing but the frame-rate gap, crossed AUTH_FRESH_S after ~4s, and stayed there until
+  // the >5s bail-out reset it — a sawtooth that denied authority for ~88% of the session
+  // (John: 15330 stale / 17288 snaps, and PROVEN by reconstructing the sawtooth from the
+  // two clock rates alone). Snapshot age is a WALL-CLOCK question; ask it with a wall clock.
+  // `ht` (host performance.now) rides every snap; the guest tracks the running MINIMUM of
+  // (arrival − ht) as its zero-delay baseline and calls the excess the age. No clock sync,
+  // no absolute offset, immune to whatever the sim clock is doing.
+  AGE_FRESH_MS:600,     // a snapshot older than this may not leash-yank the player body
+  HOFF_DECAY_MS:20000,  // …and the baseline re-floors this often, so slow drift can't poison it
+  LANE_WEDGE_MS:2500,   // host: a lane whose bufferedAmount hasn't MOVED this long is dead, not busy
+  REDIAL_MS:1200,       // guest: fast lane claims open but nothing has arrived ON IT this long
+  DIAL_TIMEOUT_MS:6000, // …and only one dial may be in flight at a time, for this long
   estT:null, ping:0, _fx:[],
   // ---- v92: identity + host options + the HALL (serverless server browser) ----
   myName:"Warrior",     // set on the name screen; the host's tag & scoreboard name
@@ -57,6 +77,21 @@ const CLS_KEYS=Object.keys(CLS), CLS_IDX={};
 CLS_KEYS.forEach((k,i)=>CLS_IDX[k]=i);
 
 // ---------- tiny helpers ----------
+// ---- v126: ONE CLOCK, AND A SEAM TO DRIVE IT ----
+// Every timing decision in the net layer now reads wall time through here. Two reasons.
+// (1) HONESTY: the cadence and diagnostic timers used to accumulate the sim `dt`, which
+//     09-main clamps to 0.05 — so on a loaded host they ran at 0.74–0.85× and both the send
+//     rate and the flight recorder's own "per second" quietly meant "per sim second".
+// (2) TESTABILITY: a headless harness drives hostFrame/guestFrame in a tight loop where no
+//     real time passes at all, so a bare performance.now() would freeze every timer and the
+//     v98 net-log tests would pass or fail on how long the preceding block happened to take
+//     (the guest sampler check was doing exactly that). Tests override NET.now with a counter
+//     they step by hand — see `NET.now` in tools/smoketest.js — and nothing else has to know.
+// Monotonic on purpose: never Date.now() while performance.now() exists, because the age
+// measurement in applySnap must not be walked backwards by an NTP correction mid-match.
+NET.now=function(){
+  return (typeof performance!=="undefined"&&performance.now)?performance.now():Date.now();
+};
 NET.bcast=function(o){for(const c of NET.conns){try{if(c.open)c.send(o);}catch(_){}}};
 NET.laneBuf=function(c){ // bytes sitting UNSENT in a lane's pipe — the honest congestion signal
   try{const dc=c&&c.dataChannel;return(dc&&typeof dc.bufferedAmount==="number")?dc.bufferedAmount:0;}
@@ -69,15 +104,43 @@ NET.bcastFast=function(o){ // unreliable when healthy, never starving — and NE
   // past — the "world frozen, can't walk" freeze. Now a lane only gets a snap when
   // its buffer is close to empty: a choked pipe skips frames and the guest gets the
   // FRESHEST world the moment it drains, not a replay of everything it missed.
+  // v126 THE MIRROR WAS COSTING A FIFTH OF THE STREAM. The reliable lane used to carry
+  // every 4th snap (3.75Hz) alongside a healthy fast lane. applySnap discards those at
+  // `q<=lastQ`, so on a working link they were pure waste — measured at 17% (Petra) and
+  // 20% (John) of ALL arrivals thrown away, paid for on the lane that RETRANSMITS, while
+  // the host's send buffer sat at ≥16KB for 11–13% of seconds. It is now MIRROR_EVERY
+  // (1Hz): enough that a silently-dying fast lane still trickles a world through until the
+  // guest redials, cheap enough to stop being the reason the buffer is full.
+  const now=NET.now();
   for(const k in NET.remotes){
     const r=NET.remotes[k];
     try{
       const fastUp=r.fast&&r.fast.open;
       if(fastUp){
-        if(NET.laneBuf(r.fast)<NET.BUF_FAST_MAX){r.fast.send(o);r.sentF=(r.sentF||0)+1;}
-        else r.skipF=(r.skipF||0)+1;
-      }
-      if(r.conn&&r.conn.open&&(!fastUp||(o.t==="snap"&&o.q%4===0))){
+        const bf=NET.laneBuf(r.fast);
+        // a lane that drained enough to accept a snap is alive — clear the wedge watch
+        // ENTIRELY (both halves: leaving _wedgeB set would let the next choke land on the
+        // same byte count, find _wedgeAt==0, and never start the timer at all)
+        if(bf<NET.BUF_FAST_MAX){r.fast.send(o);r.sentF=(r.sentF||0)+1;r._wedgeAt=0;r._wedgeB=-1;}
+        else{
+          r.skipF=(r.skipF||0)+1;
+          // v126 WEDGED-LANE RECOVERY. A DataChannel can report open with a bufferedAmount
+          // that never moves again — the pipe is dead, not busy. The old code skipped
+          // against it for ever: John's buf sat at EXACTLY 16855 for 11 straight seconds,
+          // sent:0, skipF:15/s, while the guest's body froze on stale inputs. The guest has
+          // had `redial` for this since v98; the host had nothing. If the buffer has not
+          // MOVED in LANE_WEDGE_MS, drop the lane — the reliable relay takes over instantly
+          // and the guest's own redial rebuilds the fast one.
+          if(bf!==r._wedgeB){r._wedgeB=bf;r._wedgeAt=now;}
+          else if(r._wedgeAt&&now-r._wedgeAt>NET.LANE_WEDGE_MS){
+            NET.logEvent("lane-wedged",r.name);
+            try{r.fast.close();}catch(_){}
+            r.fast=null;r._wedgeAt=0;r._wedgeB=-1;
+          }
+        }
+      }else{r._wedgeAt=0;r._wedgeB=-1;}
+      const mirror=fastUp&&o.t==="snap"&&(o.q%NET.MIRROR_EVERY)===0;
+      if(r.conn&&r.conn.open&&(!(r.fast&&r.fast.open)||mirror)){
         if(NET.laneBuf(r.conn)<NET.BUF_REL_MAX)r.conn.send(o);
         else r.skipR=(r.skipR||0)+1;
       }
@@ -93,11 +156,21 @@ NET.logEvent=function(k,d){
     if(NET.LOG.events.length>400)NET.LOG.events.shift();}catch(_){}
 };
 NET.logRow=function(row){NET.LOG.rows.push(row);if(NET.LOG.rows.length>NET.LOG.max)NET.LOG.rows.shift();};
+// v126: the verstamp in index.html is the ONE place the build names itself — read it, don't
+// hardcode a second copy. The v125.1 logs John field-tested with all said ver:"v98", because
+// this string was frozen the day the recorder was written. A flight recorder that misreports
+// which build produced it is a flight recorder you have to take somebody's word about.
+NET.logVer=function(){
+  try{const el=document.querySelector(".verstamp");
+    if(el&&el.textContent)return el.textContent.trim();}catch(_){}
+  return "unknown";
+};
 NET.saveLog=function(){
-  const payload={meta:{game:"REGICIDE",ver:"v98",proto:NET.PROTO,role:NET.mode,name:NET.myName,
+  const payload={meta:{game:"REGICIDE",ver:NET.logVer(),logfmt:2,proto:NET.PROTO,role:NET.mode,name:NET.myName,
     room:NET.roomCode||"",saved:new Date().toISOString(),
     ua:(typeof navigator!=="undefined"&&navigator.userAgent)||"",
-    snapHz:NET.SNAP_HZ,bufFast:NET.BUF_FAST_MAX,bufRel:NET.BUF_REL_MAX,aoiNear:NET.AOI_NEAR},
+    snapHz:NET.SNAP_HZ,bufFast:NET.BUF_FAST_MAX,bufRel:NET.BUF_REL_MAX,aoiNear:NET.AOI_NEAR,
+    mirrorEvery:NET.MIRROR_EVERY,ageFreshMs:NET.AGE_FRESH_MS,inputStaleMs:NET.INPUT_STALE_MS},
     rows:NET.LOG.rows,events:NET.LOG.events};
   try{
     const blob=new Blob([JSON.stringify(payload)],{type:"application/json"});
@@ -195,8 +268,18 @@ NET.uiHost=function(){
   peer.on("connection",c=>{
     if(c.metadata&&c.metadata.ch==="fast"){ // the guest's second, unreliable lane
       const r=NET.remotes[c.peer];
-      if(r){r.fast=c;c.on("data",d=>NET.hostData(r.conn,d));}
-      c.on("close",()=>{const rr=NET.remotes[c.peer];if(rr)rr.fast=null;});
+      // v126: CLOSE THE ONE WE ARE REPLACING. `r.fast=c` used to orphan the previous lane —
+      // still open, still holding a wedged send buffer, never collected. Petra redialled 38
+      // times in 24 minutes, so the host was carrying a drawer full of dead channels for her.
+      if(r){
+        if(r.fast&&r.fast!==c){try{r.fast.close();}catch(_){}}
+        r.fast=c;r._wedgeAt=0;r._wedgeB=-1;
+        c.on("data",d=>NET.hostData(r.conn,d));
+      }
+      // …and only null the slot if the lane closing IS the current one (a late `close` from
+      // the channel we just replaced would otherwise kill the fresh lane a moment after it
+      // came up — the flap that reads as "the fast lane won't stay up")
+      c.on("close",()=>{const rr=NET.remotes[c.peer];if(rr&&rr.fast===c)rr.fast=null;});
       return;
     }
     c.on("data",d=>NET.hostData(c,d));
@@ -211,7 +294,7 @@ NET.lobby=function(){
     const r=NET.remotes[k]; if(!r.unit)continue;
     const fastUp=r.fast&&r.fast.open;
     const buf=NET.laneBuf(fastUp?r.fast:r.conn);
-    const inAge=r.inputAt?Math.round(performance.now()-r.inputAt):-1;
+    const inAge=r.inputAt?Math.round(NET.now()-r.inputAt):-1;
     diag+="<br><span class='netsub'>"+String(r.name).replace(/[<>&]/g,"")+": "+(fastUp?"⚡":"🐢")+
       " · ping "+(r.rtt?r.rtt+"ms":"—")+" · sent "+(r.sentF||0)+"/s"+ // v97: compare with the guest's received/s — the gap IS the diagnosis
       ((r.skipF||r.skipR)?" · skip "+((r.skipF||0)+(r.skipR||0)):"")+
@@ -245,7 +328,7 @@ NET.hostData=function(c,d){
   }
   const r=NET.remotes[c.peer];
   if(!r)return;
-  if(d.t==="input"){if((d.seq||0)>=(r.input&&r.input.seq||0)){r.input=d;r.inputAt=performance.now();}return;}
+  if(d.t==="input"){if((d.seq||0)>=(r.input&&r.input.seq||0)){r.input=d;r.inputAt=NET.now();}return;}
   if(d.t==="ping"){ // v95: echo straight back (prefer the fast lane) — the guest measures its RTT
     r.rtt=d.rtt||0; // …and reports the last measurement so the HOST can see each guest's ping too
     const lane=(r.fast&&r.fast.open)?r.fast:r.conn;
@@ -411,24 +494,42 @@ NET.hostFrame=function(dt){
     syncNameTags(sc);
   }
   for(const k in NET.remotes)NET.driveRemote(NET.remotes[k],dt);
-  NET.snapT+=dt;
-  if(NET.snapT>=1/NET.SNAP_HZ){
-    // v97: carry the remainder instead of resetting — a 20fps host used to quietly
-    // drop to 10 snaps/s (the interval only lined up with whole frames)
-    NET.snapT=Math.min(NET.snapT-1/NET.SNAP_HZ,1/NET.SNAP_HZ);
+  // ---- v126: THE CADENCE IS WALL TIME, NOT SIM TIME ----
+  // Both timers used to accumulate `dt`, which 09-main clamps to 0.05 — so on a host at
+  // 10–19 fps they ran at the SIM clock's 0.74–0.85×. Two consequences, both measured in
+  // John's logs. (1) SNAP_HZ:15 was really 12.3 snaps per WALL second (p10: 0.0) — and the
+  // guest lives in wall time, so that is straight-up lost smoothness. (2) far worse, the
+  // "one row per second" flight recorder was one row per SIM second: host rows came up to
+  // 2.04s apart, so `fps` and `sent` were inflated by as much as 2× in precisely the seconds
+  // worth reading. Logged fps said 21/20/20 (med/p10/min); the truth was 18.8/13.4/9.8.
+  // A recorder that flatters the host exactly when the host is the problem is worse than none.
+  const wnow=NET.now();
+  if(!NET._snapW)NET._snapW=wnow;
+  const snapMs=1000/NET.SNAP_HZ;
+  if(wnow-NET._snapW>=snapMs){
+    // v97's remainder carry, in wall time: advance by whole periods but never bank more than
+    // one, so a long stall does not fire a burst of snaps the moment the loop comes back
+    NET._snapW=Math.max(NET._snapW+snapMs,wnow-snapMs);
     NET.bcastFast(NET.packSnap());
   }
-  NET._diagT=(NET._diagT||0)+dt; // v95: refresh the per-guest health line each second
-  if(NET._diagT>=1){
-    NET._diagT=0;
+  if(!NET._diagW)NET._diagW=wnow;
+  if(wnow-NET._diagW>=1000){
+    const winMs=wnow-NET._diagW; // the window we ACTUALLY measured — logged, so rates are checkable
+    NET._diagW=wnow;
     { // v98: one net-log row per second — sample BEFORE the windows reset
       const g={};
       for(const k in NET.remotes){const rr=NET.remotes[k];if(!rr.unit)continue;
         const fu=rr.fast&&rr.fast.open;
         g[rr.name]={ping:rr.rtt||0,sent:rr.sentF||0,skipF:rr.skipF||0,skipR:rr.skipR||0,
           buf:NET.laneBuf(fu?rr.fast:rr.conn),
-          inAge:rr.inputAt?Math.round(performance.now()-rr.inputAt):-1,fast:fu?1:0};}
-      NET.logRow({t:Date.now(),T:r1(T),role:"h",fps:NET._cFrames||0,
+          inAge:rr.inputAt?Math.round(NET.now()-rr.inputAt):-1,fast:fu?1:0};}
+      // v126: `win` is the true window in ms and `simR` is the sim clock's rate against wall
+      // time over it. simR is the single number that would have made this whole bug obvious
+      // on sight — 0.85 in John's session, 0.74 whenever the host was at 20 fps. Every rate
+      // in this row is per `win`, not per second: divide, don't assume.
+      const simR=NET._simT0===undefined?1:Math.round(((T-NET._simT0)/(winMs/1000))*100)/100;
+      NET._simT0=T;
+      NET.logRow({t:Date.now(),T:r1(T),role:"h",fps:NET._cFrames||0,win:Math.round(winMs),simR,
         units:units.length,blds:buildings.length,g});
       NET._cFrames=0;
     }
@@ -441,7 +542,20 @@ NET.driveRemote=function(r,dt){
   const u=r.unit;
   // v95: inputs older than INPUT_STALE_MS are DEAD inputs — when a guest's uplink
   // clogs, their body stops in its tracks instead of ghost-walking on the last keys.
-  const stale=r.inputAt&&(performance.now()-r.inputAt>NET.INPUT_STALE_MS);
+  // ---- v126: the cliff became a ramp, and the ledge moved with the ping ----
+  // Both of John's guests spent 13–15% of their seconds past this line (inAge p90 1470ms /
+  // 1162ms against a 600ms limit, and their ping p90 was 537ms / 737ms), so a fixed 600ms
+  // was calling a normal round trip a dead uplink. The ledge is now whichever is later:
+  // 600ms, or 2.5 round trips — a guest cannot be declared silent faster than their own
+  // network can speak. Past it, the body EASES to a halt over INPUT_EASE_MS instead of
+  // dropping mid-stride: still no ghost-walking (`hold` reaches 0 and stays there), but a
+  // 700ms hiccup now reads as a stumble rather than a freeze.
+  const ageMs=r.inputAt?(NET.now()-r.inputAt):0;
+  const ledge=Math.max(NET.INPUT_STALE_MS,Math.round((r.rtt||0)*2.5));
+  const over=r.inputAt?(ageMs-ledge):0;
+  const stale=over>=NET.INPUT_EASE_MS;               // fully silent: no input at all
+  const hold=over<=0?1:Math.max(0,1-over/NET.INPUT_EASE_MS); // …and the ramp in between
+  r._hold=hold;
   const i=(stale?{}:r.input)||{};
   if(!u||!u.alive){r.lastE=!!i.e;return;}
   // stances
@@ -613,7 +727,11 @@ NET.driveRemote=function(r,dt){
     if(i.w)mz-=1; if(i.s)mz+=1; if(i.a)mx-=1; if(i.d)mx+=1;
   }
   if(!trusted){
-    if((mx||mz)&&!u.garrison){
+    // v126: `_hold` is the input-staleness ramp — 1 while the inputs are current, sliding to 0
+    // across INPUT_EASE_MS once they pass the ledge. It rides `mag`, which already rides dt, so
+    // the body decelerates instead of being switched off. At _hold 0 nothing moves at all.
+    mag*=(r._hold===undefined?1:r._hold);
+    if((mx||mz)&&mag>0.01&&!u.garrison){
       const dir=new THREE.Vector3(mx,0,mz).applyAxisAngle(new THREE.Vector3(0,1,0),i.yaw||0);
       moved=moveUnit(u,dir.x,dir.z,dt*mag*(u.blocking?0.55:1));
     }else u.moving=false;
@@ -907,7 +1025,16 @@ NET.packSnap=function(){
     if(ship){rows.push(row);NET._lastRow[u.id]=key;NET._lastStruct[u.id]=row[1]+","+(flags&1)+","+row[9];}
   }
   const ub=NET.packRows(rows);
-  const s={t:"snap",q:NET._q++,T:r1(T),ages:[teamAge[BLUE],teamAge[RED]],
+  // v126 `ht`: the host's OWN monotonic clock at send time, in ms. OPTIONAL and additive, so
+  // PROTO stays 25 — a v125 guest ignores the field and keeps using the old estT comparison.
+  // It exists because snapshot AGE is a wall-clock question and `T` is a sim clock: 09-main
+  // clamps dt to 0.05, so a host at 10–19 fps runs T at 0.74–0.85× and every guest concluded
+  // the feed was seconds stale when it was milliseconds fresh. Nothing derives game state from
+  // `ht` — it is only ever compared against a LATER value of itself, so the two machines never
+  // need a shared clock or an offset estimate.
+  const s={t:"snap",q:NET._q++,T:r1(T),
+    ht:Math.round(NET.now()),
+    ages:[teamAge[BLUE],teamAge[RED]],
     ares:[r1(ageResT[BLUE]),r1(ageResT[RED])],over:gameOver?1:0, // v107: the 90s advance countdown
     stock0:{f:Math.floor(stock[BLUE].food),g:Math.floor(stock[BLUE].gold),
             s:Math.floor(stock[BLUE].stone),w:Math.floor(stock[BLUE].wood)},
@@ -960,13 +1087,34 @@ NET.uiJoin=function(){
   });
 };
 NET.dialFast=function(){ // the unreliable lane: dropped packets never dam the stream
+  // ---- v126: ONE DIAL AT A TIME ----
+  // There are two callers — the 1200ms redial and the 5s "no fast lane?" retry installed on
+  // admit — and neither used to know the other was mid-dial. A redial nulls NET.fast, the
+  // retry sees a falsy NET.fast 5s later and dials on top of the still-connecting one, and
+  // every extra dial arrives at a host that (before this version) also never closed the lane
+  // it replaced. Petra redialled 38 times in 24 minutes with 37 fast-ups and 38 fast-downs:
+  // a lane that never settled. A dial in flight now blocks the next one until it opens,
+  // errors, or DIAL_TIMEOUT_MS says the attempt is never going to land.
+  const now=NET.now();
+  if(NET._dialAt&&now-NET._dialAt<NET.DIAL_TIMEOUT_MS)return;
+  NET._dialAt=now;
   try{
     const f=NET.peer.connect(NET._code,{reliable:false,metadata:{ch:"fast"}});
-    f.on("open",()=>{NET.fast=f;});
-    f.on("data",dd=>NET.guestData(dd));
-    f.on("close",()=>{NET.fast=null;});
-    f.on("error",()=>{NET.fast=null;});
-  }catch(_){}
+    f.on("open",()=>{
+      NET._dialAt=0;
+      if(NET.fast&&NET.fast!==f){try{NET.fast.close();}catch(_){}} // never keep two
+      NET.fast=f;
+      // v126: the redial watchdog needs to know when the FAST lane last delivered — not when
+      // any lane did. Stamped here so the reliable mirror can never mask a dead fast lane.
+      NET._fastAt=NET.now();
+    });
+    f.on("data",dd=>{
+      NET._fastAt=NET.now();
+      NET.guestData(dd);
+    });
+    f.on("close",()=>{NET._dialAt=0;if(NET.fast===f)NET.fast=null;});
+    f.on("error",()=>{NET._dialAt=0;if(NET.fast===f)NET.fast=null;});
+  }catch(_){NET._dialAt=0;}
 };
 NET.guestData=function(d){
   if(!d||!d.t)return;
@@ -987,7 +1135,7 @@ NET.guestData=function(d){
   if(d.t==="unew"){
     if(!NET.unitById(d.id)){ // carts and any future late spawns
       const u=makeUnit(d.team,d.cls,d.x,d.z,{name:d.name,bot:{role:"net"}});
-      u.id=d.id; u.netPX=d.x; u.netPZ=d.z; u.netX=d.x; u.netZ=d.z; u.netF=0; u.netAt=performance.now();
+      u.id=d.id; u.netPX=d.x; u.netPZ=d.z; u.netX=d.x; u.netZ=d.z; u.netF=0; u.netAt=NET.now();
     }
     return;
   }
@@ -1032,7 +1180,7 @@ NET.guestData=function(d){
     return;
   }
   if(d.t==="pong"){ // v95: our ping, measured on the wire we actually ride
-    const rtt=performance.now()-(d.ts||0);
+    const rtt=NET.now()-(d.ts||0);
     if(rtt>=0&&rtt<10000)NET.ping=NET.ping?NET.ping*0.6+rtt*0.4:rtt;
     return;
   }
@@ -1052,6 +1200,11 @@ NET.applyWorld=function(w){
   NET.mode="guest";           // freezes the local sim from the very next frame
   NET.myUid=w.uid;
   NET.estT=w.T;               // v95: the guest's clock starts on the host's time
+  // v126: forget the previous host's delay floor. `_hOff` is calibrated against ONE machine's
+  // performance.now() origin; carrying it into a new session (rejoin, different host) would
+  // measure every snapshot against a stranger's clock until the window rolled over.
+  NET._hOff=undefined;NET._hOffAt=0;NET._hOffPrev=undefined;NET._hasHt=false;
+  NET._ageMs=0;NET._ageMax=0;NET._fastAt=0;
   T=w.T; teamAge[BLUE]=w.ages[0]; teamAge[RED]=w.ages[1];
   if(w.ares){ageResT[BLUE]=w.ares[0];ageResT[RED]=w.ares[1];} // v107: pick up a countdown already running
   stock[BLUE].food=w.stock0.f;stock[BLUE].gold=w.stock0.g;stock[BLUE].stone=w.stock0.s;stock[BLUE].wood=w.stock0.w;
@@ -1065,7 +1218,7 @@ NET.applyWorld=function(w){
     u.name=name;
     if(u.cls!==cls)setClass(u,cls);
     u.root.position.set(x,terrainHeight(x,z),z);
-    u.netPX=x;u.netPZ=z;u.netX=x;u.netZ=z;u.netF=f;u.netAt=performance.now();
+    u.netPX=x;u.netPZ=z;u.netX=x;u.netZ=z;u.netF=f;u.netAt=NET.now();
     u.authX=x;u.authZ=z;u.facing=f;
     u.hp=hp;u.maxHp=maxHp;setBar(u.bar,u.hp/u.maxHp);
     u.alive=!!alive; u.dieT=0;
@@ -1116,7 +1269,7 @@ NET.applyWorld=function(w){
   closeMenus();cancelPlacing();
   updateResHud();updateAgeHud();updateKingBars();updatePlayerHud();
   NET.connectedTxt="⚑ CONNECTED — you fight as <b>"+player.name+"</b><br><span class='netsub'>the host runs the war · your body answers instantly</span>";
-  NET.lastSnapAt=performance.now();
+  NET.lastSnapAt=NET.now();
   NET.status(NET.connectedTxt);
   msg("You've joined the "+TEAMNAME[MYTEAM]+" army as "+player.name+". Slay King "+(MYTEAM===BLUE?"Vargus":"Osric")+"!","gold");
 };
@@ -1127,20 +1280,55 @@ NET.applySnap=function(s){
     if(NET.lastQ>=0)NET._cGap=(NET._cGap||0)+Math.min(99,s.q-NET.lastQ-1); // …and sequence holes (loss OR host-side skips — read with the host's sent/s)
     NET.lastQ=s.q;
   }
-  const nowP=performance.now();
+  const nowP=NET.now();
   if(NET.lastArr)NET.gapAvg=Math.min(1200,Math.max(60,NET.gapAvg*0.8+(nowP-NET.lastArr)*0.2));
   NET.lastArr=nowP;
-  // v95 STALE-AUTHORITY GUARD: estT is OUR clock — the newest sim time we've seen,
-  // advanced locally between snaps. A snapshot whose T lags it was born seconds ago
-  // (a draining backlog). Its WORLD state still applies — stale truth beats no truth —
-  // but it may NOT leash-yank our own body: that yank-to-the-past was the
-  // "can look around but can't walk" freeze. If the lag exceeds 5s (host tabbed out,
-  // resumed), we adopt the new timeline instead of distrusting it forever.
-  if(typeof NET.estT!=="number")NET.estT=s.T;
-  const lagT=NET.estT-s.T;
-  const freshAuth=lagT<NET.AUTH_FRESH_S;
+  // v95 STALE-AUTHORITY GUARD: a snapshot born seconds ago (a draining backlog) still applies
+  // its WORLD state — stale truth beats no truth — but it may NOT leash-yank our own body.
+  // That yank-to-the-past was the "can look around but can't walk" freeze.
+  //
+  // ---- v126: MEASURED WITH A WALL CLOCK ----
+  // v95 asked the question as (our sim clock) − (the snapshot's sim clock), and both of those
+  // advance by a dt that 09-main clamps to 0.05. A host at 10–19 fps loses the excess and its
+  // sim clock crawls (0.85× measured over 24 minutes, 0.74× at 20 fps); a guest at 60–90 fps
+  // never touches the clamp. lagT therefore grew ~0.15s per second out of pure frame-rate
+  // mismatch, tripped AUTH_FRESH_S after ~4s, and only reset when it passed the 5s bail-out —
+  // so authority was refused for ~88% of John's session and his body ran on dead reckoning
+  // the whole time. `ht` is the host's own monotonic clock, so the age of a snapshot is
+  // (arrival − ht) minus the smallest (arrival − ht) we have ever seen, i.e. minus the
+  // one-way delay floor. Pure difference of one machine's clock against itself plus one of
+  // ours: no sync, no offset estimate, and completely blind to whatever the sim clock does.
+  let freshAuth,ageMs=0;
+  if(typeof s.ht==="number"){
+    NET._hasHt=true;
+    const d=nowP-s.ht;                                   // clock-offset PLUS transit, in one number
+    // A TWO-BUCKET ROLLING MINIMUM, not a periodic reset. The floor has to expire — the two
+    // machines' clocks drift, and a floor set once at join would slowly read as free lateness —
+    // but resetting it to whatever single sample happens to land on the tick is worse than not
+    // expiring it at all: one unlucky 500ms-delayed packet would become the new definition of
+    // "zero delay" and everything for the next window would read 500ms fresher than it is.
+    // So: keep the min of THIS window and the min of the LAST one, and use the smaller. The
+    // floor can only ever be a value actually observed within the last two windows, and the
+    // handover carries the previous window's best case rather than a single fresh sample.
+    if(NET._hOff===undefined){NET._hOff=d;NET._hOffPrev=d;NET._hOffAt=nowP;}
+    else{
+      if(nowP-(NET._hOffAt||0)>NET.HOFF_DECAY_MS){NET._hOffPrev=NET._hOff;NET._hOff=d;NET._hOffAt=nowP;}
+      if(d<NET._hOff)NET._hOff=d;
+    }
+    const floor=Math.min(NET._hOff,NET._hOffPrev===undefined?NET._hOff:NET._hOffPrev);
+    ageMs=Math.max(0,d-floor);
+    freshAuth=ageMs<NET.AGE_FRESH_MS;
+    NET._ageMs=ageMs;
+    if(ageMs>(NET._ageMax||0))NET._ageMax=ageMs; // the worst age this second, not just the last
+    if(NET.estT===null||typeof NET.estT!=="number")NET.estT=s.T;
+  }else{ // a v125 host: no stamp on the wire, so fall back to the old sim-clock comparison
+    if(typeof NET.estT!=="number")NET.estT=s.T;
+    const lagT=NET.estT-s.T;
+    freshAuth=lagT<NET.AUTH_FRESH_S;
+    if(lagT>5)NET.estT=s.T;
+  }
   if(!freshAuth)NET._cStale=(NET._cStale||0)+1; // net log: backlog snapshots this second
-  if(s.T>NET.estT||lagT>5)NET.estT=s.T;
+  if(s.T>NET.estT)NET.estT=s.T;
   NET._dSnaps=(NET._dSnaps||0)+1; NET._dBytes=(NET._dBytes||0)+(s.bs||0); // the readout's raw feed
   T=s.T;
   if(teamAge[BLUE]!==s.ages[0]||teamAge[RED]!==s.ages[1]){
@@ -1257,15 +1445,20 @@ NET.applySnap=function(s){
     player.tradeLoaded=c[4]?(player.tradeLoaded||{x:0,z:0}):null;
   }
   if(s.over&&!gameOver){/* end event carries the details; this is the belt to its suspenders */}
-  NET.lastSnapAt=performance.now();
+  NET.lastSnapAt=NET.now();
   updateResHud();updatePlayerHud();updateKingBars();
 };
 // -------- guest: the thin frame (predict self, interpolate others) --------
 NET.guestFrame=function(dt){
   NET._cFrames=(NET._cFrames||0)+1; // fps for the net log
   // v95: our clock marches between snapshots (frozen while the feed is stale, so a
-  // paused host doesn't poison the lag estimate) — applySnap compares arrivals to it
-  if(typeof NET.estT==="number"&&!NET._stale)NET.estT+=dt;
+  // paused host doesn't poison the lag estimate) — applySnap compares arrivals to it.
+  // v126: ONLY on the v125-host fallback path. Once `ht` is on the wire, freshness is
+  // measured against the host's own clock and this local march is exactly the thing that
+  // was wrong — a guest at 60fps advancing estT at 1.0× against a host sim clock at 0.85×
+  // manufactured 0.15s of fake lag every second. estT still tracks the newest T it has
+  // SEEN (applySnap raises it), it just no longer invents time between snapshots.
+  if(typeof NET.estT==="number"&&!NET._stale&&!NET._hasHt)NET.estT+=dt;
   for(const u of units){
     if(!u.alive){
       if(u.dieT>0){ // same topple as the host sim
@@ -1288,7 +1481,7 @@ NET.guestFrame=function(dt){
     if(u!==player&&typeof u.netX==="number"){
       // glide from the drawn position to the newest truth over one smoothed
       // arrival interval — packet bursts stretch the glide instead of snapping it
-      const a=Math.min(1,(performance.now()-(u.netAt||0))/NET.gapAvg);
+      const a=Math.min(1,(NET.now()-(u.netAt||0))/NET.gapAvg);
       u.root.position.x=u.netPX+(u.netX-u.netPX)*a;
       u.root.position.z=u.netPZ+(u.netZ-u.netPZ)*a;
       u.facing=u.netF;
@@ -1331,7 +1524,7 @@ NET.guestFrame=function(dt){
       const dir=new THREE.Vector3(mx,0,mz).applyAxisAngle(new THREE.Vector3(0,1,0),camYaw);
       moveUnit(player,dir.x,dir.z,dt*(player.blocking?0.55:1));
     }else player.moving=false;
-    if(typeof player.authX==="number"&&performance.now()-(player.authAt||0)<600){
+    if(typeof player.authX==="number"&&NET.now()-(player.authAt||0)<600){
       // never let STALE authority yank us — if snapshots pause, prediction free-runs
       const p=player.root.position;
       const ex=player.authX-p.x, ez=player.authZ-p.z, e=Math.hypot(ex,ez);
@@ -1388,15 +1581,31 @@ NET.guestFrame=function(dt){
   updateEffects(dt);
   updateProjectiles(dt); // pure theatre — damage is host-only
   if(typeof tickAgeResearch==="function")tickAgeResearch(dt,false); // v107: smooth countdown between snaps (display only)
+  // v126: THE "!" OVER THE QUEST BOARD, WHICH A GUEST HAS NEVER SEEN. `tickBoardBang` was
+  // called from exactly one place — tickBody's host/solo branch — and a guest returns from
+  // tickBody long before reaching it, so `_boardBang` was never even constructed: not hidden,
+  // absent. Every other display-only driver made the trip across (drainVisualQueue,
+  // updateEffects, updateProjectiles, tickAgeResearch, Sound.tick, updateRoster, drawMinimap);
+  // the v99 bang predates all of them and was simply never added. Everything it reads is
+  // already true on a guest — `townBoards` comes from local world gen, MYTEAM is set in
+  // applyWorld, and player.quest/lvl arrive on the `qst` message — so it just works once called.
+  // Placed here to hold the host's relative order (tickAgeResearch → tickBoardBang → Sound).
+  if(typeof tickBoardBang==="function")tickBoardBang(dt);
   if(typeof Sound!=="undefined")Sound.tick(dt); // v100: ambience bed + nearby-march on the guest too
   // stale-feed watchdog + the v95 FIELD READOUT (lane · ping · snaps/s · KB/s):
   // one honest line, refreshed each second — next playtest, the numbers do the triage.
   const fastUp=!!(NET.fast&&NET.fast.open);
-  NET._pingT=(NET._pingT||0)+dt;
-  if(NET._pingT>=1){
-    NET._pingT=0;
+  // v126: wall clock, for the same reason as the host — `dt` is the CLAMPED sim delta, so this
+  // "once a second" ran at the sim clock's rate and every rate in the row below was per sim
+  // second. On a guest at 60–90 fps the clamp rarely bites, so guest rows were only ~1–4% off;
+  // it is the host side that was up to 2× out. Both are wall-clock now, and both log `win`.
+  const gnow=NET.now();
+  if(!NET._pingW)NET._pingW=gnow;
+  if(gnow-NET._pingW>=1000){
+    const winMs=gnow-NET._pingW;
+    NET._pingW=gnow;
     const lane=fastUp?NET.fast:(NET.conn&&NET.conn.open?NET.conn:null);
-    if(lane)try{lane.send({t:"ping",ts:performance.now(),rtt:Math.round(NET.ping||0)});}catch(_){}
+    if(lane)try{lane.send({t:"ping",ts:NET.now(),rtt:Math.round(NET.ping||0)});}catch(_){}
     if(NET.connectedTxt&&!NET._stale){
       NET.status(NET.connectedTxt+"<br><span class='netsub'>"+
         (fastUp?"⚡ fast lane":"🐢 relay lane — retrying the fast lane…")+
@@ -1404,23 +1613,37 @@ NET.guestFrame=function(dt){
         " · "+(NET._dSnaps||0)+" snaps/s · "+(((NET._dBytes||0)/1024).toFixed(1))+" KB/s</span>");
     }
     // v98: one net-log row per second — sampled before the windows reset
+    // v126 adds `win` (the true window in ms — divide by it, don't assume 1000) and `age`
+    // (the measured wall-clock age of the last snapshot, the number `stale` is counting).
     NET.logRow({t:Date.now(),T:r1(typeof T==="number"?T:0),role:"g",fps:NET._cFrames||0,
+      win:Math.round(winMs),
       ping:Math.round(NET.ping||0),snaps:NET._dSnaps||0,
       kb:Math.round((NET._dBytes||0)/102.4)/10,gapAvg:Math.round(NET.gapAvg),
+      age:Math.round(NET._ageMs||0),ageMax:Math.round(NET._ageMax||0),
       fast:fastUp?1:0,qgap:NET._cGap||0,dup:NET._cDup||0,stale:NET._cStale||0,leash:NET._cLeash||0});
-    NET._cFrames=0;NET._cGap=0;NET._cDup=0;NET._cStale=0;NET._cLeash=0;
+    NET._cFrames=0;NET._cGap=0;NET._cDup=0;NET._cStale=0;NET._cLeash=0;NET._ageMax=0;
     if(NET._logLane!==fastUp){ // lane transitions land in the event stream
       if(NET._logLane!==undefined)NET.logEvent(fastUp?"fast-up":"fast-down");
       NET._logLane=fastUp;
     }
     NET._dSnaps=0;NET._dBytes=0;
   }
-  if(NET.lastSnapAt&&performance.now()-NET.lastSnapAt>1200&&NET.fast&&NET.fast.open){
+  // ---- v126: THE REDIAL WATCHES THE FAST LANE, NOT THE FEED ----
+  // The old test was "no snapshot from ANY lane for 1200ms". That is the wrong question twice
+  // over. It could not fire while the reliable mirror was still trickling (so a genuinely dead
+  // fast lane hid behind the relay), and once MIRROR_EVERY dropped the mirror to 1Hz the same
+  // test would have started firing on a healthy link, because a 1000ms mirror period sits
+  // inside a 1200ms window. `_fastAt` is stamped in dialFast's own data handler, so this now
+  // asks the only question that was ever meant: the fast lane claims open — is anything
+  // actually coming down it?
+  const pnow=NET.now();
+  if(NET.fast&&NET.fast.open&&NET._fastAt&&pnow-NET._fastAt>NET.REDIAL_MS){
     try{NET.fast.close();}catch(_){}
-    NET.fast=null; NET.dialFast(); // the lane CLAIMED open while packets died — start over
+    NET.fast=null;NET._fastAt=0;
+    NET.dialFast(); // the lane CLAIMED open while packets died — start over
     NET.logEvent("redial");
   }
-  if(NET.lastSnapAt&&performance.now()-NET.lastSnapAt>1500){
+  if(NET.lastSnapAt&&NET.now()-NET.lastSnapAt>1500){
     if(!NET._stale){NET._stale=true;NET.logEvent("stall-start");NET.status("⏳ Waiting for the host… (their window may be minimized)");}
   }else if(NET._stale){NET._stale=false;NET._laneShown=undefined;NET.logEvent("stall-end");if(NET.connectedTxt)NET.status(NET.connectedTxt);}
   // local cosmetics: blocking pose + ghost placement preview
