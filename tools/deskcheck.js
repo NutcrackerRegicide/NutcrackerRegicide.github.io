@@ -257,27 +257,88 @@ const PORT=8133;                   // NOT 8132 — mobilecheck may be running in
       /⏳42s/.test(info.at)&&/vs/.test(info.at)&&info.at.includes(info.foeAge)&&
       !/77/.test(info.at));
 
-    // ---- the carry segment appears and goes ----
-    const carry=await page.evaluate(async()=>{
+    // ---- the gathering caption, lower centre ----
+    // John: "the gather UI for desktop should be the same as mobile, showing up at lower center of
+    // screen with the resource icon and the (0/20)." Three things have to be true: it appears only
+    // while there is something to say, it names the resource and its capacity, and it CLEARS the
+    // strip — the phone version originally sat at bottom:78px and printed "gathering" across the
+    // word VILLAGER.
+    const gather=await page.evaluate(async()=>{
       const wait=ms=>new Promise(r=>setTimeout(r,ms));
-      const cw=document.getElementById("carry");
-      const shown=()=>getComputedStyle(cw).display!=="none";
-      cw.style.display="none"; await wait(160);
-      const empty=shown();
-      cw.style.display="block"; await wait(160);
-      const full=shown();
-      cw.style.display="none"; await wait(160);
-      return {empty,full,gone:shown()};
+      const el=document.getElementById("dauto");
+      const shown=()=>getComputedStyle(el).display!=="none";
+      const c=player.carry;
+      const c0={...c}, g0=player.gathering;
+      // STAND AT THE TREE. The player spawns inside the Town Centre's deposit radius, and 09-main
+      // auto-deposits every frame you are in it — so a carry written by the harness was banked and
+      // zeroed before the next rAF, and the caption honestly read 0/20 for ever. Nothing was wrong
+      // with the caption; the test was standing in the wrong place.
+      const p0={x:player.root.position.x,z:player.root.position.z};
+      const tc=teamTC(MYTEAM);
+      const node=nodes.filter(n=>n.type==="wood"&&n.amount>0)
+        .sort((a,b)=>dist2(b.x,b.z,tc.x,tc.z)-dist2(a.x,a.z,tc.x,tc.z))[0];
+      player.root.position.x=node.x; player.root.position.z=node.z;
+      for(const k in c)c[k]=0;
+      player.gathering=null;
+      await wait(200);
+      const idle=shown();                                  // nothing to say: silent
+      // gathering with an EMPTY satchel must still read 0-of-capacity, naming the node type
+      player.gathering=node;
+      await wait(200);
+      const zero=el.textContent;
+      // ...and count up as the load comes in
+      c.wood=7;
+      await wait(200);
+      const some=el.textContent;
+      const b=el.getBoundingClientRect();
+      const barTop=document.getElementById("dbar").getBoundingClientRect().top;
+      const clears=b.bottom<=barTop-4;
+      const centred=Math.abs((b.left+b.width/2)-innerWidth/2)<=3;
+      const lower=b.top>innerHeight*0.6;
+      // hands full says so
+      const cap=carryCap(player);
+      c.wood=cap;
+      await wait(200);
+      const full=el.textContent;
+      // and it goes when the satchel empties and the hands come off the tree
+      for(const k in c)c[k]=0;
+      player.gathering=null;
+      await wait(220);
+      const gone=shown();
+      for(const k in c0)c[k]=c0[k];
+      player.gathering=g0;
+      player.root.position.x=p0.x; player.root.position.z=p0.z;
+      return {idle,zero,some,full,gone,cap,clears,centred,lower,
+        box:[Math.round(b.left),Math.round(b.top),Math.round(b.width),Math.round(b.height)],
+        barTop:Math.round(barTop)};
     });
-    // 08-ui hides #carry with an INLINE style, which loses to the strip's display:flex!important —
-    // so without the class mirror an empty "Carrying: —" sits in the bar for the whole match.
-    check(dev.name+": v125 carry — the segment shows only while you are hauling ("+
-      JSON.stringify(carry)+")",carry.empty===false&&carry.full===true&&carry.gone===false);
+    check(dev.name+": v125.1 gather — the caption names the resource and counts to capacity, "+
+      "starting at 0 on an empty satchel "+JSON.stringify({zero:gather.zero,some:gather.some,
+        full:gather.full,cap:gather.cap}),
+      // NOT an exact 7: standing at a live tree, the sim's own gather tick keeps adding while we
+      // wait, which is the whole point of the read-out. Assert the FORM and that it climbed.
+      gather.zero==="⛏ gathering  🪵 0/"+gather.cap&&
+      /^⛏ gathering {2}🪵 \d+\/20$/.test(gather.some)&&
+      parseInt(gather.some.match(/🪵 (\d+)/)[1],10)>=7&&
+      /hands full/.test(gather.full));
+    check(dev.name+": v125.1 gather — it is silent with nothing to say, and sits at the LOWER "+
+      "CENTRE clear of the strip "+JSON.stringify({idle:gather.idle,gone:gather.gone,
+        box:gather.box,barTop:gather.barTop}),
+      gather.idle===false&&gather.gone===false&&gather.clears&&gather.centred&&gather.lower);
+    // and the strip must NOT also carry the haul — one copy, in the place you are looking
+    const noDup=await page.evaluate(()=>{
+      const cw=document.getElementById("carry");
+      return {inBar:!!document.getElementById("dbar").contains(cw),
+        shown:getComputedStyle(cw).display!=="none"};
+    });
+    check(dev.name+": v125.1 gather — the haul is NOT also a segment of the strip "+
+      JSON.stringify(noDup),!noDup.inBar&&!noDup.shown);
 
     // ---- PRIORITY: a narrow window drops the hint, never the age or the roster ----
     // Flexbox shrinks in proportion, which on a 1366 laptop produced "STONE vs" with the enemy age
     // cut off and a roster reading "⛏ 49 ·". Both of those are information; the key-hint line is a
     // reminder. Assert the ranking, at the narrowest width the game is likely to see.
+    // (v125.1 dropped the haul off the strip entirely, so the ladder is two rungs now, not three.)
     const squeeze=await page.evaluate(async()=>{
       const wait=ms=>new Promise(r=>setTimeout(r,ms));
       const gR=document.getElementById("dbarR");

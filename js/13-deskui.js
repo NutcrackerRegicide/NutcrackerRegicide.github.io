@@ -6,8 +6,9 @@
 
    So this is 12-touch's layout without the parts that only exist because a phone has no keyboard
    and no mouse. What comes across:
-     · ONE strip along the bottom edge, in the same order: crowns and stockpile left, the unit
-       panel dead centre, age line / roster / carry / map / help right
+     · ONE strip along the bottom edge, in the same order: crowns and stockpile left, the health
+       bar dead centre, key hints / age line / roster / map / help right
+     · the gathering caption at the lower centre, carrying the haul as icon + count-of-capacity
      · the draining crown meters with a percentage, instead of two 210px labelled panels
      · the frame read-out as bare lettering at the top centre (desktop had NO counter at all)
      · the feed at the top-left with the active quest pinned above it as a matching line
@@ -54,7 +55,7 @@
 
   // Two balance groups of equal flex weight either side of the unit panel. This is what puts the
   // health bar on the TRUE centre line: auto margins would centre it in the LEFTOVER space, which
-  // slides every time a transient segment (carry) appears or goes.
+  // slides every time a transient segment appears or goes.
   const gL=document.createElement("div"), gR=document.createElement("div");
   gL.id="dbarL"; gR.id="dbarR";
   bar.appendChild(gL);
@@ -81,7 +82,11 @@
   // note on the phone was "HP bar should still be in center of screen"; the bar is the thing the eye
   // centres on, not the box around it.
   const tip=document.getElementById("ptip");
-  for(const id of ["agebar","roster","carry"]){
+  // #carry is NOT in this list, and v125.1 is why: the gathering caption below carries the haul, so a
+  // second copy in the strip is width spent saying the same thing in the place you are not looking.
+  // 12-touch dropped it from the phone strip in v124.10 for exactly this reason. The element stays in
+  // the DOM and 08-ui keeps writing to it — it is just hidden, so nothing else has to know.
+  for(const id of ["agebar","roster"]){
     const el=document.getElementById(id); if(el)gR.appendChild(el);
   }
   if(tip)gR.insertBefore(tip,gR.firstChild);
@@ -163,31 +168,64 @@
     try{updateAgeHud();}catch(e){}
   }
 
-  // ---------- THE TRANSIENT SEGMENT ----------
-  // 08-ui shows and hides #carry with an INLINE style, which loses to the strip's
-  // "display:flex!important" reset — so the empty "Carrying: —" would sit in the bar for ever.
-  // (12-touch hit the same thing in v124.10 and answered it by dropping carry from the strip
-  // entirely, because the mobile gathering caption carries the haul. Desktop has no such caption,
-  // so the segment stays and the inline style is mirrored onto a class the CSS can act on.)
-  const carryEl=document.getElementById("carry");
-  // ...and shorten it. The desktop copy is "Carrying: 19 stone (FULL) — deposit at Town Center",
-  // ~300px, which on a 1366 laptop pushed the group over and got the whole segment dropped instead —
-  // so the one time it had something to say was the one time it could not fit. The trailing
-  // instruction is a tutorial line, not a status: keep the icon and the load. 08-ui keeps writing to
-  // #carrytxt exactly as before, because #carrytxt is MOVED rather than replaced.
-  if(carryEl){
-    const txt=document.getElementById("carrytxt");
-    if(txt){
-      carryEl.textContent="";
-      const ico=document.createElement("span");
-      ico.className="dcarryico"; ico.textContent="⛏";
-      carryEl.appendChild(ico); carryEl.appendChild(txt);
+  // ---------- THE GATHERING CAPTION ----------
+  // John: "the gather UI for desktop should be the same as mobile, showing up at lower center of
+  // screen with the resource icon and the (0/20)."
+  //
+  // On the phone this caption is a side effect of AUTO-GATHER — the assist narrates what it is doing
+  // — and v124.7 put the haul on it for a reason worth repeating: "when gathering, I can't see how
+  // many of each I have gathered, only when I'm full." The bottom strip is the wrong place to watch
+  // while your eyes are on the tree. Desktop has no auto-gather, so this is a pure READ-OUT of state
+  // the game already keeps; nothing here drives the sim.
+  //
+  // Two deliberate differences from the phone, both because they are strictly more useful and
+  // neither changes what it looks like:
+  //   1. It also shows while you are CARRYING but not gathering — the walk back to the Town Centre
+  //      is exactly when you want to know what is in the satchel, and it is what #carry did before.
+  //      (The phone hides it there, because once your hands are off the tree autoTick has nothing
+  //      to narrate.)
+  //   2. With an EMPTY satchel it names the node you are working rather than showing nothing, so it
+  //      reads "🪵 0/20" and counts up — which is the "(0/20)" John asked for. The phone cannot do
+  //      this: its caption is written before it knows which node the assist will pick.
+  const ICON={food:"🍖",gold:"🪙",stone:"🪨",wood:"🪵"};
+  const autoEl=document.createElement("div");
+  autoEl.id="dauto";
+  document.body.appendChild(autoEl);
+  let autoMsg="";
+  function haulText(){
+    if(!player||!player.carry)return "";
+    const c=player.carry, cap=(typeof carryCap==="function")?carryCap(player):0;
+    const held=c.food+c.gold+c.stone+c.wood;
+    const bits=[];
+    for(const k of ["food","gold","stone","wood"])if(c[k])bits.push([ICON[k],c[k]]);
+    // nothing in hand yet: name the node being worked, so the count starts at 0 and climbs
+    if(!bits.length){
+      const g=player.gathering;
+      const t=g&&ICON[g.type];
+      return t?t+" 0"+(cap?"/"+cap:""):"";
     }
+    // v124.8's rule, kept: "🪵68 (68/300)" said the same number twice. ONE kind — which is almost
+    // always — reads as icon + count-of-capacity and nothing else. The running total only earns its
+    // place when there are several kinds in the satchel and no single count is the answer.
+    return bits.length===1
+      ? bits[0][0]+" "+bits[0][1]+(cap?"/"+cap:"")
+      : bits.map(b=>b[0]+b[1]).join(" ")+(cap?"  "+held+"/"+cap:"");
   }
-  function tickCarry(){
-    if(!carryEl)return;
-    const empty=carryEl.style.display==="none"||carryEl.style.display==="";
-    carryEl.classList.toggle("dhidden",empty);
+  function tickAuto(){
+    let m="";
+    const live=player&&player.alive&&typeof inMenu!=="undefined"&&!inMenu&&
+      !(typeof gameOver!=="undefined"&&gameOver)&&!(typeof menuOpen!=="undefined"&&menuOpen);
+    if(live){
+      const c=player.carry;
+      const held=c?(c.food+c.gold+c.stone+c.wood):0;
+      const cap=(typeof carryCap==="function")?carryCap(player):0;
+      const full=cap>0&&held>=cap;
+      if(player.gathering)   m="⛏ gathering"+(full?" — hands full":"");
+      else if(full)          m="hands full — return to the Town Centre";
+      else if(held>0)        m="⛏ hauling";
+      if(m){const h=haulText(); if(h)m+="  "+h;}
+    }
+    if(m!==autoMsg){autoMsg=m;autoEl.textContent=m;autoEl.classList.toggle("on",!!m);}
   }
 
   // ---------- PRIORITY INSIDE THE STRIP ----------
@@ -201,16 +239,17 @@
   // The ladder is ordered by how time-critical each thing is, NOT by how much room it saves:
   //   1. the key hints — the same sentence all match; you learn them once
   //   2. the roster — slow-moving, and the scoreboard (Tab) has the full version any time
-  //   3. the haul — LIVE, and you act on it. Last to go, and in practice never does.
   // The age line is not in the ladder at all: an age you cannot see is an age you forget to spend on,
-  // and the enemy's is the only warning you get. (A 1366 laptop with a full cart really cannot hold
-  // all of it — the first version dropped the haul, which is the one thing on that list that was
-  // telling you something you did not already know.)
+  // and the enemy's is the only warning you get.
+  // (v125 had the haul in this ladder as a third rung, and on a 1366 laptop it was the rung that got
+  // pulled — so the one time it had something to say was the one time it could not fit. v125.1 moves
+  // the haul off the strip entirely and onto the caption, which is both what John asked for and the
+  // reason this ladder is now short enough to be comfortable.)
   //
   // Measured synchronously — show, measure, decide, all before the browser paints — so there is no
   // flicker. Re-run only when something that could change a width actually changes, because it costs
   // a forced layout: doing it every frame at 60fps for a string that changes twice a match is waste.
-  const SACRIFICE=[tip,document.getElementById("roster"),carryEl].filter(Boolean);
+  const SACRIFICE=[tip,document.getElementById("roster")].filter(Boolean);
   let fitSig="";
   // NOT scrollWidth. The group is justify-content:flex-end, so its contents overflow to the LEFT —
   // and scrollWidth does not count overflow on the start side, so it reported "fits" while the hint
@@ -234,8 +273,7 @@
   function tickFit(){
     const sig=innerWidth+"|"+(tip?tip.textContent:"")+"|"+
       document.getElementById("agebar").textContent+"|"+
-      document.getElementById("roster").textContent.length+"|"+
-      (carryEl?(carryEl.classList.contains("dhidden")?"h":"s"):"");
+      document.getElementById("roster").textContent.length;
     if(sig===fitSig)return;
     fitSig=sig;
     fitRight();
@@ -246,7 +284,7 @@
     requestAnimationFrame(tickBar);
     drainCrowns();
     tickAgeLine();
-    tickCarry();
+    tickAuto();
     tickFit();
   })();
 
@@ -320,11 +358,9 @@
   .bar-mode #dbar #ptip  {order:2;flex:0 0 auto}
   .bar-mode #dbar #agebar{order:3;flex:0 0 auto;gap:8px;font-size:12.5px!important}
   .bar-mode #dbar #roster{order:4;flex:0 0 auto;font-size:12.5px!important}
-  .bar-mode #dbar #carry {order:5;flex:0 0 auto;font-size:12.5px!important;gap:6px}
-  .bar-mode #dbar .dcarryico{opacity:.7}
-  .bar-mode #dbar #carrytxt{font-weight:bold}
-  .bar-mode #dbar #dmap  {order:6;flex:0 0 auto}
-  .bar-mode #dbar #dhelp {order:7;flex:0 0 auto}
+  .bar-mode #carry{display:none!important}   /* the caption below carries the haul now */
+  .bar-mode #dbar #dmap  {order:5;flex:0 0 auto}
+  .bar-mode #dbar #dhelp {order:6;flex:0 0 auto}
   .bar-mode #dbar .dhidden{display:none!important}
   /* what a narrow window gives up, in order — see the priority note in the JS */
   .bar-mode #dbar .dsqueeze{display:none!important}
@@ -388,6 +424,18 @@
   @keyframes dcrownpulse{0%,100%{filter:drop-shadow(0 1px 0 rgba(43,29,18,.55))}
     50%{filter:drop-shadow(0 0 7px rgba(255,90,60,.95))}}
   .bar-mode #dbar .kingbox .bar{display:none!important}  /* the crown IS the bar now */
+
+  /* ===== THE GATHERING CAPTION ===== */
+  /* Lower centre, clear of the strip. Same language as the phone's — a dark wash rather than
+     parchment, because it is transient narration over the battlefield and not part of the HUD
+     furniture. It has to clear the strip's FULL height: the phone version originally sat at
+     bottom:78px and John's field shot came back with "gathering" printed across the word VILLAGER. */
+  .bar-mode #dauto{position:fixed;left:50%;bottom:70px;transform:translateX(-50%);
+    padding:5px 14px;border-radius:3px;color:#fff;background:rgba(0,0,0,.45);
+    font:600 14px/1.2 "Trebuchet MS",Verdana,sans-serif;letter-spacing:.3px;
+    z-index:11;pointer-events:none;display:none;white-space:nowrap;
+    text-shadow:0 1px 2px rgba(0,0,0,.6)}
+  .bar-mode #dauto.on{display:block}
 
   /* ===== THE TOP OF THE SCREEN ===== */
   /* the frame read-out: bare lettering, deliberately faint, out of everything's way */
