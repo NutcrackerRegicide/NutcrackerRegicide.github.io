@@ -615,8 +615,13 @@ const DEVICES=[
       // team advances the age within the same second and spends it back down, so two of the three
       // devices measured a 1-digit strip and the check silently stopped testing anything.
       // The question here is purely "does this width fit", so hand it the width.
+      // ...and set the STOCK behind them, or the write does not hold: updateResHud is event-driven,
+      // so a villager depositing mid-wait rewrites all four from the real stockpile and the check
+      // silently measures a 1-digit strip again. Funding it means every rewrite is a wide one.
       const rIds=["rfood","rgold","rstone","rwood"];
       const rOld=rIds.map(id=>{const e=document.getElementById(id);return e?e.textContent:null;});
+      const stOld=JSON.stringify(stock[MYTEAM]);
+      for(const k in stock[MYTEAM])stock[MYTEAM][k]=24680;
       for(const id of rIds){const e=document.getElementById(id); if(e)e.textContent="24680";}
       await wait(120);
       const gRight=gLEl.offsetLeft+gLEl.clientWidth;
@@ -625,7 +630,11 @@ const DEVICES=[
       const crownsWhole=crowns.length===2&&crowns.every(c=>
         c.offsetWidth>0&&c.offsetLeft>=gLEl.offsetLeft-2&&c.offsetLeft+c.offsetWidth<=gRight+2);
       const fatRes=document.getElementById("resources").textContent.replace(/\s+/g," ").trim();
-      const fatWide=/24680.*24680.*24680.*24680/.test(fatRes);   // the check really did run wide
+      // FIVE DIGITS, not the exact number we wrote: villagers keep depositing and the team keeps
+      // spending, so the figures drift to 24080 / 24605 within the wait. What the check needs is
+      // that all four were WIDE while the crowns were measured, not that they were untouched.
+      const fatWide=(fatRes.match(/\b\d{5}\b/g)||[]).length===4;
+      try{const o=JSON.parse(stOld); for(const k in o)stock[MYTEAM][k]=o[k];}catch(_){}
       rIds.forEach((id,n)=>{const e=document.getElementById(id); if(e&&rOld[n]!==null)e.textContent=rOld[n];});
       await wait(120);
       carryEl.className=c0; rosterEl.className=r0;

@@ -27,7 +27,7 @@ try{(0,eval)(fs.readFileSync(path.join(ROOT,"assets/anims.js"),"utf8"));
   console.log("baked anims loaded:",Object.keys(global.BAKED_ANIMS.pools).join(", "));}catch(e){}
 // ---- load game scripts in index order ----
 const order=["00-data","01-engine","02-world","03-buildings","04-units","05-combat",
-  "06-input","07-ai","08-ui","09-main","10-net","11-audio","12-touch"];
+  "06-input","07-ai","08-ui","09-main","10-net","11-audio","12-touch","13-deskui"];
 // browsers share top-level const across <script> tags; node eval does not —
 // so evaluate everything as ONE script and export internals for assertions
 let bundle=order.map(f=>fs.readFileSync(path.join(ROOT,"js",f+".js"),"utf8")).join("\n");
@@ -2124,6 +2124,16 @@ global.__G.setGameOver(false);
   const G=global.__G;
   // 12-touch.js loads with the rest of the bundle. Headless it must be COMPLETELY inert —
   // no pad, no perf tier, no pointer-lock override — or it would corrupt every test above it.
+  // Both UI layers guard on the same two tells, and this asserts the PREMISE rather than a
+  // symptom: the stub's getElementById auto-creates whatever you ask it for, so "is there a #dbar"
+  // is always true and proves nothing. If either tell ever becomes defined headless, 13-deskui
+  // would reparent the stubbed HUD into a bar and the compact roster/age branches would switch on
+  // under every test above this line.
+  // (The behavioural proof that 13-deskui stayed out is the v124 roster test below: it asserts the
+  // LONG two-team line, which only renders when neither touch-mode nor bar-mode is set.)
+  check("v125 deskui: neither UI layer can run headless — `screen` is the tell doing the work "+
+    "(Node 22 DEFINES a global navigator, so that half of the guard no longer discriminates)",
+    typeof screen==="undefined");
   check("v116 touch: the mobile layer is a no-op outside a browser",
     G.getHideD()===150&&G.getMouseLocked()===false);
   // the cull dial the perf tier uses is real, clamped, and reversible

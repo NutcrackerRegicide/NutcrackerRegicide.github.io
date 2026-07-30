@@ -23,8 +23,14 @@
 (function(){
   // Inert outside a browser: the node smoketest loads every js/ file as one bundle and stubs a
   // minimal document + location, so those two alone are NOT enough to prove we're in a browser.
-  // `screen` and `navigator` are the honest tells — checking only the first two made the whole
+  // `screen` is the tell that actually discriminates — checking only the first two made the whole
   // bundle fail to load with "screen is not defined".
+  // v125: `navigator` is NO LONGER a tell. Node 22 defines a global navigator, so that clause is
+  // now always false under the smoketest and `screen` is carrying the whole guard on its own. It is
+  // kept because an OR of four cheap checks costs nothing and older runtimes still lack it — but do
+  // not add a fifth tell that a future Node might also define and call the guard hardened.
+  // (tools/smoketest.js asserts this explicitly, so the day `screen` is defined too, it says so
+  // rather than silently reparenting a stubbed DOM under every test in the file.)
   if(typeof document==="undefined"||typeof location==="undefined"||
      typeof screen==="undefined"||typeof navigator==="undefined")return;
 

@@ -148,7 +148,7 @@
   <div id="serverlist" style="display:none"></div>
   <p class="netnote">Multiplayer needs the game served over HTTP (not file://) —
   it lives at <b>nutcrackerregicide.github.io</b>, or run <b>python -m http.server</b> in this folder.</p>
-  <p class="verstamp">v124.13a — THE HALF-RATE FIX</p>
+  <p class="verstamp">v125 — THE ONE BAR, EVERYWHERE</p>
 </div>
 
 <div class="overlay" id="howto">
@@ -228,5 +228,8 @@
 <script src="js/audio-data.js"></script>
 <script src="js/11-audio.js"></script>
 <script src="js/12-touch.js"></script>
+<!-- v125: the mobile bar layout, brought to desktop. Must load AFTER 12-touch — it early-returns
+     when 12-touch has already claimed the DOM. ?ui=classic restores the v124 desktop HUD. -->
+<script src="js/13-deskui.js"></script>
 </body>
 </html>

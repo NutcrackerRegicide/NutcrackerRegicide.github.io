@@ -209,8 +209,14 @@ function updateAgeHud(){
   // name of the age you are in... You should not see enemy age up timer, only their age."
   // The desktop line — cost, the T hint, a ten-block progress meter — is good copy on a 1920 window
   // and ran clean off a 1180 strip. Two ages and a number is all that survives the trip.
+  // v125: the desktop HUD is that same strip now, so it takes the compact line too. touch-mode is
+  // 12-touch, bar-mode is 13-deskui; the long form survives for ?ui=classic only. What desktop
+  // gives up with it is the advance COST and the "(T at Town Center)" hint — both of which are
+  // still on the Age Up entry in the build menu, and the rail rule on mobile is that a thing you
+  // cannot afford does not offer itself in the first place.
   if(typeof document!=="undefined"&&document.documentElement&&
-     document.documentElement.classList.contains("touch-mode")){
+     (document.documentElement.classList.contains("touch-mode")||
+      document.documentElement.classList.contains("bar-mode"))){
     const foeTeam=(MYTEAM===BLUE)?RED:BLUE;
     const mine=AGES[a].name.toUpperCase().replace(/ AGE$| ERA$/,"");
     const foe=AGES[teamAge[foeTeam]].name.toUpperCase().replace(/ AGE$| ERA$/,"");
