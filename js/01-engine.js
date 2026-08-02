@@ -189,6 +189,14 @@ window.__syncInk=function(){
 try{
   if(typeof location!=="undefined"&&/[?&]ink=0/.test(location.search||""))window.__noInk=true;
 }catch(_){}
+// BUG, found by playtest: __syncInk was wired to resize and to the battery-saver toggle and
+// called from NEITHER at startup. On a desktop that never fires a resize, bufH stayed at its 620
+// default while the real buffer was 1440 tall — so every line rendered ~2.3× thicker than asked
+// for. Sync once, now, and again on the first frame in case the canvas is still settling.
+try{
+  if(window.__syncInk)window.__syncInk();
+  if(typeof requestAnimationFrame==="function")requestAnimationFrame(()=>{try{window.__syncInk&&window.__syncInk();}catch(_){}});
+}catch(_){}
 function inkOutline(mesh,px){
   if(!mesh||!mesh.geometry||window.__noInk)return mesh;
   const hull=new THREE.Mesh(mesh.geometry,inkMaterial(px||2.4));

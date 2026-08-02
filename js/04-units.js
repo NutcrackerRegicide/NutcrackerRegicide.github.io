@@ -851,12 +851,19 @@ function buildBodyFor(u){
   const headM=new THREE.Mesh(new THREE.LatheGeometry(eggPts,9),headMaterials(skinT,hairT));
   headM.rotation.y=Math.PI; // face band (u=0.5) forward, seam behind
   headM.position.y=0; headM.castShadow=false; R.head.add(headM);
-  // v128.1: the head is the single most valuable outline on the whole unit — it is what the eye
-  // finds first at phone size, and the egg silhouette is unmistakable once it has an edge. ONE
-  // extra draw call per unit, against the ~33 a body already costs, so this is a 3% bill for most
-  // of the readability. The limbs and the fifty little props are deliberately left un-inked: they
-  // would multiply the call count for detail nobody can resolve at 0.7 pixel ratio anyway.
-  inkOutline(headM,2.0);
+  // ---- v128.3: THE HEAD OUTLINE IS OFF BY DEFAULT, and this is why ----
+  // Inking ONLY the head was a draw-call decision (one extra call against the ~33 a body costs)
+  // and it was the wrong call artistically. A cel outline is a STYLE: apply it to one part of one
+  // object and it does not read as a line, it reads as a defect — John's desktop playtest called
+  // it exactly that, "odd", and noticed immediately that nothing else on the map had it.
+  // Outlining the whole character is what would fix the inconsistency, and that is ~33 extra draw
+  // calls per unit against a host already measured at 10–19 fps with ~1,800. Not affordable.
+  // So: off, unless asked for with ?ink=heads. The machinery stays because the BAKED-hull route
+  // (merging an inside-out shell into the geometry itself, the way the trees would need) makes
+  // full-character outlines free of draw calls — that is the version worth building.
+  try{
+    if(/[?&]ink=heads/.test((typeof location!=="undefined"&&location.search)||""))inkOutline(headM,2.0);
+  }catch(_){}
   R.torso.add(R.head);
   const armL=limb2(0.16,0.13,0.10,0.5,0.52,tunic,-0.68,0.96,0);
   const armR=limb2(0.16,0.13,0.10,0.5,0.52,tunic, 0.68,0.96,0);
