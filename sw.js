@@ -28,7 +28,7 @@
    If this ever misbehaves, unregistering it in devtools returns the site to plain HTTP loading —
    nothing in the game depends on it being there.                                              */
 
-const VERSION="v128.2";
+const VERSION="v128.3";
 const CACHE="regicide-"+VERSION;
 
 // The shell: enough to boot and show something. Deliberately NOT the whole 29 MB — a first visit
@@ -72,17 +72,38 @@ self.addEventListener("fetch",e=>{
   const isDoc=req.mode==="navigate"||url.pathname.endsWith(".html")||
               url.pathname.endsWith("/")||url.pathname.endsWith("manifest.json");
 
-  if(isDoc){
+  // v128.3 THE TRAP THIS FILE SET FOR ITSELF, SPRUNG ON A PHONE. The header above says "bump
+  // VERSION on every deploy" — and then the very next change to js/04-units.js went out without
+  // one. Result: a phone that had installed the v128.2 worker kept serving the OLD unit code out
+  // of cache FOREVER. John fixed the head outlines, deployed, reloaded, and his phone showed him
+  // the bug he had just paid to have fixed. Desktop looked right because it had no worker.
+  //
+  // Relying on a human (or me) to remember a constant is not a cache strategy. So the game's own
+  // source is now NETWORK-FIRST like the document: js/ and css/ total ~830 KB uncompressed,
+  // which is ~200 KB gzipped, and GitHub Pages sends ETags — so in the common case this is a
+  // conditional request that comes back 304 Not Modified and costs a few milliseconds. Cache
+  // still answers when the network is gone, so offline play is unaffected.
+  // Cache-first stays where it earns its keep: libs/ and assets/ — the megabytes that only ever
+  // change on a real version bump.
+  const isCode=url.pathname.includes("/js/")||url.pathname.includes("/css/");
+
+  if(isDoc||isCode){
     // NETWORK-FIRST for anything that names the build. A cached index.html is how a player ends up
     // running last week's PROTO against today's host and being told they are the wrong version.
     e.respondWith((async()=>{
       try{
         const fresh=await fetch(req);
-        const c=await caches.open(CACHE); c.put(req,fresh.clone());
+        // only cache a REAL answer: a 404 or a 5xx stored here would be served back as though it
+        // were the file, and the game would boot into a wall of missing-function errors.
+        if(fresh&&fresh.ok){const c=await caches.open(CACHE); c.put(req,fresh.clone());}
         return fresh;
       }catch(_){
         const hit=await caches.match(req);
-        return hit||caches.match("./index.html");        // offline: the install still opens
+        if(hit)return hit;
+        // offline and never cached. For the DOCUMENT, falling back to index.html means the install
+        // still opens. For a SCRIPT it would hand the parser a page of HTML — so fail honestly and
+        // let the browser report the missing file instead of a syntax error 400 lines in.
+        return isDoc?(await caches.match("./index.html"))||Response.error():Response.error();
       }
     })());
     return;

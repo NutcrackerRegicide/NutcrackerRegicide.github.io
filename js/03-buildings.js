@@ -239,7 +239,11 @@ function gableRoof(g,w,d,yBase,h,slabC,gableC,ov){ // ridge along z, slopes acro
   const ang=Math.atan2(h,w/2), len=Math.hypot(h,w/2)+0.35;
   for(const s of [-1,1]){
     const slab=box(len,0.42,d+ov*2,slabC);
-    slab.rotation.z=-s*ang; slab.position.set(s*w/4,yBase+h/2,0); inkOutline(slab,2.4); g.add(slab);
+    // v128.3: 2.4 -> 1.8. The old number was written when the width meant DEVICE pixels and the
+    // phone's 0.7 pixel ratio was quietly thinning it; now that it means CSS pixels the same
+    // constant draws heavier than it used to on exactly the screen it was tuned for. Override on
+    // the fly with ?ink=<n> — the dial is there so the person holding the phone picks the number.
+    slab.rotation.z=-s*ang; slab.position.set(s*w/4,yBase+h/2,0); inkOutline(slab,1.8); g.add(slab);
   }
   const ridge=box(0.55,0.4,d+ov*2,slabC); ridge.position.set(0,yBase+h+0.05,0); ridge.castShadow=false; g.add(ridge);
   for(const s of [-1,1]){

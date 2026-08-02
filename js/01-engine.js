@@ -180,14 +180,32 @@ function inkMaterial(px){
 window.__syncInk=function(){
   const sz=renderer.getDrawingBufferSize(new THREE.Vector2());
   const t=Math.tan(camera.fov*Math.PI/360);
-  INK_MATS.forEach(m=>{m.uniforms.bufH.value=Math.max(1,sz.y);m.uniforms.tanHalfFov.value=t;});
+  // v128.3 CSS PIXELS, NOT DEVICE PIXELS. Feeding the raw drawing-buffer height made `px` mean
+  // "device pixels", and the phone runs the battery saver at a 0.7 pixel ratio — so a 2.4 line
+  // rasterised at 2.4 device px and then got UPSCALED to the screen, landing at 3.4 CSS px. The
+  // same constant drew a hairline on a desktop and a slab on a phone, which is the opposite of
+  // what a small screen wants. Dividing by the pixel ratio gives the canvas's CSS height, which
+  // makes `px` mean CSS pixels — the unit that is already defined to look the same at a phone's
+  // viewing distance and a monitor's. One number, same apparent weight everywhere.
+  const dpr=Math.max(0.01,renderer.getPixelRatio?renderer.getPixelRatio():1);
+  const cssH=Math.max(1,sz.y/dpr);
+  INK_MATS.forEach(m=>{m.uniforms.bufH.value=cssH;m.uniforms.tanHalfFov.value=t;});
 };
 // `?ink=0` turns every outline off. This exists because I cannot reproduce an Android device
 // here: if John's guest still flickers with the outlines gone, the hulls are innocent and the
 // depth range was the whole story; if the flicker stops, they are the cause and the next dial is
 // the hull offset. One reload settles a question I would otherwise have to guess at.
+// v128.3 …and `?ink=<n>` now SCALES it, because the person who can see the phone is not the person
+// who can edit the shader. ?ink=0 off · ?ink=0.5 half-weight · ?ink=2 double. Dial it on the device,
+// tell me the number that looked right, and I bake that in — instead of me guessing a constant and
+// posting a new build for every guess.
+window.__inkScale=1;
 try{
-  if(typeof location!=="undefined"&&/[?&]ink=0/.test(location.search||""))window.__noInk=true;
+  const q=/[?&]ink=([0-9]*\.?[0-9]+)/.exec((typeof location!=="undefined"&&location.search)||"");
+  if(q){
+    const v=parseFloat(q[1]);
+    if(isFinite(v)&&v>=0){window.__inkScale=v; if(v===0)window.__noInk=true;}
+  }
 }catch(_){}
 // BUG, found by playtest: __syncInk was wired to resize and to the battery-saver toggle and
 // called from NEITHER at startup. On a desktop that never fires a resize, bufH stayed at its 620
@@ -199,7 +217,7 @@ try{
 }catch(_){}
 function inkOutline(mesh,px){
   if(!mesh||!mesh.geometry||window.__noInk)return mesh;
-  const hull=new THREE.Mesh(mesh.geometry,inkMaterial(px||2.4));
+  const hull=new THREE.Mesh(mesh.geometry,inkMaterial((px||2.4)*(window.__inkScale===undefined?1:window.__inkScale)));
   hull.castShadow=false; hull.receiveShadow=false;
   hull.renderOrder=(mesh.renderOrder||0)-1;
   hull.matrixAutoUpdate=false;                 // it never moves relative to its parent
