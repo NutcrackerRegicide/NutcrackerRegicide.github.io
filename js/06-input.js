@@ -85,6 +85,10 @@ addEventListener("resize",()=>{
   camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
   renderer.setSize(innerWidth,innerHeight);
   if(composer)composer.setSize(innerWidth,innerHeight);
+  // v128.1: the outline width is measured in DEVICE pixels, so it has to be recomputed whenever
+  // the drawing buffer changes — a rotate or a saver toggle otherwise leaves every line at the
+  // old weight, and on a shrinking buffer that means no line at all.
+  if(window.__syncInk)window.__syncInk();
 });
 
 function playerPrimary(){

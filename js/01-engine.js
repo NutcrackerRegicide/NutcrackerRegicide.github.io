@@ -2,16 +2,44 @@
 // ---------- three setup ----------
 scene=new THREE.Scene();
 scene.background=new THREE.Color(0x9db8d6);
-scene.fog=new THREE.Fog(0xc9d3d6,60,178); // battlefield haze: the world fades before the cull line
-camera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,0.1,1200); // far enough that the sky dome never clips
+// v128: the haze was doing more damage than any material. A grey-lilac fog starting 60 units out
+// desaturates the ENTIRE mid-field — the exact band a player spends the whole match in — and grey
+// is the one colour a lush scene cannot afford. It is bright sky blue now, and it starts far
+// enough back that the playable foreground stays fully saturated.
+// The FAR value is load-bearing and must NOT be pushed out for prettiness: worldDeco is distance
+// culled (88 on battery saver, 105 off) and the fog is what hides that cull line. Fade the world
+// out further than you delete it and distant trees pop in and out in plain sight.
+scene.fog=new THREE.Fog(0xbfe4ff,104,182);
+// v128.2 ANDROID FLICKER. A near plane of 0.1 against a far plane of 1200 is a 12,000:1 range,
+// and depth precision is distributed almost entirely in the first few units. Desktop and iOS
+// hand out a 24-bit depth buffer and absorb it; plenty of Android GPUs give 16 bits, where that
+// ratio is not enough to separate two surfaces a few centimetres apart — so coplanar geometry
+// strobes as the camera moves. That is the classic "flickers on Android, fine on iPhone" split,
+// and v128.1's outline hulls made it far worse by placing a second surface a fraction of a unit
+// off every inked mesh.
+// The camera never gets closer than ~7 units to the player in any of the three rigs, so 0.1 was
+// buying precision nothing needs. 0.6 is a 6× improvement for free. FAR stays at 1200: the sky
+// dome is radius 700 about the origin and the camera can stand 200 out, so anything under ~900
+// clips the sky into a black hole.
+camera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,0.6,1200);
 renderer=new THREE.WebGLRenderer({antialias:true});
 renderer.setSize(innerWidth,innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio,1)); // lo-fi loves 1:1 — and so does the GPU
 renderer.shadowMap.enabled=true;
 renderer.shadowMap.type=THREE.PCFShadowMap;
 renderer.outputEncoding=THREE.sRGBEncoding;
-renderer.toneMapping=THREE.ACESFilmicToneMapping;   // modern filmic light on lo-fi shapes
-renderer.toneMappingExposure=1.02;
+// v128 THE TOON PASS. ACESFilmic was the single biggest thing standing between this game and a
+// vibrant cartoon: it rolls highlights off into pastel and pulls saturation out of exactly the
+// bright greens the style lives on, AND it smears the hard steps a toon ramp works so hard to
+// make. Filmic tone mapping is for photographic light on photographic shapes; these are flat
+// colours on low-poly forms. Linear keeps the ramp crisp and the greens loud.
+renderer.toneMapping=THREE.LinearToneMapping;
+// …but linear light does not roll off, so the total energy has to be honest. hemi 0.75 + sun 1.15
+// lands close to 2.0 on a surface facing the sun, and the ramp's top cell is pure white, so pale
+// materials (robes, the Town Centre canvas, snow caps) clipped to flat white and lost every fold.
+// Exposure is the right dial for that rather than dimming the lights: John's light values stay
+// exactly as specified, and nothing about the RATIO between sky-bounce and sun changes.
+renderer.toneMappingExposure=0.78;
 document.body.appendChild(renderer.domElement);
 // v122: a lost GL context used to render as a silent WHITE SCREEN — John's 45-minute match died
 // that way and he was dropped back to the main menu with no explanation. Swallowing the default
@@ -27,10 +55,43 @@ renderer.domElement.addEventListener("webglcontextrestored",()=>{
 },false);
 clock=new THREE.Clock();
 
-const hemi=new THREE.HemisphereLight(0xe8e2d0,0x4a5c30,0.85); scene.add(hemi);
-const warm=new THREE.AmbientLight(0xffe0b8,0.18); scene.add(warm); // golden lift
-const sun=new THREE.DirectionalLight(0xffe6b8,1.0);
-sun.position.set(60,90,40); sun.castShadow=true;
+// ---------- v128: THE TOON RAMP ----------
+// One shared gradient map drives every MeshToonMaterial in the game, so the whole world bands at
+// the SAME light levels and reads as one drawing rather than a pile of separately-shaded objects.
+// Four steps, not the usual three: three gives a hard terminator that looks great on a character
+// and awful on a 400-unit hillside, where the single mid-step turns whole valleys into one flat
+// slab. The extra step buys the terrain a shoulder to roll through.
+// NearestFilter is mandatory — linear filtering between the cells is just a gradient again, which
+// is the thing we are getting rid of. And NO sRGB encoding here: the gradient map is a lookup
+// into lighting, not a colour to be displayed, so encoding it would bend the steps.
+function makeToonRamp(levels){
+  const c=document.createElement("canvas"); c.width=levels; c.height=1;
+  const ctx=c.getContext("2d");
+  for(let i=0;i<levels;i++){
+    // hand-tuned: shadow lifted well off black (a black shadow reads as dirt, not shade), a broad
+    // bright midtone so most of the world sits in the LIT band, and a near-white top step
+    const v=[0x64,0x9e,0xd2,0xff][i]||0xff;
+    ctx.fillStyle="rgb("+v+","+v+","+v+")"; ctx.fillRect(i,0,1,1);
+  }
+  const t=new THREE.CanvasTexture(c);
+  t.minFilter=t.magFilter=THREE.NearestFilter;
+  t.generateMipmaps=false;
+  return t;
+}
+const TOON_RAMP=makeToonRamp(4);
+
+// ---------- lighting: bright, warm, and pointed ----------
+// v128: a cool sky bounce against a warm sun is what makes stylised greens sing — the shadowed
+// side of every leaf goes faintly blue and the lit side goes gold, which is the whole trick behind
+// how a Gen-1 route looks. The old rig was a warm hemisphere over a warm sun with a warm ambient
+// on top: three lights all pushing the same direction, which is why everything read dusty.
+const hemi=new THREE.HemisphereLight(0xb1e1ff,0x447755,0.75); scene.add(hemi);
+// A toon ramp quantises DIRECTIONAL light. Ambient bypasses that entirely — it lifts every pixel
+// equally, so the bands wash together and the whole point is lost. What was 0.18 of warm ambient
+// is now a whisper, just enough to keep pure-shadow faces from going flat.
+const warm=new THREE.AmbientLight(0xffe8cc,0.05); scene.add(warm);
+const sun=new THREE.DirectionalLight(0xfff4e0,1.15);
+sun.position.set(36,90,48); sun.castShadow=true; // same ratio as (6,15,8), at the map's scale
 sun.shadow.mapSize.set(1024,1024);
 sun.shadow.camera.left=-70;sun.shadow.camera.right=70;   // tight box that FOLLOWS the player
 sun.shadow.camera.top=70;sun.shadow.camera.bottom=-70;
@@ -39,7 +100,104 @@ scene.add(sun.target);
 renderer.shadowMap.autoUpdate=false; // refreshed every other frame from the game loop
 scene.add(sun);
 
-function mat(c){return new THREE.MeshLambertMaterial({color:c});}
+// v128: ONE factory swap converts almost the whole game. `mat`, `plainMat`, `texturedMat`,
+// `headMaterials` and `heraldryMat` are where every material in 02-world, 03-buildings and
+// 04-units comes from, so toon-shading the game is five edits here rather than a thousand
+// downstream. Anything that reaches past these and news up a Lambert directly is deliberate
+// (clouds, water, decals) and is handled where it lives.
+function toonMat(o){o=o||{};o.gradientMap=TOON_RAMP;return new THREE.MeshToonMaterial(o);}
+function mat(c){return toonMat({color:c});}
+
+// ================= v128.1: THE INK =================
+// Cel shading is two halves — quantised light (the ramp above) and a LINE. This is the line, and
+// on a phone it is the half that does the most work: at 0.7 pixel ratio on a 6-inch screen, a
+// brown unit against green grass separates by hue alone, badly. A black edge separates it always.
+//
+// HOW WE GOT HERE, because the obvious answer looked better on paper: the cheap technique is a
+// screen-space edge detector reading the depth buffer — one full-screen pass, cost independent of
+// scene complexity, exactly right for a host at 10–19 fps. It is implemented and it is not what
+// shipped, for two reasons found by trying it.
+//   1. EffectComposer ping-pongs two targets and `clone()` copies depthTexture BY REFERENCE, so
+//      the edge pass samples the same attachment it is drawing into. WebGL resolves that feedback
+//      loop as zero. Fixable with a private scene target — and I did fix it.
+//   2. The depth texture then still read back all-zero under the headless GL this environment
+//      renders with, so there was no way to SEE it working. Shipping a renderer change I could
+//      not look at is exactly the thing this codebase keeps getting burned by.
+// Inverted hulls are geometry. They render the same everywhere, and I can look at them.
+//
+// COST CONTROL is the whole design. A hull is +1 draw call per outlined mesh, so this is applied
+// by SILHOUETTE VALUE, not everywhere: the big readable shapes get a line, the fiddly interior
+// bits do not. It also reuses the source geometry — no extra vertex memory, just the call.
+const INK_MATS=new Map();
+function inkMaterial(px){
+  const key=String(px);
+  if(INK_MATS.has(key))return INK_MATS.get(key);
+  // A plain scaled-up copy would fatten thin shapes and pinch fat ones. Pushing along the NORMAL
+  // in view space gives a line of roughly even weight whatever the silhouette is doing, and doing
+  // it in the vertex shader means the hull costs no CPU at all.
+  const m=new THREE.ShaderMaterial({
+    side:THREE.BackSide, fog:true,
+    // v128.2: push the hull a hair further back in the depth test. On a 16-bit Android depth
+    // buffer the shell and the surface it wraps land in the same depth bucket at grazing angles
+    // and strobe against each other. polygonOffset is the standard cure and costs nothing.
+    polygonOffset:true, polygonOffsetFactor:1.0, polygonOffsetUnits:1.0,
+    uniforms:{inkPx:{value:px},bufH:{value:620},tanHalfFov:{value:0.55},
+      inkCol:{value:new THREE.Color(0x14180f)},
+      fogColor:{value:new THREE.Color(0xbfe4ff)},fogNear:{value:104},fogFar:{value:182}},
+    vertexShader:[
+      "uniform float inkPx;uniform float bufH;uniform float tanHalfFov;varying float vFog;",
+      "void main(){",
+      "  vec4 mv=modelViewMatrix*vec4(position,1.0);",
+      "  vec3 n=normalize(normalMatrix*normal);",
+      // scale the push with distance so the line keeps a near-constant WIDTH ON SCREEN instead of
+      // vanishing at range — which is precisely when a small screen needs it most
+      // inkPx is DEVICE PIXELS, converted to a view-space push using the live buffer height.
+      // The first version used a fixed constant here, which holds the line at a constant FRACTION
+      // OF THE SCREEN — and a phone render at the battery saver's 0.7 pixel ratio proved what that
+      // costs: on a 273-pixel-tall buffer a 2.4px line resolves to roughly ONE device pixel and
+      // dissolves completely. The outlines were invisible on exactly the device they were added
+      // for. Dividing by bufH keeps the line the same number of real pixels at any resolution, so
+      // it gets relatively THICKER as the buffer shrinks, which is what small screens need.
+      "  mv.xyz+=n*inkPx*(-mv.z)*(2.0/bufH)*tanHalfFov;",
+      "  vFog=-mv.z;",
+      "  gl_Position=projectionMatrix*mv;",
+      "}"].join("\n"),
+    fragmentShader:[
+      "uniform vec3 inkCol;uniform vec3 fogColor;uniform float fogNear,fogFar;varying float vFog;",
+      "void main(){",
+      // the outline has to take the fog too, or every distant tree keeps a hard black edge while
+      // its body fades to sky and the horizon turns into a wire drawing
+      "  float f=smoothstep(fogNear,fogFar,vFog);",
+      "  gl_FragColor=vec4(mix(inkCol,fogColor,f),1.0);",
+      "}"].join("\n")
+  });
+  INK_MATS.set(key,m); return m;
+}
+// Attach a hull to `mesh`, drawn from the same geometry. `px` is roughly the line's screen width.
+// Every ink material has to be told the live buffer height, or the line silently changes weight
+// whenever the window resizes or the battery saver moves the pixel ratio. Called from the resize
+// path and from the saver.
+window.__syncInk=function(){
+  const sz=renderer.getDrawingBufferSize(new THREE.Vector2());
+  const t=Math.tan(camera.fov*Math.PI/360);
+  INK_MATS.forEach(m=>{m.uniforms.bufH.value=Math.max(1,sz.y);m.uniforms.tanHalfFov.value=t;});
+};
+// `?ink=0` turns every outline off. This exists because I cannot reproduce an Android device
+// here: if John's guest still flickers with the outlines gone, the hulls are innocent and the
+// depth range was the whole story; if the flicker stops, they are the cause and the next dial is
+// the hull offset. One reload settles a question I would otherwise have to guess at.
+try{
+  if(typeof location!=="undefined"&&/[?&]ink=0/.test(location.search||""))window.__noInk=true;
+}catch(_){}
+function inkOutline(mesh,px){
+  if(!mesh||!mesh.geometry||window.__noInk)return mesh;
+  const hull=new THREE.Mesh(mesh.geometry,inkMaterial(px||2.4));
+  hull.castShadow=false; hull.receiveShadow=false;
+  hull.renderOrder=(mesh.renderOrder||0)-1;
+  hull.matrixAutoUpdate=false;                 // it never moves relative to its parent
+  mesh.add(hull);
+  return mesh;
+}
 function box(w,h,d,c){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat(c));m.castShadow=true;return m;}
 function cone(r,h,c,seg){const m=new THREE.Mesh(new THREE.ConeGeometry(r,h,seg||5),mat(c));m.castShadow=true;return m;}
 function cyl(rt,rb,h,c,seg){const m=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,seg||7),mat(c));m.castShadow=true;return m;}
@@ -88,9 +246,16 @@ function makePixelTexture(px,palette,speckles){
   t.wrapS=t.wrapT=THREE.RepeatWrapping; t.generateMipmaps=false;
   return t;
 }
+// v128: the old palette was five near-identical olive-drabs with grey-beige speckle — meadow in
+// drizzle, not meadow in June. Same VALUES, pushed hard toward yellow-green, which is what reads
+// as "lush" rather than "wet". The speckle is warmer too: light flecks are sunlit blades now.
+// …and the speckle counts came DOWN hard at the same time. Saturating the palette turned what had
+// been quiet grey-beige noise into confetti — the ground read as television static rather than
+// grass. Lush is not the same as busy: the base tones sit close together so the lawn reads as ONE
+// surface, and the flecks are few enough to be flowers instead of interference.
 const grassTex=makePixelTexture(96,
-  ["#7a9a5e","#71925a","#6f8f57","#7f9f63","#748f5a"],
-  [["#8fae74",150],["#5a7345",150],["#c9bd8a",20],["#c95b4f",7],["#e8e2d0",6]]);
+  ["#79ad4a","#74a846","#7fb14d","#71a444","#83b552"],
+  [["#93c25c",70],["#5d8a3a",60],["#c9c877",8],["#d8705c",4],["#eaf2d6",4]]);
 grassTex.repeat.set(46,30);
 
 // ---------- sky dome + sun (bloom feeds on this) ----------
@@ -99,7 +264,7 @@ let skyDome=null;
   const geo=new THREE.SphereGeometry(700,20,12);
   const skyMat=new THREE.ShaderMaterial({
     side:THREE.BackSide,depthWrite:false,fog:false,
-    uniforms:{top:{value:new THREE.Color(0x6f9fd8)},horizon:{value:new THREE.Color(0xdfe4e6)}},
+    uniforms:{top:{value:new THREE.Color(0x3d94e8)},horizon:{value:new THREE.Color(0xcdeeff)}}, // v128: summer-noon blue, not overcast
     vertexShader:"varying vec3 vP;void main(){vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}",
     fragmentShader:"uniform vec3 top;uniform vec3 horizon;varying vec3 vP;"+
       "void main(){float y=normalize(vP).y;"+
@@ -154,16 +319,23 @@ if(typeof THREE.EffectComposer!=="undefined"){
   composer.addPass(new THREE.RenderPass(scene,camera));
   const bloom=new THREE.UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),0.28,0.6,0.92);
   composer.addPass(bloom);
+
   const grade=new THREE.ShaderPass({
     uniforms:{tDiffuse:{value:null}},
     vertexShader:"varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}",
     fragmentShader:"uniform sampler2D tDiffuse;varying vec2 vUv;void main(){"+
       "vec4 c=texture2D(tDiffuse,vUv);"+
       "float l=dot(c.rgb,vec3(0.299,0.587,0.114));"+
-      "c.rgb=mix(vec3(l),c.rgb,1.02);"+                       // near-neutral saturation
-      "c.rgb*=vec3(1.06,1.0,0.94);"+                          // warm grade
+      // v128: the grade is where "vibrant" is actually won. 1.02 was a rounding error. This is a
+      // real push, plus a TARGETED lift on greens — a global saturation boost shoves the roof reds
+      // and the sky just as hard, and those were already loud enough.
+      "c.rgb=mix(vec3(l),c.rgb,1.30);"+                       // saturation, meant this time
+      "float g=clamp((c.g-max(c.r,c.b))*2.2,0.0,1.0);"+       // how GREEN is this pixel?
+      "c.rgb=mix(c.rgb,c.rgb*vec3(0.94,1.10,0.90),g);"+       // …lift those, and only those
+      "c.rgb*=vec3(1.03,1.01,0.97);"+                         // a whisper of warm daylight
+      "c.rgb=clamp(c.rgb,0.0,1.0);"+
       "float d=distance(vUv,vec2(0.5));"+
-      "c.rgb*=1.0-smoothstep(0.55,0.95,d)*0.32;"+             // vignette
+      "c.rgb*=1.0-smoothstep(0.62,0.99,d)*0.20;"+             // vignette, lightened: bright and inviting
       "gl_FragColor=c;}"
   });
   composer.addPass(grade);
@@ -228,7 +400,7 @@ function texturedMat(kind,hex){
     _blocks(c,s,["#e8e2d0","#ded8c4","#efe9d8"]);
     c.fillStyle="#cfc9b6"; for(let y=3;y<s;y+=5)c.fillRect(0,y,s,1);
   });
-  const m=new THREE.MeshLambertMaterial({map:t});
+  const m=toonMat({map:t});
   _skinCache.set(key,m); return m;
 }
 // faces: front gets eyes; sides/back/top get hair
@@ -263,7 +435,7 @@ function headMaterials(skin,hair){ // egg-head wrap: peg nose, handlebar mustach
     c.fillStyle="#f6f3ea";
     for(let x=28,i=0;i<3;x+=3,i++)c.fillRect(x,48,2,8);                  // upper teeth to the seam
   });
-  const m=new THREE.MeshLambertMaterial({map:side});
+  const m=toonMat({map:side});
   _skinCache.set(key,m); return m;
 }
 // shields: team field, dark border, one of three emblems
@@ -281,7 +453,7 @@ function heraldryMat(team,seed){
     else if(v===1){for(let i=0;i<6;i++){c.fillRect(2+i,10-i,2,2);c.fillRect(12-i,10-i,2,2);}} // chevron
     else {c.fillRect(6,5,4,6);c.fillRect(5,6,6,4);}                // roundel
   });
-  const m=new THREE.MeshLambertMaterial({map:t});
+  const m=toonMat({map:t});
   _skinCache.set(key,m); return m;
 }
 
@@ -289,7 +461,7 @@ function heraldryMat(team,seed){
 function plainMat(hex){
   const key="plain_"+hex;
   if(_skinCache.has(key))return _skinCache.get(key);
-  const m=new THREE.MeshLambertMaterial({color:hex});
+  const m=toonMat({color:hex});
   _skinCache.set(key,m); return m;
 }
 

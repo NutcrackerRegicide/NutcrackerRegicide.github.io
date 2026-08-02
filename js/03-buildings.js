@@ -6,12 +6,16 @@
 // 4 Medieval: Romanesque mass with gothic accents. 5 Enlightenment: white neoclassical grandeur.
 
 const AGEPAL=[
-  {wallP:"hide",   wallC:0xa8906b,roofC:0x8a6a4a,trimC:0xe6ded0,darkC:0x4a3a28,stoneC:0x9a8a76},
-  {wallP:"cloth",  wallC:0xdcc79b,roofC:0xcfb98a,trimC:0xd9a92e,darkC:0x6e5636,stoneC:0xc9b088},
-  {wallP:"cloth",  wallC:0xcbb894,roofC:0x9a8148,trimC:0x6b4a2b,darkC:0x3a2e1e,stoneC:0x8d7a5a},
-  {wallP:"uniform",wallC:0xe8e2d0,roofC:0xb8603a,trimC:0xd9a92e,darkC:0x2b2418,stoneC:0xd9d0b8},
-  {wallP:"metal",  wallC:0x8d949c,roofC:0x4a4e56,trimC:0x99a1ab,darkC:0x1e1e24,stoneC:0x6a7280},
-  {wallP:"uniform",wallC:0xf2ede2,roofC:0x5f7a6a,trimC:0xffffff,darkC:0x2b3038,stoneC:0xe3dccb}
+  // v128: the age palettes were all earth and ash. The ROOFS carry a stylised town — they are the
+  // one big block of non-green in a very green world — so each age's roof got pushed toward a
+  // saturated hue while the walls stayed pale, which is exactly the Pallet Town read: bright roof,
+  // clean wall, green everywhere else.
+  {wallP:"hide",   wallC:0xb89c72,roofC:0xa8623a,trimC:0xf0e8da,darkC:0x4a3a28,stoneC:0x9a8a76},
+  {wallP:"cloth",  wallC:0xe6d3a6,roofC:0xd9954a,trimC:0xf0b62e,darkC:0x6e5636,stoneC:0xc9b088},
+  {wallP:"cloth",  wallC:0xd6c199,roofC:0xc06a30,trimC:0x8a5f34,darkC:0x3a2e1e,stoneC:0x8d7a5a},
+  {wallP:"uniform",wallC:0xf2ecda,roofC:0xd8452e,trimC:0xf0b62e,darkC:0x2b2418,stoneC:0xd9d0b8},
+  {wallP:"metal",  wallC:0x99a2ac,roofC:0x3f6d8c,trimC:0xa9b3bd,darkC:0x1e1e24,stoneC:0x6a7280},
+  {wallP:"uniform",wallC:0xfbf7ee,roofC:0x2f9e86,trimC:0xffffff,darkC:0x2b3038,stoneC:0xe3dccb}
 ];
 const BONE=0xe6ded0, IVORY=0xefe8da, GOLD=0xd9a92e, MINOANRED=0xa8402e, THATCH=0x9a8148;
 function aWall(age,shade){const p=AGEPAL[age];return texturedMat(p.wallP,shade||p.wallC);}
@@ -228,12 +232,14 @@ function pedTri(w,h,c){ // flat triangle: pediments and gable infill (4-cone squ
 }
 function boneArc(R){const m=new THREE.Mesh(new THREE.TorusGeometry(R,0.22,5,10,Math.PI),plainMat(BONE));m.castShadow=false;return m;}
 function tuskArc(R){const m=new THREE.Mesh(new THREE.TorusGeometry(R,0.15,5,8,Math.PI*0.62),plainMat(IVORY));m.castShadow=false;return m;}
+// v128.1: the roof is a building's silhouette — ink it and the whole town reads at a glance.
+// Applied here rather than on every wall panel so a hall costs ~2 extra calls, not ~20.
 function gableRoof(g,w,d,yBase,h,slabC,gableC,ov){ // ridge along z, slopes across x
   ov=ov===undefined?0.6:ov;
   const ang=Math.atan2(h,w/2), len=Math.hypot(h,w/2)+0.35;
   for(const s of [-1,1]){
     const slab=box(len,0.42,d+ov*2,slabC);
-    slab.rotation.z=-s*ang; slab.position.set(s*w/4,yBase+h/2,0); g.add(slab);
+    slab.rotation.z=-s*ang; slab.position.set(s*w/4,yBase+h/2,0); inkOutline(slab,2.4); g.add(slab);
   }
   const ridge=box(0.55,0.4,d+ov*2,slabC); ridge.position.set(0,yBase+h+0.05,0); ridge.castShadow=false; g.add(ridge);
   for(const s of [-1,1]){

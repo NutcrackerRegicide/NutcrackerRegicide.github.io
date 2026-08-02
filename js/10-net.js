@@ -194,11 +194,47 @@ NET.unitById=function(id){for(const u of units)if(u.id===id)return u;return null
 NET.bldById=function(id){for(const b of buildings)if(b.id===id)return b;return null;};
 function r1(v){return Math.round(v*10)/10;}
 function r2(v){return Math.round(v*100)/100;} // v124: the analog move vector — 2dp is ~0.6 degrees
+// v128.2: the panel writes into #netmsg, not into itself. It used to do `el.innerHTML=txt`, which
+// is fine until the panel owns a button — the next status update deletes it. Falls back to the
+// old behaviour if #netmsg is missing, so a stripped index.html still shows the text.
 NET.status=function(txt,show){
   const el=document.getElementById("netstatus");
+  if(!el)return;
   el.style.display=show===false?"none":"block";
-  el.innerHTML=txt;
+  const msg=document.getElementById("netmsg");
+  if(msg)msg.innerHTML=txt; else el.innerHTML=txt;
+  NET.applyFold();
 };
+// Folded or not is a USER decision that has to survive every status refresh (one a second) and
+// every reload. Kept out of NET.status's write path entirely so the two cannot fight.
+NET.setFold=function(fold){
+  NET._fold=!!fold;
+  try{localStorage.setItem("reg_netfold",fold?"1":"0");}catch(_){}
+  NET.applyFold();
+};
+NET.applyFold=function(){
+  const el=document.getElementById("netstatus"); if(!el)return;
+  if(NET._fold===undefined){
+    let saved=null; try{saved=localStorage.getItem("reg_netfold");}catch(_){}
+    NET._fold=saved==="1";
+  }
+  el.classList.toggle("netfold",!!NET._fold);
+  const chip=document.getElementById("netchip");
+  // the chip carries the ping when there is one, so folding costs the number but not the signal
+  if(chip)chip.textContent=NET._fold?("⚑"+(NET.ping?" "+Math.round(NET.ping)+"ms":"")):"⚑";
+};
+(function wireFold(){
+  const go=()=>{
+    const el=document.getElementById("netstatus"); if(!el)return;
+    const btn=document.getElementById("netmin");
+    if(btn)btn.addEventListener("click",e=>{e.stopPropagation();NET.setFold(true);});
+    // the whole chip is the hit target when folded — a 26px ✕ is fine to close, but re-opening
+    // wants the biggest target the collapsed panel can offer
+    el.addEventListener("click",()=>{if(NET._fold)NET.setFold(false);});
+    NET.applyFold();
+  };
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",go); else go();
+})();
 
 // ---------- monkeypatched event broadcasts ----------
 // Wrapped once at load; they only speak when we are the host, so the guest's

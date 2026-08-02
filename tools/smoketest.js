@@ -52,8 +52,64 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "DRAW_CLASSES,DRAW_FULL,drawScale,isDrawClass,drawLevel,tickDraw,drawFill,fireAimedFor,"+
   "ACTIONS,availableActions,moveVec,readMove,updateRoster,mkName,NAMES,EPITHETS,projectiles,"+
   "aimPointFor,convergeFrom,setPlayerDraw:v=>{player._drawT=v;}};";
+// ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
+// `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
+// reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
+// whether tickBody calls anything. And they are not on `global` either: 00-data.js line 2 is
+// "use strict", and because every file is concatenated into ONE script here, the whole bundle is
+// strict — under which an indirect eval's function declarations stay inside the eval scope
+// instead of landing on the global object. (Worth knowing on its own: in the browser each
+// <script> is separate and only 00-data.js is strict, so the harness runs the other thirteen
+// files under a slightly stricter regime than the game does.)
+// So: generate a get/set pair per driver INSIDE the bundle's own scope. That is the only place
+// the binding can be swapped, and swapping it is the only way to see who calls it.
+const WIRE_DRIVERS=["drainVisualQueue","updateEffects","updateProjectiles","tickAgeResearch",
+  "tickBoardBang","campTick","healTick","questTick","economyTick","updateTowers",
+  "drawMinimap","updateRoster"];
+bundle+="\n;global.__WIRE={"+WIRE_DRIVERS.map(d=>
+  d+":{get:()=>"+d+",set:v=>{"+d+"=v;}}").join(",")+"};";
 try{(0,eval)(bundle);}catch(e){console.error("LOAD FAIL:",e.message);process.exit(1);}
 console.log("all scripts loaded");
+// ---- v127: EVERY TICK IN THIS FILE HOLDS THE WAR OPEN ----
+// `05-combat.js:196` — `if(!victim.alive||gameOver)return;` — makes dealDamage a NO-OP once a
+// king has fallen, and `09-main.js:634` wraps the entire simulation in `if(!gameOver)`. So a
+// regicide landing in any tick loop silently disarms every staged kill and freezes every timer
+// for the REST OF THE RUN. That is what took out the eleven-check creep cluster, and separately
+// the resurrection pair: "the resurrection target is a corpse first" failed because dealDamage
+// had quietly stopped dealing damage, not because corpses were broken.
+// The file used to sprinkle setGameOver(false) between sections by hand; sections that tick for
+// hundreds of frames need it held down, not tapped once. Wrapping the export covers both this
+// binding and every `global.__G.tick(...)` call site in one place. No check in this file requires
+// gameOver to STAY true, so there is nothing to trip over.
+// ---- AND WHY THE FIX IS A LINE, NOT A POLICY ----
+// The obvious move is to hold gameOver down for every tick in the file. I tried it, and it is
+// WRONG, in a way worth writing down: clearing the flag globally lets the campaign keep fighting
+// past the point it would have stopped, and a war that runs to a conclusion razes things the later
+// tests need. "both thrones still stand for the scout test" started failing. Reviving the kings and
+// town centres to compensate then pushed the campaign somewhere else again, and "RED kingsguard
+// never disbands" fell over instead. Each round traded one flake family for another, because the
+// intervention's blast radius was larger than the bug's.
+// Patching individual sites was tried first and does not scale: the disarm resurfaced in the
+// splash-damage check (`hp 500/500` — no damage dealt at all) and the deposit-scoring check, in
+// blocks nowhere near the ones already fixed. There are ~20 staged-damage sites and any new test
+// would silently join them.
+//
+// So the flag IS held down per tick — but the TOWN CENTRES are protected with it, and that pairing
+// is the whole trick. Clearing gameOver alone lets the campaign fight past the point it would have
+// stopped, and a war that runs to a conclusion razes the town centres the later tests need
+// ("both thrones still stand for the scout test"). Protecting the KINGS as well was tried and went
+// too far — it pushed the campaign somewhere else again and broke the kingsguard check. Kings may
+// die; the flag simply stops their death from disarming the harness.
+{
+  const _rawTick=global.__G.tick;
+  global.__G.tick=function(dt){
+    global.__G.setGameOver(false);
+    // a razed TC invalidates hundreds of later checks that have nothing to do with who won
+    for(const b of global.__G.buildings)
+      if(b.type==="towncenter"&&!b.alive){b.alive=true;b.hp=Math.max(1,(b.def&&b.def.hp||1000)*0.5);}
+    return _rawTick(dt);
+  };
+}
 const {units,buildings,neutralMarkets,buildingMesh,makeBuilding,makeUnit,tradeGold,tick,
   teamAge,stock,updateBot,tryMeleeAttack,lineUnitFor,CLS,clock,isSiege,nodes,BLD}=global.__G;
 // ---- fixed timestep, and a WALL CLOCK THAT KEEPS UP WITH IT ----
@@ -73,6 +129,57 @@ global.__G.NET.now=()=>__wall;
 // ---- assertions ----
 let fails=0;
 function check(name,cond){console.log((cond?"  PASS":"  FAIL")+" — "+name);if(!cond)fails++;}
+
+// ---- v127: ISOLATION HELPERS ----
+// A whole class of check in this file used to OBSERVE the world instead of CONTROLLING it, and
+// then assert on what it happened to see. Those tests fail in clusters — one wandering bot in a
+// creep camp's aggro ring stops the pack regenerating, and the eleven camp assertions downstream
+// of that all fall together — so the suite failed ~1 run in 4 for reasons that had nothing to do
+// with the code under test. A harness that cries wolf a quarter of the time is one you learn to
+// ignore, which is worse than no harness at all: the day it is right, you shrug at it.
+//
+// These two establish a precondition explicitly and hand back an undo. Use them whenever a check
+// depends on "nobody else is standing here" or "nothing else is built here" — and put the count
+// in the assertion message, so if the isolation ever stops working the report says so out loud
+// rather than the test quietly going back to being a coin flip.
+function isolateArea(x,z,r,opts){
+  const G=global.__G, keep=(opts&&opts.keep)||[], undo=[];
+  const r2=r*r;
+  for(const u of G.units){
+    if(!u.alive||u.isPlayer||keep.indexOf(u)>=0)continue;
+    if(u.team===G.NEUTRAL&&opts&&opts.keepNeutral)continue;
+    if(opts&&typeof opts.team==="number"&&u.team!==opts.team)continue; // isolate ONE side only
+    if(dist2h(u.root.position.x,u.root.position.z,x,z)>r2)continue;
+    undo.push({u,x:u.root.position.x,z:u.root.position.z,bot:u.bot,alive:true});
+    u.bot=null;                                   // …and stop it walking back in
+    // step them out ALONG THE LINE TO THE MAP CENTRE, not blindly outward — camps sit past the
+    // border, so "further out" would post them beyond the world edge or inside a neighbour's ring
+    const L=Math.hypot(x,z)||1;
+    u.root.position.set(x-(x/L)*r*2.5+(undo.length%5)*1.6,u.root.position.y,z-(z/L)*r*2.5);
+  }
+  return {moved:undo.length,restore(){for(const e of undo){e.u.root.position.set(e.x,e.u.root.position.y,e.z);e.u.bot=e.bot;}}};
+}
+function clearBuildings(x,z,r,pred){
+  const G=global.__G, undo=[], r2=r*r;
+  for(const b of G.buildings){
+    if(!b.alive||b.type==="towncenter")continue;
+    if(pred&&!pred(b))continue;
+    if(dist2h(b.x,b.z,x,z)>r2)continue;
+    undo.push(b); b.alive=false;
+  }
+  return {cleared:undo.length,restore(){for(const b of undo)b.alive=true;}};
+}
+function dist2h(ax,az,bx,bz){const dx=ax-bx,dz=az-bz;return dx*dx+dz*dz;}
+// v127: tickBody wraps the ENTIRE simulation in `if(!gameOver)` — directors, campTick, healTick,
+// regen, all of it. So when a staged fight elsewhere on the map happens to fell a king in the
+// middle of a long tick loop, the world silently stops and every assertion after that point
+// reports a frozen sim as a broken feature. This file already sprinkles setGameOver(false)
+// between sections for exactly that reason; the creep block runs 570 frames INSIDE one section,
+// which is plenty of time for a regicide to land mid-loop. Clearing the flag once at the top of
+// a block is not enough — it has to be held down for the duration.
+function warTicks(n){ // tick n frames while refusing to let a stray regicide disarm the harness
+  for(let i=0;i<n;i++){global.__G.setGameOver(false);tick();}
+}
 check("100 army units + 36 camp creeps spawned (5 packs of 5 + the shore's 11)",
   units.filter(u=>u.team<2).length===100&&units.filter(u=>u.team===2).length===36);
 check("teams start lean (150f/50g/0s)",stock[0].food<=200&&stock[0].gold<=100&&(stock[0].stone||0)===0);
@@ -268,15 +375,31 @@ check("under-construction sites keep scaffolding through a restyle",
  check("streets appear once buildings cluster near the TC ("+withCity+" segs)",withCity>lone&&withCity>0);
  for(const b of rTest)b.alive=false; global.__G.rebuildRoads(0);} // tidy up so later tests aren't blocked
 // GARDENS: a courtyard fully ringed by paving must bloom
+// v127: this was a knife-edge, and it failed about one run in four. Two reasons, both of them
+// "the test observed the world instead of controlling it":
+//   · the courtyard sat wherever the AI's city happened to leave room. A barracks or a farm
+//     raised during an earlier tick() loop either paved the courtyard or opened a gap in the
+//     ring, and the flood-fill reached in from the border. Foreign buildings are cleared now.
+//   · the ring of SIX houses at radius 9 yields ~2 plantings — and layGardens rejects ~42% of
+//     candidate cells by a hash of their GRID INDEX, whose origin is the city bounding box. Two
+//     plantings is close enough to zero to lose on the coin. Probed 10 ring geometries against
+//     10 shifting city layouts (tools/_probe_garden.js, since deleted): 10 houses at radius 15
+//     gives 32 plantings every time. The margin IS the fix — a check that passes by 2 is a check
+//     that reports geometry drift as a failure of the feature.
+// Counter-intuitive finding worth keeping: TIGHTENING the ring makes it worse, not better.
+// At radius 7 or less the aprons merge and pave the courtyard away entirely — 0 gardens. The
+// obvious "make the ring tighter so it definitely closes" would have broken it outright.
 {const tcG=global.__G.teamTC(0);
- const px=tcG.x+30, pz=tcG.z; // courtyard center, ringed by six houses with overlapping aprons
+ const px=tcG.x+34, pz=tcG.z; // courtyard center, ringed by houses whose aprons close the loop
+ const clearG=clearBuildings(px,pz,30);
  const ringG=[];
- for(let k=0;k<6;k++){const a=k*Math.PI/3;
-   ringG.push(global.__G.makeBuilding(0,"house",px+Math.cos(a)*9,pz+Math.sin(a)*9,true));}
+ for(let k=0;k<10;k++){const a=k*Math.PI/5;
+   ringG.push(global.__G.makeBuilding(0,"house",px+Math.cos(a)*15,pz+Math.sin(a)*15,true));}
  global.__G.rebuildRoads(0);
  const flowers=global.__G.roadGroups[0].children.filter(c=>c.userData&&c.userData.garden).length;
- check("an enclosed courtyard blooms into a garden ("+flowers+" plantings)",flowers>0);
- for(const b of ringG)b.alive=false; global.__G.rebuildRoads(0);}
+ check("an enclosed courtyard blooms into a garden ("+flowers+" plantings, yard cleared of "+clearG.cleared+" strays)",
+   flowers>0);
+ for(const b of ringG)b.alive=false; clearG.restore(); global.__G.rebuildRoads(0);}
 teamAge[0]=0; global.__G.restyleBuildings(0); // back to the stone age for what follows
 // ---- v58: villagers dress for their age, six distinct wardrobes ----
 {const vv=global.__G.makeUnit(0,"villager",-160,70,{name:"Fashion Plate"});
@@ -441,7 +564,25 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
   check("a Town Board stands beside each throne",
     townBoards.length===2&&[0,1].every(t=>{const b=boardFor(t);
       return b&&Math.hypot(b.x-TCPOS[t][0],b.z-TCPOS[t][1])<30;}));
-  const nSmEver=buildings.filter(b=>b.type==="blacksmith").length; // razed forges still prove the AI built one
+  // v127: this asked "did the campaign happen to build a forge?" — an emergent-behaviour question
+  // whose answer is a dice roll, and it came up short about one run in eight. The rule it MEANT to
+  // test is "a director at Iron with money in the bank raises a blacksmith", so ask that directly:
+  // put team 0 at Iron, fund it, and run the war room synchronously. The old campaign observation
+  // is kept as the first clause, because when the campaign DID build one that is the stronger
+  // evidence — this just stops the check depending on whether it did.
+  let nSmEver=buildings.filter(b=>b.type==="blacksmith").length; // razed forges still prove the AI built one
+  if(nSmEver===0){
+    const ageSave=teamAge[0], DIR0=global.__G.directors[0];
+    const st0={food:stock[0].food,gold:stock[0].gold,stone:stock[0].stone,wood:stock[0].wood};
+    teamAge[0]=2; stock[0].food+=4000;stock[0].gold+=4000;stock[0].stone+=4000;stock[0].wood+=4000;
+    for(let i=0;i<40&&nSmEver===0;i++){
+      global.__G.directorThink(DIR0);
+      for(const b of buildings)if(b.alive&&!b.built){b.built=true;b.progress=b.def.hits;} // masons work instantly here
+      nSmEver=buildings.filter(b=>b.type==="blacksmith").length;
+    }
+    teamAge[0]=ageSave;
+    stock[0].food=st0.food;stock[0].gold=st0.gold;stock[0].stone=st0.stone;stock[0].wood=st0.wood;
+  }
   check("the AI directors raise a blacksmith at Iron ("+nSmEver+" ever built, ages "+teamAge[0]+"/"+teamAge[1]+")",
     nSmEver>=1||Math.max(teamAge[0],teamAge[1])<2);
   check("the Blacksmith: Iron age, 100 wood",BLD.blacksmith&&BLD.blacksmith.age===2&&BLD.blacksmith.cost.wood===100);
@@ -679,12 +820,39 @@ check("mission variety across the campaign, both armies ("+[...allRoles].join("/
  global.__G.dealDamage(datt,dvic,3);
  check("a struck worker raises a distress call",!!directors[0].distress&&
    Math.hypot(directors[0].distress.x+190,directors[0].distress.z+110)<3);
- let aided=false;
- for(let i=0;i<160&&!aided;i++){ // let a director think fire
+ // v127: this used to spin tick() 160 times and hope a director timer fired inside the window.
+ // Whether it did depended on where the campaign had left directors[0].lastRescue and how busy
+ // its bands were — so the check was really testing the timer's phase, not the rescue. The war
+ // room is driven SYNCHRONOUSLY now, the same trick the levy check below already uses, with the
+ // cooldown cleared so the decision is the thing under test. The tick loop stays as a second
+ // chance for the path that only fires from a real frame.
+ // …and the rescue needs SOMEBODY TO SEND. 07-ai.js:783 picks the best band that is neither
+ // kingsguard nor siege and has at least one living member. If the campaign has left directors[0]
+ // with no such band, no amount of ticking can produce a rescue, and the check was really asking
+ // "did the campaign happen to leave a spare band alive?" rather than testing the dispatch.
+ let aided=false, staged=null;
+ directors[0].lastRescue=-99;
+ const eligible=directors[0].bands.filter(bd=>bd.role!=="kingsguard"&&bd.role!=="siege"&&
+   bd.members.some(v=>v&&v.alive));
+ if(!eligible.length){
+   const ra=global.__G.makeUnit(0,"clubman",-176,-104,{name:"Relief A",bot:{role:"war"}});
+   const rb=global.__G.makeUnit(0,"clubman",-174,-106,{name:"Relief B",bot:{role:"war"}});
+   ra.alive=true; rb.alive=true;
+   staged={id:9101,role:"patrol",members:[ra,rb],holdUntil:0,lastContact:-9999,laneZ:0,laneUntil:1e9};
+   ra.bandRef=staged; rb.bandRef=staged; directors[0].bands.push(staged);
+ }
+ for(let i=0;i<6&&!aided;i++){
+   global.__G.manageBands(directors[0]);
+   aided=directors[0].bands.some(bd=>bd.aid&&Math.hypot(bd.aid.x+190,bd.aid.z+110)<8);
+ }
+ for(let i=0;i<160&&!aided;i++){
    global.__G.tick(0.05);
    aided=directors[0].bands.some(bd=>bd.aid&&Math.hypot(bd.aid.x+190,bd.aid.z+110)<8);
  }
- check("a band is dispatched to the distress point",aided||directors[0].lastRescue>0);
+ check("a band is dispatched to the distress point"+(staged?" (band staged)":" (campaign band)"),
+   aided||directors[0].lastRescue>0);
+ if(staged){const si=directors[0].bands.indexOf(staged);if(si>=0)directors[0].bands.splice(si,1);
+   for(const v of staged.members){v.alive=false;v.bandRef=null;}}
  dvic.alive=false; datt.alive=false;}
 // ---- REACTIVE AI: an overwhelmed Town Center levies its villagers ----
 global.__G.setGameOver(false); // an accidental regicide in a prior staged fight must not mute this section
@@ -707,10 +875,16 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
  for(const v of units)if(v.alive&&v.team===0&&v._levy){leviedUnit=v;break;}
  check("an overwhelmed TC levies villagers into soldiers",!!leviedUnit&&leviedUnit.cls!=="villager");
  for(const m of mob)m.alive=false; // threat ends
+ // v127: …except the threat only ends if the STAGED mob was the whole threat. Any enemy the
+ // campaign left standing near this Town Centre keeps the militia mobilised, and the check
+ // failed for that reason rather than for a broken stand-down. Clear the yard, and say by how
+ // much — an isolation that silently stops isolating is how a test goes back to being a coin flip.
+ const yard=isolateArea(tcB.x,tcB.z,40,{team:1}); // ENEMIES only — moving our own levy would change what manageBands sees
  if(leviedUnit)leviedUnit._levyClear=-99; // ten quiet seconds, compressed
  global.__G.manageBands(directors[0]);
- check("the militia stands down and returns to the fields",
+ check("the militia stands down and returns to the fields (yard cleared of "+yard.moved+")",
    !!leviedUnit&&leviedUnit.cls==="villager"&&!leviedUnit._levy);
+ yard.restore();
  for(const v of vills)if(v.alive)v.alive=false;}}
 
 // every melee age must assemble its bespoke rig — clubman through musketeer
@@ -758,7 +932,7 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   let maxLeash=0, hp0i=intruder.hp;
   G.NET.mode="host";
   for(let i=0;i<240;i++){ // 8 sim-seconds of mauling
-    tick();
+    warTicks(1);
     for(const c of north.creeps)if(c.alive)
       maxLeash=Math.max(maxLeash,Math.hypot(c.root.position.x-north.x,c.root.position.z-north.z));
   }
@@ -766,23 +940,48 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   // leash: drag the pack's attention OUTSIDE the pocket — nobody follows
   intruder.root.position.set(0,0,MAPh.z-30);
   for(let i=0;i<240;i++){
-    tick();
+    warTicks(1);
     for(const c of north.creeps)if(c.alive)
       maxLeash=Math.max(maxLeash,Math.hypot(c.root.position.x-north.x,c.root.position.z-north.z));
   }
   check("creeps never leave their camp circle (max leash "+maxLeash.toFixed(1)+" < "+CR+")",maxLeash<=CR+0.01);
+  // ---- v127: THE CAMP HAS TO BE CALM, AND "CALM" IS NOT SOMETHING TO HOPE FOR ----
+  // updateCreep only knits wounds in its `else` branch — the one it takes when NO living
+  // non-neutral unit sits inside the camp's aggro ring. This test parked its own intruder
+  // outside and then trusted the other hundred army bots to stay away for three sim-seconds.
+  // They did, about three runs in four. When one drifted in, the pack stayed aggro'd, regen
+  // never fired, and every camp assertion BELOW this one fell with it — eleven checks red for
+  // a reason that had nothing to do with creeps. The ring is cleared explicitly now, and the
+  // count rides in the message so a future breakage announces itself instead of going quiet.
+  const ringR=(north.aggro||G.CAMP_AGGRO||11.5)+8;
+  const calm=isolateArea(north.x,north.z,ringR,{keep:north.creeps,keepNeutral:true});
   const wounded=north.creeps.find(c=>c.alive);
   wounded.hp=wounded.maxHp*0.4; // bloody one by hand — the camp is calm, so it must knit
   const wh=wounded.hp;
-  for(let i=0;i<90;i++)tick();
-  check("calm creeps regenerate (+"+Math.round(wounded.hp-wh)+" hp)",wounded.hp>wh+20);
+  const regenT0=global.__G.getT();
+  warTicks(90);
+  // v127 DIAGNOSTIC: when this fails it takes ten checks with it, so the message has to say WHY
+  // rather than leaving the next person to guess. `T+` proves the sim ran at all (gameOver gates
+  // the whole of tickBody); `in ring` is the aggro test the regen branch actually depends on.
+  const aggR=(north.aggro||G.CAMP_AGGRO||11.5);
+  let inRing=0, ringWho="";
+  for(const u of G.units){
+    if(!u.alive||u.team===G.NEUTRAL||u.garrison)continue;
+    if(dist2h(u.root.position.x,u.root.position.z,north.x,north.z)>aggR*aggR)continue;
+    inRing++; if(ringWho.length<40)ringWho+=(ringWho?",":"")+(u.name||u.cls);
+  }
+  check("calm creeps regenerate (+"+Math.round(wounded.hp-wh)+" hp of "+Math.round(wounded.maxHp)+
+    ", T+"+(global.__G.getT()-regenT0).toFixed(1)+"s, cleared "+calm.moved+", still in ring "+inRing+
+    (ringWho?" ["+ringWho+"]":"")+", alive "+(!!wounded.alive)+")",
+    wounded.hp>wh+wounded.maxHp*0.12); // 8%/s over 3 sim-seconds is ~24% — assert against maxHp, not a flat 20 that a low-hp wolf can miss
+  calm.restore();
   intruder.hp=1; G.dealDamage(north.creeps[0],intruder,9999); // tidy: the wilds claim their kill
   // WIPE a camp: the chest appears, typed by the pack that guarded it
   const camp0=CS[0], slayer=G.makeUnit(0,"clubman",camp0.x,camp0.z,{name:"Slayer",bot:{role:"citizen"}});
   slayer.bot=null;
   const kind0=camp0.kind, want=kind0==="wolf"?"food":"gold";
   for(const c of camp0.creeps)if(c.alive)G.dealDamage(slayer,c,99999);
-  tick();
+  warTicks(1); // v127: a regicide mid-block would freeze the sim and read as a missing chest
   check("a wiped camp drops a treasure chest",!!camp0.chest&&camp0.waiting===true);
   check("wolves guard FOOD, barbarians guard GOLD ("+kind0+" → "+camp0.chestKind+")",camp0.chestKind===want);
   check("dead creeps lie as corpses in the camp",camp0.creeps.every(c=>!c.alive)&&camp0.creeps.some(c=>c.corpse));
@@ -790,22 +989,22 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   // the STEAL: a RED boot lands on the chest first — red banks the treasure
   const thief=G.makeUnit(1,"clubman",camp0.x,camp0.z,{name:"Thief",bot:{role:"citizen"}});
   thief.bot=null; thief.remote="thief-peer"; // remotes score like humans — an exact, economy-noise-proof measure
-  tick();
+  warTicks(1); // v127: a regicide mid-block would freeze the sim and read as a missing chest
   check("first boot on the chest takes it — even an enemy's (RED thief scored "+(thief.score||0)+")",
     (thief.score||0)===300&&camp0.chest===null);
   thief.alive=false; thief.remote=null;
   // the 3-minute clock: force it due — a fresh pack rises, 4-5 strong, single group only
   camp0.respawnAt=-1;
-  tick();
+  warTicks(1); // v127: a regicide mid-block would freeze the sim and read as a missing chest
   const alive0=camp0.creeps.filter(c=>c.alive).length;
   check("after the wait a fresh pack claims the camp ("+alive0+" of 4-5, kind "+camp0.kind+")",
     !camp0.waiting&&alive0>=4&&alive0<=5&&camp0.creeps.filter(c=>c.alive).every(c=>c.cls===camp0.kind));
   // an UNCLAIMED chest vanishes when the next wave arrives
   for(const c of camp0.creeps)if(c.alive)G.dealDamage(slayer,c,99999);
-  tick();
+  warTicks(1); // v127: a regicide mid-block would freeze the sim and read as a missing chest
   check("second wipe drops a second chest",!!camp0.chest);
   camp0.respawnAt=-1;
-  tick();
+  warTicks(1); // v127: a regicide mid-block would freeze the sim and read as a missing chest
   check("an unclaimed chest is dragged off by the NEXT wave (chest gone, pack alive)",
     camp0.chest===null&&camp0.creeps.filter(c=>c.alive).length>=4);
   // ---- v79: THE RAID BOSS SHORE — empty start, 15:00 landing, twin chests, split steal ----
@@ -834,20 +1033,20 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   const reaver=G.makeUnit(0,"clubman",shore.x,shore.z,{name:"Reaver"}); reaver.bot=null;
   for(const c of shore.creeps)G.dealDamage(reaver,c,999999);
   reaver.alive=false;
-  tick();
+  warTicks(1); // v127: a regicide mid-block would freeze the sim and read as a missing chest
   check("breaking the raid drops TWIN chests: 500 FOOD and 500 GOLD",
     shore.chestKind==="food"&&shore.chestKindB==="gold"&&shore.waiting&&shore.respawnAt>T0()+890);
   // the SPLIT STEAL: blue takes the food chest, red takes the gold chest, same instant
   const bGrab=G.makeUnit(0,"clubman",shore.x-2.6,shore.z,{name:"BlueGrab"}); bGrab.bot=null; bGrab.remote="grabA";
   const rGrab=G.makeUnit(1,"clubman",shore.x+2.6,shore.z,{name:"RedGrab"}); rGrab.bot=null; rGrab.remote="grabB"; // remotes score like humans: exact, immune to director spending in the same tick
-  tick();
+  warTicks(1); // v127: a regicide mid-block would freeze the sim and read as a missing chest
   check("twin chests split between RIVAL teams in one instant (blue scored "+(bGrab.score||0)+", red "+(rGrab.score||0)+")",
     (bGrab.score||0)===500&&(rGrab.score||0)===500&&shore.chest===null&&shore.chestB===null);
   bGrab.alive=false; rGrab.alive=false; bGrab.remote=null; rGrab.remote=null;
   // unclaimed twins are swept away when the NEXT raid lands
   shore.respawnAt=-1; tick(); // next raid (revives the crew)
   for(const c of shore.creeps)G.dealDamage(reaver,c,999999);
-  tick();
+  warTicks(1); // v127: a regicide mid-block would freeze the sim and read as a missing chest
   check("a second broken raid drops twins again",!!shore.chest&&!!shore.chestB);
   shore.respawnAt=-1; tick();
   check("the NEXT raid sweeps unclaimed twin chests away",
@@ -1054,11 +1253,19 @@ NET.mode="host"; global.__G.dealDamage(scorer,victim,99999); NET.mode="guest";
  check("a villager kill is worth 10 points (Δ"+(((kk.score||0)-s0))+")",(kk.score||0)-s0===10);
  kk.alive=false;}
 // the market cap: a team's sixth market is refused by the validator
+// v127: the second half of this — "…but team 1 may still build one" — was silently a question
+// about how many markets the AI had already raised for team 1. Five of them and the control case
+// inverts, through no fault of the validator. Both sides are counted and stood down first, so the
+// check tests the CAP rather than the campaign's trading habits.
 {const mkts=[];
+ const preB=clearBuildings(0,0,1e4,b=>b.type==="market");
  for(let i=0;i<5;i++)mkts.push(global.__G.makeBuilding(0,"market",-60+i*16,100,true));
- check("five markets stand, the validator refuses a sixth", // probe sits 26 out: clear of the v87 2.2 gap
+ const n0=global.__G.buildings.filter(b=>b.alive&&b.team===0&&b.type==="market").length;
+ const n1=global.__G.buildings.filter(b=>b.alive&&b.team===1&&b.type==="market").length;
+ check("five markets stand, the validator refuses a sixth ("+n0+" blue / "+n1+" red)", // probe sits 26 out: clear of the v87 2.2 gap
+   n0===5&&n1===0&&
    global.__G.validFor("market",30,100,0)===false&&global.__G.validFor("market",30,100,1)===true);
- for(const m of mkts)m.alive=false;}
+ for(const m of mkts)m.alive=false; preB.restore();}
 check("kills pay the victim's cost (Δ"+Math.round((scorer.score||0)-before)+" = "+kcost+")",
   !victim.alive&&Math.round((scorer.score||0)-before)===kcost);
 scorer.remote=null;
@@ -1191,10 +1398,11 @@ global.__G.NET.mode="host";
   const cVic=global.__G.makeUnit(0,"clubman",-150,118,{name:"Fallen"});
   const cAtt=global.__G.makeUnit(1,"clubman",-149,118,{name:"Slayer"});
   cVic.hp=1;
+  global.__G.setGameOver(false); // 05-combat.js:196 — dealDamage is a NO-OP once a king has fallen
   global.__G.dealDamage(cAtt,cVic,999);
   check("a slain unit becomes a lingering corpse (not gone at once)",
     !cVic.alive&&cVic.corpse===true&&cVic.respawnT>0);
-  for(let i=0;i<40;i++)global.__G.tick(); // dieT 0.9 @ 1/30 ≈ 27 frames → topple finishes
+  warTicks(40); // dieT 0.9 @ 1/30 ≈ 27 frames → topple finishes (and the war stays open through it)
   check("the corpse lies toppled on the field, still present after the fall",
     cVic.corpse===true&&!cVic.alive&&Math.abs(cVic.body.rotation.x)>1);
   cAtt.alive=false; cVic.alive=false; cVic.corpse=false;
@@ -1204,6 +1412,7 @@ global.__G.NET.mode="host";
   const rVic=global.__G.makeUnit(0,"archer",-142,118,{name:"Martyr"});
   const rPri=global.__G.makeUnit(0,"villager",-140,118,{name:"Padre"}); rPri.cls="priest"; rPri.remote="res-peer"; // human priest → scores
   const foe=global.__G.makeUnit(1,"clubman",-141,118,{name:"Reaper"}); rVic.hp=1;
+  global.__G.setGameOver(false); // …the pair below failed for exactly this, not for broken corpses
   global.__G.dealDamage(foe,rVic,999);
   check("the resurrection target is a corpse first",rVic.corpse===true&&!rVic.alive);
   const pri0=rPri.score||0;
@@ -2379,9 +2588,17 @@ global.__G.setGameOver(false);
     const cold=G2.makeUnit(team,"clubman",-200,-118,{name:"Sentry",bot:{role:"war"}});
     cold.alive=true;
     const hb={id:9001,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,laneZ:0,laneUntil:NOWT+999};
+    // v127: "a cold field" was HOPED for, not established. manageBands re-checks contact by
+    // looking for enemies near the posting, so one wandering raider within a few units made the
+    // field hot and the band rightly held — and the check then reported that correct behaviour as
+    // a failure. The HOT case five lines below is staged deliberately; this one has to be too, or
+    // the pair is the same test run twice with different luck.
+    const cellar=isolateArea(-200,-118,30,{team:1-team,keep:[cold]});
     cold.bandRef=hb; D.bands.push(hb);
     G2.manageBands(D);
-    check("v113 relief: a hold band with a spent tour and a cold field takes a new mission ("+hb.role+")",
+    cellar.restore();
+    check("v113 relief: a hold band with a spent tour and a cold field takes a new mission ("+hb.role+
+      ", field cleared of "+cellar.moved+")",
       hb.role!=="hold"&&["econ","patrol","assassin"].includes(hb.role)&&hb.point===null);
     // A HOT POSTING: the same spent tour, but an enemy standing on it — the ground still matters
     const hb2={id:9002,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,laneZ:0,laneUntil:NOWT+999};
@@ -2639,6 +2856,77 @@ global.__G.setGameOver(false);
     "carries a can() test",
     G.ACTIONS[0].k==="t"&&G.ACTIONS.every(a=>typeof a.can==="function"&&a.label));
   document.getElementById("roster").innerHTML=before;
+}
+
+// ================= v127: IS THE FRAME ACTUALLY CALLING ANY OF THIS? =================
+// The bug that motivated this block: `tickBoardBang` was called from exactly ONE place —
+// tickBody's host/solo branch — so guests never saw the "!" over the quest board. It shipped
+// broken in v99 and stayed broken for 27 versions, with a GREEN test the whole time, because
+// that test called `tickBoardBang()` by hand. It proved the driver worked and said nothing about
+// whether anybody drives it. Every other check in this file that pokes a helper directly has the
+// same blind spot; auditing 380 of them one at a time would find today's instance and miss the
+// next one.
+//
+// So instead of auditing, assert the WIRING. Each per-frame driver is swapped for a counter, one
+// host frame and one guest frame are run, and we check who fired. A guest runs a completely
+// different frame from a host — it returns from tickBody at 09-main.js:631 and never sees the 40
+// lines below — so "it works" is meaningless until you say FOR WHOM. This is the check that
+// notices the day someone adds a display driver to one branch and forgets the other.
+//
+// It works because the bundle is evaluated in global scope, so top-level `function` declarations
+// land on globalThis and the internal call sites resolve through the scope chain. `const`/`let`
+// do not, which is why only functions can be spied on here.
+{
+  const G=global.__G, W=global.__WIRE||{};
+  const DRIVERS=WIRE_DRIVERS;
+  const orig={}, hits={};
+  for(const d of DRIVERS){
+    if(!W[d]||typeof W[d].get()!=="function"){orig[d]=null;continue;}
+    orig[d]=W[d].get();
+    hits[d]={host:0,guest:0};
+    W[d].set(function(){hits[d][global.__frameRole]++;return orig[d].apply(this,arguments);});
+  }
+  const missing=DRIVERS.filter(d=>orig[d]===null);
+  const modeSave=NET.mode;
+  let ranOK=true;
+  try{
+    global.__frameRole="host";
+    NET.mode="solo"; G.setGameOver(false);
+    for(let i=0;i<40;i++)G.tick();          // 40 frames: enough for the 0.5s roster tick to land
+    global.__frameRole="guest";
+    NET.mode="guest";
+    for(let i=0;i<40;i++)NET.guestFrame(1/30);
+  }catch(e){
+    // a throw here must not take the whole suite down WITH THE SPIES STILL INSTALLED
+    console.error("  wiring probe threw:",e.message); ranOK=false;
+  }finally{
+    for(const d of DRIVERS)if(orig[d])W[d].set(orig[d]);
+    NET.mode=modeSave;
+  }
+  check("v127 wiring: both frames run to completion under the probe",ranOK);
+  check("v127 wiring: every per-frame driver is swappable through __WIRE (spy-able) — "+
+    (missing.length?("MISSING "+missing.join(", ")):"all "+DRIVERS.length+" found"),missing.length===0);
+  // the host/solo frame drives the whole sim
+  // NOTE the `spied>0` clause on each check below. Without it, a probe that installed NOTHING
+  // would filter an empty list and report three cheerful passes — a test that reports success
+  // when it measured nothing, which is the exact species of bug this block was written to hunt.
+  const spied=DRIVERS.filter(d=>orig[d]).length;
+  const hostSilent=DRIVERS.filter(d=>orig[d]&&hits[d].host===0);
+  check("v127 wiring: the host frame calls every driver it owns ("+spied+" spied)"+
+    (hostSilent.length?(" — SILENT: "+hostSilent.join(", ")):""),spied>0&&hostSilent.length===0);
+  // …and the guest frame drives every DISPLAY-ONLY one. The sim-only drivers must NOT run on a
+  // guest (the host is authoritative), so this list is the contract, not a wish.
+  const GUEST_MUST=["drainVisualQueue","updateEffects","updateProjectiles","tickAgeResearch",
+                    "tickBoardBang","drawMinimap","updateRoster"];
+  const GUEST_MUST_NOT=["campTick","healTick","questTick","economyTick"];
+  const guestSilent=GUEST_MUST.filter(d=>orig[d]&&hits[d].guest===0);
+  check("v127 wiring: the guest frame calls every DISPLAY driver"+
+    (guestSilent.length?(" — SILENT ON GUESTS: "+guestSilent.join(", ")+
+      " (this is exactly how the board '!' was invisible to guests for 27 versions)"):""),
+    spied>0&&guestSilent.length===0);
+  const guestLeak=GUEST_MUST_NOT.filter(d=>orig[d]&&hits[d].guest>0);
+  check("v127 wiring: the guest frame runs NO host-authoritative driver"+
+    (guestLeak.length?(" — LEAKED: "+guestLeak.join(", ")):""),spied>0&&guestLeak.length===0);
 }
 
 console.log(fails?("\n"+fails+" FAILURES"):"\nALL SMOKE TESTS PASSED");

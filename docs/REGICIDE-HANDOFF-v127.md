@@ -106,6 +106,105 @@ delta baselines and N pack passes to the host that is already the frame-rate bot
 build it.** If a future match ever spreads guests to opposite corners of the map with big warbands
 each, re-measure with `--sep` before believing that changed.
 
+## THE SUITE ITSELF: from ~1 run in 4 red, to 12 clean in 13 — and the last one is named
+
+Two releases (v126, v127) are on disk unplayed, one of them moving PROTO. The smoketest is the
+only thing standing behind them — and it was failing about a quarter of its runs for reasons that
+had nothing to do with the code under test. **A harness that cries wolf that often is one you
+learn to ignore, and the day it is right you shrug at it.** So it was hardened before anything
+else got built on top of it.
+
+Three distinct causes, worth separating because the fixes are different:
+
+**1. Tests that OBSERVED the world instead of CONTROLLING it.** The expensive one: `updateCreep`
+only knits wounds in the branch it takes when no living non-neutral unit is inside the camp's
+aggro ring. The test parked its own intruder outside and then trusted a hundred wandering army
+bots to stay away for three sim-seconds. They did, about three runs in four — and when one drifted
+in, the pack stayed aggro'd, regen never fired, and **all eleven camp assertions below it fell
+together.** Same shape in the garden courtyard, the militia yard, the market cap's control case
+(the AI's own markets could invert it), the v113 "cold field", and the rescue dispatch — which
+needed an eligible band to exist at all, so it was really asking whether the campaign happened to
+leave one alive. Two helpers now establish those preconditions explicitly, `isolateArea` and
+`clearBuildings`, and **each puts its count in the assertion message** so an isolation that stops
+isolating announces itself instead of quietly going back to being a coin flip.
+
+**2. A regicide mid-run silently disarms the whole harness.** Two lines do it:
+`09-main.js:634` wraps the entire simulation in `if(!gameOver)`, and — the one that took longest
+to find — **`05-combat.js:196` makes `dealDamage` a NO-OP once the game is over**:
+
+```js
+if(!victim.alive||gameOver)return;   // 05-combat.js:196
+```
+
+So when a staged fight elsewhere on the map fells a king inside a tick loop, every subsequent
+staged kill quietly does nothing and every timer stops, **for the rest of the run**. That is what
+took out the eleven-check creep cluster, and separately the resurrection pair: *"the resurrection
+target is a corpse first"* was failing because `dealDamage` had stopped dealing damage — not
+because corpses were broken. The file used to tap `setGameOver(false)` between sections by hand;
+sections that tick for hundreds of frames need it held down. The `tick` export is wrapped once now,
+which covers both the local binding and every `global.__G.tick(...)` call site. **This is the most
+transferable finding of the pass: any test that stages damage was implicitly betting that no king
+had died yet.**
+
+**3. Assertions with no margin.** The garden ring of six houses yielded ~2 plantings, and
+`layGardens` rejects ~42% of candidate cells by a hash of their grid index — two is close enough
+to zero to lose on the coin. Ten houses at radius 15 gives 32. Likewise, regen asserted a flat
+`+20 hp` against a creep whose `maxHp` varies by kind; it is measured against `maxHp` now.
+
+> **The counter-intuitive one, so nobody re-derives it the hard way:** TIGHTENING the garden ring
+> makes it *worse*. At radius 7 or less the paving aprons merge and pave the courtyard away
+> entirely — 0 gardens. The obvious "make the ring tighter so it definitely closes" breaks it
+> outright. Probed across 10 geometries × 10 city layouts before choosing.
+
+**Result: 12 clean runs in 13, 389 checks each** (against roughly one run in four red before, and
+about seven distinct flake families). The eleven-check creep cluster has not recurred once across
+the whole session, and `garden`, `sixth market`, `band dispatched`, `blacksmith at Iron`,
+`v113 relief`, the resurrection pair and the splash/deposit pair are all gone.
+
+One flake is left, and it is *named* rather than lurking: the militia pair — `an overwhelmed TC
+levies villagers into soldiers` / `the militia stands down`. Its own diagnostic prints
+`yard cleared of N`, and on the failure N was **0**, which rules out the enemy-isolation this pass
+added: the levy decision itself never fired. `manageBands` is where to look, and the first
+question is what else it needs besides a mob standing in the yard.
+
+Do not paper over it with a retry. The whole point of this pass is that a named, understood flake
+is worth ten silent ones.
+
+## The wiring test — the one that would have caught the board "!"
+
+`tickBoardBang` shipped broken for guests in v99 and stayed broken for **27 versions with a green
+test the whole time**, because that test called `tickBoardBang()` by hand. It proved the driver
+worked and said nothing about whether anybody drives it. Every check in this file that pokes a
+helper directly has the same blind spot, and auditing 380 of them one at a time would find today's
+instance and miss the next one.
+
+So the wiring is asserted instead. Each of the twelve per-frame drivers is swapped for a counter,
+one host frame and one guest frame are run, and the checks are: the host calls every driver it
+owns; the guest calls every DISPLAY driver; the guest calls **no** host-authoritative driver
+(`campTick`, `healTick`, `questTick`, `economyTick` must never run on a guest). A guest runs a
+completely different frame from a host — it returns from `tickBody` at `09-main.js:631` and never
+sees the 40 lines below — so **"it works" is meaningless until you say for whom.**
+
+Two things that make this block trustworthy rather than decorative:
+
+- **It was mutation-tested.** The `guestFrame` call to `tickBoardBang` was removed — re-creating
+  the exact v99–v125 bug — and the guest's call count went 20 → 0. The check goes red on the bug
+  it was written for. A wiring test nobody has ever seen fail is a wiring test you are guessing about.
+- **It cannot pass vacuously.** Each check requires `spied>0`. Without that, a probe that installed
+  nothing would filter an empty list and report three cheerful passes — a test that reports success
+  when it measured nothing, which is the exact species of bug the block exists to hunt. The first
+  version did precisely that, and said "all clear" while spying on nothing.
+
+**Why `__WIRE` and not `global`:** `js/00-data.js` line 2 is `"use strict"`, and because the
+harness concatenates all fourteen files into ONE script, the whole bundle is strict — under which
+an indirect `eval`'s function declarations stay inside the eval scope instead of landing on the
+global object. Exporting through `__G` does not help either: exporting a function exports a *copy
+of the reference*, so reassigning `__G.campTick` does not change what `tickBody` calls. The only
+place the binding can be swapped is inside the bundle's own scope, so the harness generates a
+get/set pair per driver there. **Worth knowing independently: in the browser each `<script>` is
+separate and only `00-data.js` is strict — the harness runs the other thirteen files under a
+stricter regime than the game does.**
+
 ## Still on the table, with prices attached
 
 - **`maxHp` rides every unit row** — 2 B of every 18. That is 29 B/snap in the profiler's quiet
@@ -520,7 +619,7 @@ wrapper batches every pending callback and releases them together.
 ## Tests
 
 ```
-smoketest      ALL PASSED   exit 0  — 384 checks                         (~100 s)
+smoketest      389 checks   exit 0  — one known flake left (militia pair) (~100 s)
 mobilecheck    192 PASS     exit 0  — 64 checks × 3 devices              (~5 min, background it)
 deskcheck       56 PASS     exit 0  — 18 checks × 3 viewports + ?ui=classic
 browsercheck   PASSED               — 139 SFX + 6 anthems, http and file://
@@ -545,22 +644,25 @@ is present** (the way "rail is mobile-only" breaks is a touch-detection change h
 the phone build, which no positive assertion about the bar would catch), and **that `?ui=classic`
 still works** — an escape hatch nobody tests is not an escape hatch.
 
+**THE FLAKE LIST IS DOWN TO ONE.** v127 hardened the suite: `garden`, `sixth market`,
+`band dispatched`, `blacksmith at Iron`, `v113 relief` and the eleven-check creep/raid cluster
+were all the same three bugs wearing different hats — see "THE SUITE ITSELF" above. What remains
+is the **militia pair**, about 1 run in 13, and it is understood well enough to be worth naming:
+the levy decision itself does not fire, and the isolation this pass added is not the cause (its
+own diagnostic printed `yard cleared of 0` on the failure). Start at `manageBands`.
+
+**Everything else: if it goes red now, believe it.** Do not add a name to a flake list; work out
+which of the three families it is — ambient world state, a regicide disarming the harness, or an
+assertion with no margin — and fix it properly.
+
 **`v95 work pulse` was never a flake — it was a bad assertion, fixed in v124.13.** It asserted
 `attackAnimT > 0`, but `triggerAttackAnim` only moves that when a mixer clip or the baked Mixamo
 pool is loaded, and **baked playback is commented out in `index.html`**. *A test that depends on
 an optional asset is a test that lies.*
 
-Remaining known flakes, all confirmed passing on re-run: `garden`, `turtle curtain wall`,
-`sixth market`, `militia stand-down`, `AI directors raise a blacksmith at Iron`,
-`a band is dispatched to the distress point`.
-
-**⚠ A correlated flake cluster worth a session of its own.** In 2 of 8 runs the whole v77 creep /
-raid section fails together — 11 checks, starting at `calm creeps regenerate (+0 hp)`. They are
-not independent: one camp staying aggro'd (a bot unit wandering into its pocket during the 90
-regen ticks) breaks every downstream camp assertion. The baseline shows the same fragility in the
-adjacent AI block (`a band is dispatched to the distress point`, 1 of 5 runs). **Whoever picks
-this up: the fix is isolating the camp under test from the 100 wandering army units, not
-retrying.** Do not read a green run as proof.
+`turtle curtain wall` was never reproduced in v127's runs and was left alone; it drives
+`directorThink` synchronously already, so if it ever does fail, suspect the 20-iteration cap
+rather than ambient state.
 
 ### The traps this codebase sets
 
@@ -590,7 +692,20 @@ retrying.** Do not read a green run as proof.
 8. **v126 — a "per second" counter is only per second if something says so.** Every rate the
    flight recorder emitted for 28 versions was per *sim* second while claiming to be per second,
    and the error was largest exactly where the data mattered. Rows carry `win` now. Divide by it.
-9. **v126 — a guest runs a DIFFERENT frame, so "it works" means nothing until you say for whom.**
+9. **v127 — a regicide mid-run disarms `dealDamage` ITSELF, not just the clock.**
+   `09-main.js:634` gates the whole simulation on `if(!gameOver)`, and `05-combat.js:196` returns
+   early from `dealDamage` when `gameOver` is set. Every staged kill after that point silently
+   does nothing. The smoketest wraps its `tick` export to hold the flag down; anything else that
+   drives frames must do the same, or it is betting that no king has died yet.
+10. **v127 — a test that reaches past the real entry point cannot see a missing call site.** The
+   board "!" was green for 27 versions on a test that called the driver by hand. Drive the frame.
+   And when you write the test that guards against that, make sure it cannot pass while measuring
+   nothing — the first version of the wiring block filtered an empty list and reported all clear.
+11. **v127 — the harness runs every file in STRICT mode; the browser does not.** `00-data.js`
+   line 2 is `"use strict"` and the smoketest concatenates all fourteen files into one script, so
+   the directive covers the lot. That is why function declarations do not reach `global` and why
+   `__WIRE` exists. It also means the harness is very slightly stricter than the shipping game.
+12. **v126 — a guest runs a DIFFERENT frame, so "it works" means nothing until you say for whom.**
    `NET.guestFrame` is not `tickBody`; a guest returns from `tickBody` at `09-main.js:631` and
    never sees the 40 lines below it. Anything display-only added to the host branch has to be
    added to `guestFrame` too — the v99 board "!" sat unnoticed on the wrong side of that line for

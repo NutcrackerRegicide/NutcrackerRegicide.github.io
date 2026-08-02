@@ -7,6 +7,25 @@
      only route to true fullscreen on iPhone, and these four lines are what make that launch
      chrome-free. Android reads manifest.json for the same effect. -->
 <link rel="manifest" href="manifest.json">
+<!-- v128.2: registering sw.js is the ONE criterion Android was missing for a real "Install app".
+     iOS installs from the manifest + apple-mobile-web-app meta tags alone, which is why the
+     iPhone has worked for versions and Android only ever offered a plain bookmark. It also puts
+     the ~29 MB first load into cache so the second launch is instant.
+     Registered on `load`, never before: a service worker install competing with the game's own
+     29 MB of scripts for bandwidth makes the very problem it is meant to solve worse.
+     file:// has no service workers at all, hence the protocol guard — the game is expected to
+     run from a local file as well as from Pages. -->
+<script>
+if("serviceWorker" in navigator && location.protocol.startsWith("http")){
+  addEventListener("load",()=>{
+    navigator.serviceWorker.register("sw.js").then(reg=>{
+      console.log("[sw] registered",reg.scope);
+      // a new deploy should not need a second manual reload to take effect
+      reg.addEventListener("updatefound",()=>console.log("[sw] update downloading"));
+    }).catch(e=>console.warn("[sw] register failed:",e&&e.message));
+  });
+}
+</script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -82,7 +101,12 @@
 </div>
 <div id="helptoggle" class="panel">H — controls</div>
 
-<div id="netstatus" class="panel"></div>
+<!-- v128.2: the room code + ping readout is COLLAPSIBLE. On a phone this panel was eating the
+     whole top-centre of the playfield (John's field shot: three wrapped lines over the town), and
+     the one thing it says you must not do is close the tab — not close the panel. The ✕ folds it
+     to a chip; the chip taps back open. #netmsg exists because NET.status() rewrites innerHTML,
+     which would delete the button if they shared a node. -->
+<div id="netstatus" class="panel"><button id="netmin" type="button" aria-label="Collapse the connection panel">✕</button><div id="netmsg"></div><span id="netchip">⚑</span></div>
 <div id="scoreboard" class="panel"></div>
 
 <div class="overlay" id="namescreen">
@@ -148,7 +172,7 @@
   <div id="serverlist" style="display:none"></div>
   <p class="netnote">Multiplayer needs the game served over HTTP (not file://) —
   it lives at <b>nutcrackerregicide.github.io</b>, or run <b>python -m http.server</b> in this folder.</p>
-  <p class="verstamp">v127 — THE DIET AND THE GLIDE</p>
+  <p class="verstamp">v128.2 — THE FOLD AND THE INSTALL</p>
 </div>
 
 <div class="overlay" id="howto">

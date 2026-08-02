@@ -851,6 +851,12 @@ function buildBodyFor(u){
   const headM=new THREE.Mesh(new THREE.LatheGeometry(eggPts,9),headMaterials(skinT,hairT));
   headM.rotation.y=Math.PI; // face band (u=0.5) forward, seam behind
   headM.position.y=0; headM.castShadow=false; R.head.add(headM);
+  // v128.1: the head is the single most valuable outline on the whole unit — it is what the eye
+  // finds first at phone size, and the egg silhouette is unmistakable once it has an edge. ONE
+  // extra draw call per unit, against the ~33 a body already costs, so this is a 3% bill for most
+  // of the readability. The limbs and the fifty little props are deliberately left un-inked: they
+  // would multiply the call count for detail nobody can resolve at 0.7 pixel ratio anyway.
+  inkOutline(headM,2.0);
   R.torso.add(R.head);
   const armL=limb2(0.16,0.13,0.10,0.5,0.52,tunic,-0.68,0.96,0);
   const armR=limb2(0.16,0.13,0.10,0.5,0.52,tunic, 0.68,0.96,0);

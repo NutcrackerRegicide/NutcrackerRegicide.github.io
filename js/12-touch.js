@@ -172,6 +172,10 @@
       if(typeof pixelMode==="undefined"||!pixelMode)renderer.setPixelRatio(pr);
       if(typeof setHideD==="function")setHideD(saverHide());
       fit(true);
+      // v128.1: the saver moves the drawing buffer under the outlines. Their width is in DEVICE
+      // pixels, so without this the lines keep the pre-toggle weight — and a phone render at 0.7
+      // showed what that costs: they thin to roughly one pixel and disappear entirely.
+      if(window.__syncInk)window.__syncInk();
       try{localStorage.setItem("reg_saver",saver?"1":"0");}catch(_){}
       console.log("[touch] battery saver",saver?"ON":"OFF");
     }catch(e){}
@@ -184,6 +188,7 @@
       window.__basePR=Math.min(devicePixelRatio,PR_STEPS[prStep]);
       renderer.setPixelRatio(window.__basePR);
       if(typeof setHideD==="function")setHideD(saverHide());
+      if(window.__syncInk)window.__syncInk();
     }catch(e){console.warn("[touch] perf tier partial:",e);}
   }
 

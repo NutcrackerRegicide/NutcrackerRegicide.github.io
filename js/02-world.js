@@ -169,12 +169,15 @@ const BAZAAR_T=[0.28,0.5,0.72]; // road fractions: mirrored pair + dead center (
   }
   const bladeGeo=new THREE.PlaneGeometry(0.22,0.5);
   bladeGeo.translate(0,0.25,0);
+  { const n=bladeGeo.attributes.normal;                 // v128: skyward normals — see undergrowth()
+    for(let i=0;i<n.count;i++)n.setXYZ(i,0,1,0); n.needsUpdate=true; }
   const inst=new THREE.InstancedMesh(bladeGeo,
     new THREE.MeshLambertMaterial({side:THREE.DoubleSide}),mats.length);
   for(let i=0;i<mats.length;i++){inst.setMatrixAt(i,mats[i][0]);inst.setColorAt(i,mats[i][1]);}
   inst.instanceMatrix.needsUpdate=true;
   if(inst.instanceColor)inst.instanceColor.needsUpdate=true;
   inst.castShadow=false; inst.receiveShadow=false;
+  inst.frustumCulled=false; // v128: see the note in undergrowth() — this layer was half-invisible too
   scene.add(inst);
 })();
 
@@ -253,6 +256,15 @@ function makeTree(x,z){
   const ny=terrainHeight(x,z);
   m.position.set(x,ny,z); m.rotation.y=Math.random()*6.28; m.scale.setScalar(sc);
   m.castShadow=true; m.receiveShadow=false;
+  // v128.1: NO OUTLINE ON TREES, and the smoketest is why. `v114 draw budget` asserts that a tree
+  // is ONE mesh sharing pre-built geometry — an invariant written when a forest of three-mesh trees
+  // was costing thousands of draw calls — and a hull child breaks it by doubling the forest.
+  // The check went red the moment I added one, which is exactly what it is for.
+  // The RIGHT fix is to bake the hull into the merged geometry itself: _mergeColored already welds
+  // several geometries into one vertex-coloured buffer, so an inside-out, normal-expanded copy of
+  // the canopy and trunk with black vertex colours would give every tree an outline for ZERO extra
+  // draw calls — vertices instead of calls, which is the same trade v114 made in the first place.
+  // That is a real piece of work and it is the next thing to do here, not a line to sneak in.
   scene.add(m); worldDeco.push(m);
   const node={type:"wood",x,z,y:ny,amount:140,mesh:m,r:1.5,gv:v,th:TREE_H[v]*sc,canopy:null,trunk:null};
   nodes.push(node);
@@ -336,7 +348,10 @@ function nearCamp(x,z,pad){
   return false;
 }
 (function mountainRing(){ // the world's frame: snow-capped peaks over green foothills
-  const rockMats=[texturedMat("hide",0x6a7078),texturedMat("hide",0x757c85),texturedMat("hide",0x5e656e)];
+  // v128: cold blue-grey peaks are the single most desaturating thing on the horizon of a lush
+  // map — they read as a storm front behind a summer meadow. Warmed toward stone-and-moss so the
+  // frame belongs to the same picture as the field it surrounds.
+  const rockMats=[texturedMat("hide",0x7d7f6e),texturedMat("hide",0x8b8c78),texturedMat("hide",0x6d7060)];
   const hillMats=[texturedMat("hide",0x4a6a3c),texturedMat("hide",0x55663d)];
   const snowMat=mat(0xe8ecf0);
   const hazeMats=[mat(0x8b939e),mat(0x99a1ab)]; // the far range fades toward the sky
@@ -436,7 +451,7 @@ function nearCamp(x,z,pad){
   for(let i=0;i<items.length;i++){inst.setMatrixAt(i,items[i][0]);inst.setColorAt(i,items[i][1]);}
   inst.instanceMatrix.needsUpdate=true;
   if(inst.instanceColor)inst.instanceColor.needsUpdate=true;
-  inst.castShadow=false; scene.add(inst);
+  inst.castShadow=false; inst.frustumCulled=false; scene.add(inst); // v128: same culling trap
 })();
 (function rocksAndLogs(){ // boulder clusters and mossy deadfall
   for(let c=0;c<8;c++){
@@ -611,3 +626,210 @@ function nearCamp(x,z,pad){
 })();
 // world gen done — hand Math.random back to the casino
 Math.random=__realRandom;
+
+// =============================================================================================
+// v128 THE UNDERGROWTH — density, variety, and not one byte of it on the wire
+// =============================================================================================
+// WHY THIS LIVES DOWN HERE, BELOW THE LINE, WITH ITS OWN GENERATOR:
+// everything between `Math.random=mulberry32(...)` and the line above draws from ONE seeded
+// stream, and `nodes` — every tree, every ore vein — is built from it. Add or remove a single
+// Math.random() call anywhere in that window and every subsequent draw shifts, which moves every
+// node position and every node INDEX. That is not a cosmetic problem: the netcode indexes nodes
+// by position in a deterministic world build, so a shifted stream means a v127 peer and a v128
+// peer disagree about which tree is tree 300 — same bytes, different world. It is precisely why
+// v114 had to bump PROTO when the forest was replanted.
+// So the undergrowth runs AFTER the handback and draws from its own `sow`. The seeded world is
+// untouched, every peer still grows identical foliage, and PROTO stays 26.
+//
+// It is also all InstancedMesh. The host in John's field logs was at 10–19 fps against ~1,800
+// draw calls, so "more foliage" had to mean more INSTANCES, not more objects: the six layers
+// below add ~14,000 pieces of greenery for six draw calls and six materials.
+(function undergrowth(){
+  const sow=mulberry32(0x5EEDF00D);          // its own stream, deterministic across peers
+  const R=()=>sow(), RR=(a,b)=>a+sow()*(b-a);
+  const dummy=new THREE.Object3D(), col=new THREE.Color();
+  // shared toon material per layer — one draw call each
+  const leafMat=()=>toonMat({side:THREE.DoubleSide,vertexColors:false});
+  // THE ONE TRICK THAT MAKES STYLISED GRASS WORK. A blade is a vertical plane, so its normal
+  // points sideways — edge-on to a sun that is almost overhead. Under a toon ramp that is not a
+  // slightly darker green, it is a hard drop into the BOTTOM cell, and 9,000 blades render as
+  // 9,000 near-black slivers scattered over a bright lawn. (The v34 grass layer has been doing
+  // exactly this, unnoticed, for as long as it has existed.) Point every blade normal at the sky
+  // instead: the grass then takes the same light as the ground it grows from, reads as one lit
+  // surface, and the silhouette still does all the shape work.
+  // …but only PART of the way. Snapping the normal fully to +Y hands every blade the maximum the
+  // sun has to give, which is just the opposite failure: 20,000 pieces of greenery all pinned to
+  // the ramp's top cell, rendering as pale mint confetti. Blending 70% toward the sky keeps them
+  // firmly in the lit bands while leaving enough of the real normal that a leaning blade still
+  // shades differently from an upright one.
+  const SKY_BLEND=0.45; // tuned by eye against renders: 1.0 blows out, 0.7 still reads mint, 0.45 sits in the lawn
+  const skyward=g=>{
+    const n=g.attributes.normal, v=new THREE.Vector3();
+    for(let i=0;i<n.count;i++){
+      v.fromBufferAttribute(n,i);
+      v.set(v.x*(1-SKY_BLEND),v.y*(1-SKY_BLEND)+SKY_BLEND,v.z*(1-SKY_BLEND)).normalize();
+      n.setXYZ(i,v.x,v.y,v.z);
+    }
+    n.needsUpdate=true; return g;
+  };
+
+  function scatter(geo,count,place,opts){
+    opts=opts||{};
+    const inst=new THREE.InstancedMesh(geo,leafMat(),count);
+    for(let i=0;i<count;i++){
+      place(i,dummy,col);
+      dummy.updateMatrix();
+      inst.setMatrixAt(i,dummy.matrix);
+      inst.setColorAt(i,col);
+    }
+    inst.instanceMatrix.needsUpdate=true;
+    if(inst.instanceColor)inst.instanceColor.needsUpdate=true;
+    inst.castShadow=!!opts.shadow; inst.receiveShadow=false;
+    // r128's InstancedMesh does NOT fold the instance matrices into its bounding sphere — the
+    // sphere is the BASE geometry's, sitting at the object's origin. So a layer of 9,000 blades
+    // spread over a 400-unit map is frustum-tested as a single 1-unit plane at world (0,0,0) and
+    // the entire layer blinks out the moment the camera looks away from the middle of the map.
+    // That is why the first render of this block showed almost nothing. One draw call each is far
+    // too cheap to be worth culling anyway.
+    inst.frustumCulled=false;
+    scene.add(inst);
+    return inst;
+  }
+  // keep the undergrowth off the roads, the plazas and the two thrones — a lawn growing through
+  // the Town Centre's flagstones is the one thing that would read as a bug rather than a garden
+  // NOTE the hand-rolled distance: `dist2()` lives in 04-units.js, which loads AFTER this file,
+  // and separate <script> tags do not hoist across each other. There is a comment saying exactly
+  // this ~400 lines up, and calling dist2 here still threw `dist2 is not defined` at load —
+  // silently, because the whole IIFE died and simply produced no foliage at all.
+  // The Kings Road CURVES — roadPoint() carries two sine terms — so the straight z-band this used
+  // to test missed the bends, and `v114 clear lanes` duly reported undergrowth growing through the
+  // highway. Walk the actual polyline instead.
+  const ROAD=[]; for(let i=0;i<=40;i++)ROAD.push(roadPoint(i/40));
+  const clear=(x,z)=>{
+    for(const t of TCPOS){const dx=x-t[0],dz=z-t[1];if(dx*dx+dz*dz<34*34)return false;}
+    for(const r of ROAD){const dx=x-r.x,dz=z-r.z;if(dx*dx+dz*dz<9*9)return false;}
+    return true;
+  };
+  const spot=(spread)=>{ // rejection-sample a legal patch centre
+    for(let k=0;k<24;k++){
+      const x=(R()*2-1)*(MAP.x-spread), z=(R()*2-1)*(MAP.z-spread);
+      if(clear(x,z))return [x,z];
+    }
+    return null;
+  };
+
+  // ---- 1. TUFTED GRASS: the big one. Tall, leaning, in drifts, in FOUR greens ----
+  // The v34 layer was 310 patches of 6-12 blades at 0.22×0.5 — about 2,700 slivers spread over a
+  // 400×400 map, which is to say invisible. These are twice the size, five times as many, and
+  // clumped hard enough to read as undergrowth rather than stubble.
+  {
+    const TONES=[0x3d6f1e,0x35651a,0x487c26,0x2b5714,0x528a2c]; // v128: dropped hard — skyward normals mean these render a full band brighter than they look here
+    const blades=[];
+    for(let p=0;p<900;p++){
+      const c=spot(6); if(!c)continue;
+      const n=7+((R()*10)|0);
+      const tone=TONES[(R()*TONES.length)|0];
+      for(let b=0;b<n;b++){
+        const a=R()*Math.PI*2, r=R()*2.1;
+        blades.push([c[0]+Math.cos(a)*r,c[1]+Math.sin(a)*r,tone]);
+      }
+    }
+    const g=skyward(new THREE.PlaneGeometry(0.34,1.05)); g.translate(0,0.52,0);
+    scatter(g,blades.length,(i,d,c)=>{
+      const [x,z,tone]=blades[i];
+      d.position.set(x,terrainHeight(x,z),z);
+      d.rotation.set((R()-0.5)*0.12,R()*Math.PI,(R()-0.5)*0.38); // the lean is what sells it
+      const s=0.7+R()*0.75; d.scale.set(s,s*(0.8+R()*0.5),s);
+      c.setHex(tone).offsetHSL(0,(R()-0.5)*0.07,(R()-0.5)*0.09);
+    });
+  }
+  // ---- 2. CLOVER MATS: flat rosettes that fill the ground plane between the blades ----
+  {
+    const pts=[];
+    for(let p=0;p<420;p++){
+      const c=spot(5); if(!c)continue;
+      const n=5+((R()*7)|0);
+      for(let b=0;b<n;b++){const a=R()*Math.PI*2,r=R()*1.7;pts.push([c[0]+Math.cos(a)*r,c[1]+Math.sin(a)*r]);}
+    }
+    const g=new THREE.CircleGeometry(0.3,6); g.rotateX(-Math.PI/2); // smaller: big flat discs caught full sun and read as bleached patches
+    scatter(g,pts.length,(i,d,c)=>{
+      const [x,z]=pts[i];
+      d.position.set(x,terrainHeight(x,z)+0.05,z);
+      d.rotation.set(0,R()*Math.PI,0);
+      const s=0.7+R()*0.8; d.scale.set(s,1,s);
+      c.setHex(R()<0.5?0x336618:0x3d7220).offsetHSL(0,(R()-0.5)*0.06,(R()-0.5)*0.07);
+    });
+  }
+  // ---- 3. BUSHES: rounded low-poly shrubs, the mid-height layer the map never had ----
+  {
+    const pts=[];
+    for(let p=0;p<210;p++){
+      const c=spot(10); if(!c)continue;
+      const n=1+((R()*3)|0);
+      for(let b=0;b<n;b++){const a=R()*Math.PI*2,r=R()*2.6;pts.push([c[0]+Math.cos(a)*r,c[1]+Math.sin(a)*r]);}
+    }
+    const g=new THREE.IcosahedronGeometry(1.0,0);
+    scatter(g,pts.length,(i,d,c)=>{
+      const [x,z]=pts[i];
+      d.position.set(x,terrainHeight(x,z)+0.62,z);
+      d.rotation.set(R()*0.5,R()*Math.PI,R()*0.5);
+      d.scale.set(0.85+R()*0.9,0.62+R()*0.5,0.85+R()*0.9); // squashed: shrubs, not boulders
+      c.setHex([0x2c5a1a,0x33661f,0x254c14,0x3a7024][(R()*4)|0]).offsetHSL(0,(R()-0.5)*0.05,(R()-0.5)*0.06);
+    },{shadow:true});
+  }
+  // ---- 4. FERNS: tall thin fans that break the silhouette at the forest edge ----
+  {
+    const pts=[];
+    for(let p=0;p<260;p++){
+      const c=spot(6); if(!c)continue;
+      const n=3+((R()*4)|0);
+      for(let b=0;b<n;b++){const a=R()*Math.PI*2,r=R()*1.5;pts.push([c[0]+Math.cos(a)*r,c[1]+Math.sin(a)*r]);}
+    }
+    const g=skyward(new THREE.ConeGeometry(0.55,1.5,4,1,true)); g.translate(0,0.75,0);
+    scatter(g,pts.length,(i,d,c)=>{
+      const [x,z]=pts[i];
+      d.position.set(x,terrainHeight(x,z),z);
+      d.rotation.set((R()-0.5)*0.2,R()*Math.PI,(R()-0.5)*0.2);
+      const s=0.7+R()*0.7; d.scale.set(s*1.15,s,s*1.15);
+      c.setHex([0x27500f,0x2f5c18,0x20440b][(R()*3)|0]).offsetHSL(0,(R()-0.5)*0.05,(R()-0.5)*0.06);
+    });
+  }
+  // ---- 5. BLOSSOM DRIFTS: five hues, in beds, at a size you can actually see ----
+  // (the v34 wildflower layer is still there; this sits alongside it and does the heavy lifting)
+  {
+    const TONES=[0xff5d7a,0xffd93d,0xf7f4ea,0xb56cf0,0xff9a3d];
+    const pts=[];
+    for(let p=0;p<150;p++){
+      const c=spot(8); if(!c)continue;
+      const tone=TONES[(R()*TONES.length)|0];
+      const n=9+((R()*14)|0);
+      for(let b=0;b<n;b++){const a=R()*Math.PI*2,r=R()*3.4;pts.push([c[0]+Math.cos(a)*r,c[1]+Math.sin(a)*r,tone]);}
+    }
+    const g=new THREE.CircleGeometry(0.3,5); g.rotateX(-Math.PI/2);
+    scatter(g,pts.length,(i,d,c)=>{
+      const [x,z,tone]=pts[i];
+      d.position.set(x,terrainHeight(x,z)+0.3,z);
+      d.rotation.set((R()-0.5)*0.5,R()*Math.PI,(R()-0.5)*0.5);
+      const s=0.8+R()*0.7; d.scale.set(s,s,s);
+      c.setHex(tone).offsetHSL(0,0,(R()-0.5)*0.05);
+    });
+  }
+  // ---- 6. STALKS: a few thousand single tall blades, scattered map-wide, no clumping ----
+  // Clumped foliage leaves bald ground between the drifts. This is the thin wash over everything
+  // that stops the lawn ever looking empty, and at one draw call it is effectively free.
+  {
+    const pts=[];
+    for(let i=0;i<3200;i++){
+      const x=(R()*2-1)*MAP.x, z=(R()*2-1)*MAP.z;
+      if(clear(x,z))pts.push([x,z]);
+    }
+    const g=skyward(new THREE.PlaneGeometry(0.2,0.8)); g.translate(0,0.4,0);
+    scatter(g,pts.length,(i,d,c)=>{
+      const [x,z]=pts[i];
+      d.position.set(x,terrainHeight(x,z),z);
+      d.rotation.set(0,R()*Math.PI,(R()-0.5)*0.3);
+      const s=0.7+R()*0.8; d.scale.set(s,s,s);
+      c.setHex([0x3f7320,0x36661a,0x497e28][(R()*3)|0]).offsetHSL(0,(R()-0.5)*0.06,(R()-0.5)*0.08);
+    });
+  }
+})();
