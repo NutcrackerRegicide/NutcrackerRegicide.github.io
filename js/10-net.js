@@ -57,6 +57,39 @@ var NET={
   LANE_WEDGE_MS:2500,   // host: a lane whose bufferedAmount hasn't MOVED this long is dead, not busy
   REDIAL_MS:1200,       // guest: fast lane claims open but nothing has arrived ON IT this long
   DIAL_TIMEOUT_MS:6000, // …and only one dial may be in flight at a time, for this long
+  // ---- v128.4: THE RELIABLE LANE WAS THE FREEZE (see bcastFast) ----
+  // The v128.2 field logs: a guest spent 35% of his session (144 of 413 seconds, longest
+  // run 39s) receiving ZERO bytes, then took the whole backlog at once — 621 snapshots /
+  // 528KB in one second, the oldest 40.9s old, 604 of them refused as stale. Across all 20
+  // outages the recovery floods delivered 112% of what a 15Hz stream would have pushed:
+  // nothing was ever dropped, it was ALL delivered late. The fast lane was down in 139 of
+  // those 144 seconds. bufferedAmount read ~800B throughout, because on a reliable ORDERED
+  // channel it cannot see head-of-line blocking — the transport keeps accepting sends while
+  // the receiver holds everything behind one missing chunk. So BUF_REL_MAX never fired.
+  REL_ACK_WINDOW:30,    // …ask the GUEST instead: stop the reliable lane above this many un-applied snaps (~2s at 15Hz)
+  REL_FALLBACK_HZ:4,    // …and while the fast lane is down, relay at this rate, not the full SNAP_HZ
+  // ---- v128.4: THE HOST NEVER SAW ANYONE LEAVE ----
+  // Same logs: one `drop` event for at least three departures. PeerJS reported a lane
+  // open:true for 8 minutes after that guest was gone and never fired close or error, so
+  // hostDrop — the only reaper — was never called. The abandoned body keeps u.remote set,
+  // 07-ai.js:854 returns from updateBot on it, and hostAdmit refuses to recycle it: every
+  // un-reaped departure permanently costs its team one unit.
+  PEER_DEAD_MS:90000,   // nothing heard on ANY lane this long → reap (4× the worst genuine recovery in the logs: 21.3s)
+  PC_DEAD_MS:30000,     // …or the RTCPeerConnection has been "disconnected" this long (Chrome bounces through it on a handover)
+  // ---- v128.5: LAG COMPENSATION ----
+  // Until now the host resolved a guest's attacks against its OWN present tick while the guest
+  // was aiming at a world ~276ms old. Measured consequence at the field-test median ping of
+  // 212ms: a fleeing infantryman travels 1.70 units while a broadsword's whole reach is 3.4, so
+  // HALF the reach was gone; against a fleeing knight (2.86u) usable reach was 0.54u — you had
+  // to stand inside the model. At the p90 of 1294ms no guest could land melee on anything that
+  // moved. The error is asymmetric, which is why it read as jank rather than lag: a target
+  // CHARGING you is easier to hit than it looks, because latency carries it into reach.
+  HIST_SLOTS:24,        // position-history ring depth, shared timestamps
+  HIST_MIN_MS:22,       // …don't sample faster than this (24 × 22 = 528ms at any frame rate)
+  LAGCOMP_MAX_MS:500,   // hard ceiling on how far anyone may rewind
+  LAGCOMP_SLACK_MS:120, // …and nobody may rewind more than their OWN measured rtt plus this
+  MELEE_WINDOW_MS:120,  // the swing's active window: a target in reach at ANY point in it is hit
+  CATCHUP_STEP_MS:16.7, // fast-forward granularity for a rewound arrow
   estT:null, ping:0, _fx:[],
   // ---- v92: identity + host options + the HALL (serverless server browser) ----
   myName:"Warrior",     // set on the name screen; the host's tag & scoreboard name
@@ -97,6 +130,92 @@ CLS_KEYS.forEach((k,i)=>CLS_IDX[k]=i);
 // measurement in applySnap must not be walked backwards by an NTP correction mid-match.
 NET.now=function(){
   return (typeof performance!=="undefined"&&performance.now)?performance.now():Date.now();
+};
+// ==================== v128.5: THE REWIND STORE ====================
+// A ring of past positions so the host can ask "where was this unit when the guest fired?".
+//
+// TWO DESIGN NOTES WORTH KEEPING.
+//
+// 1. NOTHING IS EVER MUTATED, SO NOTHING HAS TO BE RESTORED. The usual shape of this system
+//    rewinds the live transforms, runs the test and restores them. That leaves a window where a
+//    throw mid-check corrupts the world for every other system. Here the history is a separate
+//    store and `histAt` writes the answer into two scratch scalars — the live positions are
+//    never touched, so there is no restore step and no way to leave the world in the past.
+// 2. ALL UNITS SHARE ONE TIMESTAMP RING. They are sampled on the same host frame, so the times
+//    are identical for every unit — one Float64Array for the world, one Int16Array pair per
+//    unit, allocated once and written in place for ever after. At 136 units × 24 slots that is
+//    ~13KB total and ZERO allocation per sample. Positions use the same x*10 Int16 quantization
+//    the wire already uses (10cm), because a hit test finer than the snapshot that produced it
+//    would be measuring noise.
+NET._histT=null;      // Float64Array(HIST_SLOTS) — host wall clock of each slot
+NET._histI=-1;        // newest slot
+NET._histN=0;         // slots filled so far
+NET._rwX=0; NET._rwZ=0; // histAt writes here — scratch, never an object
+NET.histReset=function(){NET._histT=null;NET._histI=-1;NET._histN=0;};
+NET.histSample=function(now){ // called once per host frame, AFTER the sim has moved everything
+  if(typeof units==="undefined")return;
+  const S=NET.HIST_SLOTS;
+  if(!NET._histT)NET._histT=new Float64Array(S);
+  if(NET._histN&&now-NET._histT[NET._histI]<NET.HIST_MIN_MS)return; // a fast host must not spend the ring
+  const i=(NET._histI+1)%S;
+  NET._histI=i; NET._histT[i]=now;
+  if(NET._histN<S)NET._histN++;
+  for(let k=0;k<units.length;k++){
+    const u=units[k], p=u.root&&u.root.position;
+    if(!p)continue;
+    const qx=Math.round(p.x*10), qz=Math.round(p.z*10);
+    let hx=u._hx;
+    if(!hx){ // a unit born mid-ring must not read as standing at the origin in the past
+      hx=u._hx=new Int16Array(S); u._hz=new Int16Array(S);
+      hx.fill(qx); u._hz.fill(qz);
+    }
+    hx[i]=qx; u._hz[i]=qz;
+  }
+};
+// Where was `u` at host-clock time `t`? Writes NET._rwX/_rwZ. Returns true if the answer came
+// from history, false if it fell back to the present (no ring, or `t` is not in the past).
+NET.histAt=function(u,t){
+  const p=u&&u.root&&u.root.position;
+  const hx=u&&u._hx;
+  if(!hx||!NET._histN||!(t>0)){ if(p){NET._rwX=p.x;NET._rwZ=p.z;} return false; }
+  const H=NET._histT, S=NET.HIST_SLOTS, N=NET._histN, newest=NET._histI;
+  if(t>=H[newest]){ if(p){NET._rwX=p.x;NET._rwZ=p.z;} return false; }
+  const hz=u._hz;
+  let a=newest;
+  for(let k=1;k<N;k++){
+    const b=(newest-k+S+S)%S;
+    if(H[b]<=t){ // t sits between slot b and slot a — lerp
+      const span=H[a]-H[b], f=span>0?(t-H[b])/span:0;
+      NET._rwX=(hx[b]+(hx[a]-hx[b])*f)/10;
+      NET._rwZ=(hz[b]+(hz[a]-hz[b])*f)/10;
+      return true;
+    }
+    a=b;
+  }
+  NET._rwX=hx[a]/10; NET._rwZ=hz[a]/10; return true; // older than the whole ring: clamp to the oldest
+};
+// The host's verdict on how far back a guest may look. NEVER TRUST THE CLAIM: a guest on a 20ms
+// link may not ask to shoot into a 500ms-old world. The ceiling is its own measured rtt plus a
+// fixed slack, under a hard LAGCOMP_MAX_MS. An old guest that sends no claim gets an estimate
+// from rtt alone — roughly right, since the world it renders is about one round trip old.
+NET.rewindTime=function(r,claim){
+  const now=NET.now();
+  const rtt=Math.max(0,(r&&r.rtt)||0);
+  const cap=Math.min(NET.LAGCOMP_MAX_MS,rtt+NET.LAGCOMP_SLACK_MS);
+  let back=(typeof claim==="number"&&claim>0&&claim<now)?(now-claim):Math.min(NET.LAGCOMP_MAX_MS,rtt);
+  if(!(back>0))back=0;
+  if(back>cap)back=cap;
+  if(r)r._rwMs=Math.round(back); // the flight recorder reports what was actually granted
+  return now-back;
+};
+// Guest side: the host-clock instant of the world we are LOOKING at. `_hOff` is the running
+// minimum of (arrival − ht), i.e. clock offset plus best-case transit, so (now − _hOff) is our
+// estimate of the host's clock right now; we then step back by the interpolation delay we are
+// rendering at. Returns 0 when uncalibrated (a v125 host, or the first moments after joining),
+// which the host reads as "no claim" and falls back to its own rtt estimate.
+NET.viewTime=function(){
+  if(!NET._hasHt||NET._hOff===undefined)return 0;
+  return (NET.now()-NET._hOff)-NET.gapAvg;
 };
 NET.bcast=function(o){for(const c of NET.conns){try{if(c.open)c.send(o);}catch(_){}}};
 NET.laneBuf=function(c){ // bytes sitting UNSENT in a lane's pipe — the honest congestion signal
@@ -147,7 +266,39 @@ NET.bcastFast=function(o){ // unreliable when healthy, never starving — and NE
       }else{r._wedgeAt=0;r._wedgeB=-1;}
       const mirror=fastUp&&o.t==="snap"&&(o.q%NET.MIRROR_EVERY)===0;
       if(r.conn&&r.conn.open&&(!(r.fast&&r.fast.open)||mirror)){
-        if(NET.laneBuf(r.conn)<NET.BUF_REL_MAX)r.conn.send(o);
+        // v128.4 THE FALLBACK WAS THE FREEZE. When the fast lane dies this branch used to
+        // relay the FULL SNAP_HZ stream down the reliable, ORDERED lane behind a single
+        // guard — laneBuf < BUF_REL_MAX — and that guard is blind. bufferedAmount only
+        // counts what the app has queued that the transport has not yet accepted; SCTP
+        // happily accepts new sends while it retransmits, so a stalled pipe reads ~800B and
+        // the host shovels 15 snaps/second into it. 39 seconds of that is 600 snapshots the
+        // guest gets in one lump, all of them stale on arrival. The v95 comment above
+        // describes this exact failure and claims an empty buffer proves the pipe is
+        // flowing. On this lane it proves nothing.
+        //
+        // Two honest brakes instead:
+        //   1. THE ACK. The guest tells us the last q it APPLIED (`aq` on its input packet,
+        //      20Hz, optional, no PROTO bump). in-flight = what we last relayed − what it
+        //      applied. That measures DELIVERY, which is the thing that stopped. It works
+        //      because the stall is one-directional: through every outage in the logs the
+        //      host was still receiving that guest's input at 2–3ms age.
+        //   2. THE RATE CAP. Even flowing, the reliable lane is the wrong place for 15Hz.
+        //      REL_FALLBACK_HZ keeps a dead fast lane playable instead of catastrophic — a
+        //      39s outage now queues at most REL_ACK_WINDOW, not 600.
+        // The 1Hz mirror is exempt from the rate cap (it IS the liveness trickle) but not
+        // from the ack window: piling onto a guest who is already behind helps nobody.
+        const isSnap=o.t==="snap";
+        let hold=false;
+        if(isSnap){
+          if(typeof r.ackQ==="number"&&typeof r._relQ==="number"&&(r._relQ-r.ackQ)>NET.REL_ACK_WINDOW)hold=true;
+          else if(!mirror&&r._relAt&&(now-r._relAt)<(1000/NET.REL_FALLBACK_HZ))hold=true;
+        }
+        if(hold)r.holdR=(r.holdR||0)+1;
+        else if(NET.laneBuf(r.conn)<NET.BUF_REL_MAX){
+          r.conn.send(o);
+          r.sentR=(r.sentR||0)+1; // v128.4: the reliable send was NEVER counted. For 30 versions
+          if(isSnap){r._relAt=now;r._relQ=o.q;} // the host log read `sent:0 skipF:0 skipR:0` — idle —
+        }                                       // through all 144 of those frozen seconds.
         else r.skipR=(r.skipR||0)+1;
       }
     }catch(_){}
@@ -354,6 +505,16 @@ NET.copyCode=function(btn){
     setTimeout(()=>btn.textContent="COPY",1400);}
   catch(_){btn.textContent=NET.roomCode;}
 };
+// v128.4 SAY GOODBYE. A guest closing its tab is the commonest departure there is, and it used
+// to be silent: the host waited on a PeerJS close event that the v128.2 logs show never came,
+// and the abandoned body stood in the field for the rest of the match. `pagehide`, not
+// `beforeunload` — iOS Safari does not fire the latter.
+addEventListener("pagehide",()=>{
+  if(NET.mode!=="guest")return;
+  try{if(NET.conn&&NET.conn.open)NET.conn.send({t:"bye"});}catch(_){}
+  try{if(NET.fast)NET.fast.close();}catch(_){}
+  try{if(NET.conn)NET.conn.close();}catch(_){}
+});
 // a minimized host window is a frozen world — warn everyone, honestly
 document.addEventListener("visibilitychange",()=>{
   if(NET.mode!=="host")return;
@@ -370,7 +531,19 @@ NET.hostData=function(c,d){
   }
   const r=NET.remotes[c.peer];
   if(!r)return;
-  if(d.t==="input"){if((d.seq||0)>=(r.input&&r.input.seq||0)){r.input=d;r.inputAt=NET.now();}return;}
+  r.seenAt=NET.now(); // v128.4: last time we heard ANYTHING from this peer, on any lane — the reaper's clock
+  if(d.t==="bye"){ // v128.4: a guest closing its tab says so. The only departure signal that is instant.
+    NET.logEvent("bye",r.name);
+    return NET.hostRelease(c.peer,"left");
+  }
+  if(d.t==="input"){
+    // v128.4 THE ACK. Take the highest `aq` we have seen even from an out-of-order packet:
+    // it is a monotonic high-water mark of what the guest has APPLIED, not part of the
+    // input state, and throwing it away with a stale packet would stall the reliable lane.
+    if(typeof d.aq==="number"&&d.aq>(r.ackQ===undefined?-1:r.ackQ))r.ackQ=d.aq;
+    if((d.seq||0)>=(r.input&&r.input.seq||0)){r.input=d;r.inputAt=NET.now();}
+    return;
+  }
   if(d.t==="ping"){ // v95: echo straight back (prefer the fast lane) — the guest measures its RTT
     r.rtt=d.rtt||0; // …and reports the last measurement so the HOST can see each guest's ping too
     const lane=(r.fast&&r.fast.open)?r.fast:r.conn;
@@ -399,7 +572,7 @@ NET.hostAdmit=function(c,name,pref){
   if(!u)for(const v of units) // everyone's dead? hand over a respawning body
     if(v.team===team&&v.bot&&!v.isKing&&!v.isPlayer&&!v.remote&&v.bot.role!=="cart"){u=v;break;}
   if(!u){try{c.send({t:"deny",m:"That army is full."});}catch(_){}return;}
-  NET.remotes[c.peer]={conn:c,unit:u,input:{},oldName:u.name,name};
+  NET.remotes[c.peer]={conn:c,unit:u,input:{},oldName:u.name,name,seenAt:NET.now(),lastET:0};
   u.remote=c.peer; u.rally=false; u.rallyBy=null; u.name=name;
   if(u.alive&&u.cls!=="villager"){setClass(u,"villager");if(u.bot)u.bot.role="citizen";} // fresh boots, fresh hands
   NET.conns.push(c);
@@ -409,20 +582,61 @@ NET.hostAdmit=function(c,name,pref){
   NET.logEvent("join",name);
   NET.lobby();
 };
-NET.hostDrop=function(c){
-  const r=NET.remotes[c.peer];
-  if(r){
-    if(r.unit){r.unit.remote=null;r.unit.name=r.oldName; // the AI takes the reins back
-      const u=r.unit; u.lvl=0;u.xp=0;u.buffs={};u.quest=null;u.questDraft=null;u.qRerolls=0;u.smithOffer=null; // …but not the deserter's legend
-      if(typeof applyBuffStats==="function")applyBuffStats(u);
-      if(typeof releaseWarband==="function")releaseWarband(u); // v95: the deserter's band returns to the King
-      if(u.alive&&u.cls==="oxcart")setClass(u,"villager");} // v99: the AI can't drive an ox — hand it a villager's tools
-    msg(r.name+" left — "+r.oldName+" fights on (AI).","warn");
-    NET.logEvent("drop",r.name);
-    delete NET.remotes[c.peer];
-  }
-  NET.conns=NET.conns.filter(x=>x!==c);
+// v128.4 RELEASE BY KEY, NOT BY CONNECTION. hostDrop was reachable only from the reliable
+// lane's own close/error events, and the v128.2 field log proves PeerJS does not always fire
+// them: a peer's lane reported open:true for 8 minutes after the player was gone, with its
+// bufferedAmount frozen on the same byte. The reaper below only ever holds a NET.remotes key,
+// so the release path has to take one. Everything that used to live in hostDrop lives here.
+NET.hostRelease=function(key,why){
+  const r=NET.remotes[key];
+  if(!r)return false;
+  if(r.unit){r.unit.remote=null;r.unit.name=r.oldName; // the AI takes the reins back
+    const u=r.unit; u.lvl=0;u.xp=0;u.buffs={};u.quest=null;u.questDraft=null;u.qRerolls=0;u.smithOffer=null; // …but not the deserter's legend
+    u.rally=false;u.rallyBy=null; // v128.4: set at admit, never cleared at drop
+    if(typeof applyBuffStats==="function")applyBuffStats(u);
+    if(typeof releaseWarband==="function")releaseWarband(u); // v95: the deserter's band returns to the King
+    if(u.alive&&u.cls==="oxcart")setClass(u,"villager"); // v99: the AI can't drive an ox — hand it a villager's tools
+    if(u.bot&&u.alive&&u.cls!=="villager")u.bot.role="citizen";} // …and the marshal re-tasks it this pass, not next
+  msg(r.name+" left — "+r.oldName+" fights on (AI).","warn");
+  NET.logEvent("drop",r.name+(why?" ("+why+")":""));
+  // close both lanes: a zombie reliable lane keeps costing a send attempt 15×/second
+  try{if(r.fast)r.fast.close();}catch(_){}
+  try{if(r.conn)r.conn.close();}catch(_){}
+  NET.conns=NET.conns.filter(x=>x!==r.conn);
+  delete NET.remotes[key];
   if(NET.mode==="host")NET.lobby();
+  return true;
+};
+NET.hostDrop=function(c){ // the transport's own verdict, when it bothers to give one
+  if(!c)return;
+  if(!NET.hostRelease(c.peer,"closed")){
+    NET.conns=NET.conns.filter(x=>x!==c);
+    if(NET.mode==="host")NET.lobby();
+  }
+};
+// v128.4 THE REAPER. Three independent triggers, cheapest first, all landing on hostRelease:
+// the `bye` in hostData (instant, covers a closed tab), the peer-connection verdict here
+// (covers falling off Wi-Fi), and a last-heard backstop (covers everything else). Deliberately
+// NOT triggered on inputAt/INPUT_STALE_MS or on a wedged lane: the logs contain a 21.3s input
+// silence and a 19s frozen buffer that BOTH fully recovered — a screen-locked phone is
+// indistinguishable from a departure at those timescales.
+NET.reapPeers=function(){
+  const now=NET.now();
+  for(const k in NET.remotes){
+    const r=NET.remotes[k];
+    let why="";
+    try{
+      const pc=r.conn&&r.conn.peerConnection;
+      const st=pc&&pc.connectionState;
+      if(st==="failed"||st==="closed")why="pc-"+st;
+      else if(st==="disconnected"){
+        if(!r._pcBadAt)r._pcBadAt=now;
+        else if(now-r._pcBadAt>NET.PC_DEAD_MS)why="pc-disconnected";
+      }else if(st)r._pcBadAt=0;
+    }catch(_){} // no peerConnection field on this PeerJS build → no opinion, fall through to the backstop
+    if(!why&&r.seenAt&&now-r.seenAt>NET.PEER_DEAD_MS)why="silent-"+Math.round((now-r.seenAt)/1000)+"s";
+    if(why)NET.hostRelease(k,why);
+  }
 };
 // ==================== v92: THE HALL — serverless server browser ====================
 NET.hallEntryOwn=function(){ // our own listing (public halls only)
@@ -535,6 +749,10 @@ NET.hostFrame=function(dt){
     for(const k in NET.remotes){const rr=NET.remotes[k];if(rr.unit)sc.push([rr.name,0,rr.unit.team,rr.unit.id,rr.unit.lvl||0]);}
     syncNameTags(sc);
   }
+  // v128.5: sample BEFORE driving the guests, so a guest's attack this frame is resolved against
+  // the same history every other system saw — and so the newest slot is the end of last frame,
+  // never a half-updated world.
+  NET.histSample(NET.now());
   for(const k in NET.remotes)NET.driveRemote(NET.remotes[k],dt);
   // ---- v126: THE CADENCE IS WALL TIME, NOT SIM TIME ----
   // Both timers used to accumulate `dt`, which 09-main clamps to 0.05 — so on a host at
@@ -562,9 +780,18 @@ NET.hostFrame=function(dt){
       const g={};
       for(const k in NET.remotes){const rr=NET.remotes[k];if(!rr.unit)continue;
         const fu=rr.fast&&rr.fast.open;
-        g[rr.name]={ping:rr.rtt||0,sent:rr.sentF||0,skipF:rr.skipF||0,skipR:rr.skipR||0,
+        // v128.4: `sent` was sentF — FAST LANE ONLY. The reliable send incremented nothing, so
+        // whenever the fast lane was down this row read sent:0 skipF:0 skipR:0 and looked idle
+        // while the host was flooding 15Hz into a stalled pipe. That blind spot is why the
+        // freeze survived 30 versions of reading these logs. sentR/holdR/lag close it.
+        g[rr.name]={ping:rr.rtt||0,sent:rr.sentF||0,sentR:rr.sentR||0,holdR:rr.holdR||0,
+          skipF:rr.skipF||0,skipR:rr.skipR||0,
           buf:NET.laneBuf(fu?rr.fast:rr.conn),
-          inAge:rr.inputAt?Math.round(NET.now()-rr.inputAt):-1,fast:fu?1:0};}
+          lag:(typeof rr.ackQ==="number"&&typeof rr._relQ==="number")?(rr._relQ-rr.ackQ):-1,
+          rw:typeof rr._rwMs==="number"?rr._rwMs:-1, // v128.5: the rewind actually GRANTED, not asked for
+          claim:rr.input&&typeof rr.input.at==="number"?1:0, // …and whether this guest stamps at all
+          inAge:rr.inputAt?Math.round(NET.now()-rr.inputAt):-1,
+          seen:rr.seenAt?Math.round(NET.now()-rr.seenAt):-1,fast:fu?1:0};}
       // v126: `win` is the true window in ms and `simR` is the sim clock's rate against wall
       // time over it. simR is the single number that would have made this whole bug obvious
       // on sight — 0.85 in John's session, 0.74 whenever the host was at 20 fps. Every rate
@@ -575,8 +802,9 @@ NET.hostFrame=function(dt){
         units:units.length,blds:buildings.length,g});
       NET._cFrames=0;
     }
+    NET.reapPeers(); // v128.4: the only place a departure that fired no transport event is caught
     NET.lobby();
-    for(const k in NET.remotes){const rr=NET.remotes[k];rr.sentF=0;rr.skipF=0;rr.skipR=0;} // per-second windows
+    for(const k in NET.remotes){const rr=NET.remotes[k];rr.sentF=0;rr.sentR=0;rr.holdR=0;rr.skipF=0;rr.skipR=0;} // per-second windows
   }
 };
 NET.note=function(r,m,tone){try{r.conn.send({t:"note",m,tone});}catch(_){}};
@@ -618,7 +846,13 @@ NET.driveRemote=function(r,dt){
   const _lobber=(u.cls==="catapult"||u.cls==="trebuchet");
   const _rangedAim=!!i.blk&&!!u.ranged&&!_lobber;
   if(_rangedAim&&i.atk&&isDrawClass(u.cls)&&u.atkT<=0)r.drawT=(r.drawT||0)+dt;
-  else if(!i.atk)r.drawT=0;
+  // v128.5: only an OBSERVED released trigger clears the draw. `stale` swaps r.input for {} when
+  // the uplink dies, and the old `else if(!i.atk)` read that silence as "let go" — so a guest on
+  // a lossy link was robbed of charge it was actually holding. No input is not a released one.
+  else if(!i.atk&&!stale)r.drawT=0;
+  // v128.5 THE REWIND WINDOW for everything this guest does this frame. The claim rides the
+  // input packet as `at`; rewindTime clamps it to what this peer's own measured rtt earns.
+  const rwT=NET.rewindTime(r,i.at);
   if(i.shot&&typeof i.shot.dx==="number"){
     const d=new THREE.Vector3(i.shot.dx,i.shot.dy,i.shot.dz);
     if(d.lengthSq()>0.0001){
@@ -626,7 +860,7 @@ NET.driveRemote=function(r,dt){
       // clamp the CLAIM to the hold the host observed — this is the whole point of the exercise
       const seen=Math.min(1,(r.drawT||0)/DRAW_FULL);
       const lv=isDrawClass(u.cls)?Math.min(Number(i.shot.lv)||0,seen):1;
-      fireAimedFor(u,d,lv);
+      fireAimedFor(u,d,lv,rwT); // …and loose it from the world the guest was looking at
       r.drawT=0;
     }
     i.shot=undefined;
@@ -634,13 +868,26 @@ NET.driveRemote=function(r,dt){
   if(u.cls==="dragoon"){
     u.blocking=false;
     if(i.blk&&!r.blkUsed&&(u.ammo||0)>0&&u.atkT<=0){
-      const t=pistolTarget(u,12); if(t)pistolShot(u,t);
+      // v128.5: 12 was a guest-only PENALTY against the host's and the AI's 15 — a shorter
+      // pistol for the laggier player. Same reach for everyone now, picked from rewound
+      // positions so the target the guest actually saw is the one that gets shot.
+      const t=pistolTarget(u,15,rwT); if(t)pistolShot(u,t);
     }
     r.blkUsed=!!i.blk; // edge-trigger: one shot per press
   }else u.blocking=!!i.blk&&canBlock(u);
   // ---- E TAP: garrison / harvest / trade — mirrors playerInteract ----
   const px0=u.root.position.x, pz0=u.root.position.z;
-  if(i.e&&!r.lastE){
+  // v128.4 A TAP THE PINNED BIT CANNOT HIDE. The mobile auto-gather (12-touch.js autoTick)
+  // writes keys.e every animation frame on a guest and runs BEFORE guestFrame, so it owns
+  // whatever the uplink samples: with a node in reach `e` is pinned 1 and this rising edge
+  // never fires; with no node in reach it is pinned 0 and the USE button's press is erased
+  // before it ships. E was the only player action with no discrete message — every other one
+  // is a guestAct RPC — which is exactly why only this button broke, and only on a phone.
+  // `et` is a monotonic tap count, OPTIONAL on the wire (an old host reads the `e` bit as
+  // before, so no PROTO bump); the held bit still drives hold-to-gather untouched.
+  const eTap=typeof i.et==="number"&&i.et!==r.lastET;
+  if(eTap)r.lastET=i.et;
+  if((i.e&&!r.lastE)||eTap){
     r.eUsed=false;
     if(u.garrison){ // climb down
       const b=u.garrison; u.garrison=null; setClassStats(u); u.deckX=u.deckZ=0;
@@ -782,7 +1029,14 @@ NET.driveRemote=function(r,dt){
   // v124: a drawing archer holding primary is NOT swinging — it is nocking. Without this guard the
   // held atk bit would auto-fire an arrow every cooldown all the way through the draw.
   if(i.atk&&!u.blocking&&!(_rangedAim&&isDrawClass(u.cls))){
-    if(!tryAttack(u)&&u.atkT<=0&&u.dmg>0){
+    // v128.5: tryAttack's target scans consult the rewind window while this is set. It is a
+    // module global rather than a parameter because tryAttack fans out through four different
+    // target scans (pistol, bayonet, melee, building) shared with the host player and every AI
+    // bot — threading a time through all of them would change signatures the AI also calls.
+    setRewind(rwT);
+    const hit=tryAttack(u);
+    setRewind(0);
+    if(!hit&&u.atkT<=0&&u.dmg>0){
       u.atkT=u.cd*0.35; u.swing=0.25;
       u.facing=Math.atan2(-Math.sin(i.yaw||0),-Math.cos(i.yaw||0));
       triggerAttackAnim(u);
@@ -1196,7 +1450,8 @@ NET.guestData=function(d){
   if(!d||!d.t)return;
   if(d.t==="admit"){
     NET._admitted=true;NET.myUid=d.uid;
-    NET.dialFast();
+    NET._eTap=0; // v128.4: both ends start the tap counter at 0, so a rejoin in the same page
+    NET.dialFast(); // load cannot arrive carrying a count the host reads as an instant interact
     setInterval(()=>{if(NET.mode==="guest"&&(!NET.fast||!NET.fast.open))NET.dialFast();},5000);
     return;
   }
@@ -1629,17 +1884,30 @@ NET.guestFrame=function(dt){
     player.root.position.set(gb.x+(player.deckX||0),gb.root.position.y+deck.y,gb.z+(player.deckZ||0));
   }
   if(player.alive&&!player.garrison){
-    let mx=0,mz=0;
-    if(keys.w)mz-=1; if(keys.s)mz+=1; if(keys.a)mx-=1; if(keys.d)mx+=1;
+    // v128.5 THE THUMBSTICK DIVERGENCE. This was the ONLY one of the three call sites into
+    // moveUnit that ignored analog magnitude: the host walks a guest at `dt*mag`, but the guest
+    // predicted itself at full `dt`. 12-touch mirrors the stick into w/a/s/d at a 0.38
+    // threshold, so a half-deflected thumb predicted DOUBLE the speed the host granted — a
+    // permanent divergence the leash then fought every single frame, on every mobile guest.
+    // Read the same vector the host is sent (readMove), and fall back to the bits when the
+    // shared helper is not present.
+    const _mv=(typeof readMove==="function")?readMove():null;
+    let mx=0,mz=0,mag=1;
+    if(_mv&&typeof moveVec!=="undefined"&&moveVec.analog){mx=_mv.mx;mz=_mv.mz;mag=_mv.mag;}
+    else{if(keys.w)mz-=1; if(keys.s)mz+=1; if(keys.a)mx-=1; if(keys.d)mx+=1;}
     if(mx||mz){
       const dir=new THREE.Vector3(mx,0,mz).applyAxisAngle(new THREE.Vector3(0,1,0),camYaw);
-      moveUnit(player,dir.x,dir.z,dt*(player.blocking?0.55:1));
+      moveUnit(player,dir.x,dir.z,dt*Math.min(1,mag)*(player.blocking?0.55:1));
     }else player.moving=false;
     if(typeof player.authX==="number"&&NET.now()-(player.authAt||0)<600){
       // never let STALE authority yank us — if snapshots pause, prediction free-runs
       const p=player.root.position;
       const ex=player.authX-p.x, ez=player.authZ-p.z, e=Math.hypot(ex,ez);
-      const dead=3.2+(NET.gapAvg-83)*0.02; // lag widens the leash instead of the rubber band
+      // v128.5: …but the widening has to STOP short of the hard-snap radius. gapAvg is clamped
+      // to 1200, so the old formula reached 25.5 — above gapAvg≈1173 the soft branch became
+      // unreachable (anything over 25 hit the snap first) and the body got no correction at all
+      // below 25 units of error. Jorunn's p90 ping in the field test was 1294ms: not theoretical.
+      const dead=Math.min(18,3.2+(NET.gapAvg-83)*0.02); // lag widens the leash instead of the rubber band
       if(e>25){p.x=player.authX;p.z=player.authZ;NET._cLeash=(NET._cLeash||0)+1;} // hard desync: snap home (logged)
       else if(e>dead){const f=(e-dead)/e*Math.min(1,dt*4.5);p.x+=ex*f;p.z+=ez*f;}
     }
@@ -1774,6 +2042,9 @@ NET.guestFrame=function(dt){
     if(lane){
       NET.inputT=0;
       NET._inSeq=(NET._inSeq||0)+1;
+      const _atk=((lmbHeld&&mouseLocked)||keys[" "])?1:0;
+      // v128.5: stamp only on a frame that fights — see the `at` field below
+      const _vt=(_atk||rmbHeld||NET._pendingShot)?NET.viewTime():0;
       lane.send({t:"input",seq:NET._inSeq,
         w:keys.w?1:0,a:keys.a?1:0,s:keys.s?1:0,d:keys.d?1:0,
         e:keys.e?1:0,atk:((lmbHeld&&mouseLocked)||keys[" "])?1:0,
@@ -1784,6 +2055,21 @@ NET.guestFrame=function(dt){
         // the w/a/s/d bits above, while px/pz carries our true position either way — so this
         // degrades to the v123 behaviour instead of breaking it. No PROTO bump.
         ...(moveVec.analog?{mx:r2(moveVec.x),mz:r2(moveVec.z)}:{}),
+        // v128.4 THE ACK: the last snapshot q we have APPLIED. This is the host's only honest
+        // congestion signal for the reliable lane — bufferedAmount cannot see head-of-line
+        // blocking, and that is what froze guests for up to 39 seconds at a time. OPTIONAL and
+        // additive: an old host ignores it and behaves exactly as v128.3. No PROTO bump.
+        ...(NET.lastQ>=0?{aq:NET.lastQ}:{}),
+        // v128.4 THE E TAP: a monotonic count of real E presses, so a tap still reaches the
+        // host when auto-gather has pinned keys.e. Also optional — see driveRemote.
+        ...(NET._eTap?{et:NET._eTap}:{}),
+        // v128.5 THE VIEW STAMP: the host-clock instant of the world we were aiming at. Sent
+        // ONLY on a frame that swings, blocks or looses — combat is the only thing that needs
+        // it, and 9 bytes at 20Hz is not worth paying while walking. ABSOLUTE, not "rewind me
+        // N ms", so the input packet's own transit cannot bias it: if this packet takes 300ms
+        // to arrive the host still resolves against the instant we actually saw. Optional and
+        // additive — an old host ignores it and behaves exactly as v128.4. No PROTO bump.
+        ...(_vt>0?{at:Math.round(_vt)}:{}),
         ...(NET._pendingLob?{lobx:r1(NET._pendingLob.x),lobz:r1(NET._pendingLob.z)}:{}),
         ...(NET._pendingShot?{shot:NET._pendingShot}:{})}); // v124 THE DRAW: a loosed arrow
       NET._pendingLob=null;

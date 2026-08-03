@@ -101,6 +101,14 @@ function updateProjectiles(dt){
       continue;
     }
     if(p.free){ // manually aimed straight shot
+      // v128.5 THE ARROW USED TO STEP OVER PEOPLE. dt is clamped to 0.05 (09-main), and a
+      // full-draw arrow flies at 36×1.6 = 57.6 u/s — up to 2.88 units per step against a hit
+      // DIAMETER of 2.24. A single point-in-circle test per step therefore missed cleanly
+      // through a body whenever the frame was long, and the host was measured pegged at that
+      // clamp (17fps median), so this was the normal case rather than an edge one. Sweep the
+      // segment the arrow actually travelled instead. Costs nothing and it fixes the host's
+      // own shots as well as every guest's.
+      const _px=p.m.position.x, _pz=p.m.position.z;
       p.m.position.addScaledVector(p.vel,dt);
       p.traveled+=p.spd*dt;
       let done=p.traveled>p.maxRange||p.life<=0;
@@ -109,13 +117,13 @@ function updateProjectiles(dt){
       }
       if(!done)for(const v of units){
         if(v.team===p.att.team||!v.alive||v.garrison)continue;
-        if(dist2(p.m.position.x,p.m.position.z,v.root.position.x,v.root.position.z)<1.25){
+        if(segDist2(_px,_pz,p.m.position.x,p.m.position.z,v.root.position.x,v.root.position.z)<ARROW_HIT2){
           dealDamage(p.att,v,p.dmg*rps(p.attCls,v.cls));done=true;break;
         }
       }
       if(!done)for(const b of buildings){
         if(!b.alive||b.def.flat)continue;
-        if(b!==p.ignoreB&&dist2(p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.r*0.8,2)){
+        if(b!==p.ignoreB&&segDist2(_px,_pz,p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.r*0.8,2)){
           if(b.team!==p.att.team)damageBuilding(b,p.dmg,p.att);
           done=true;break;
         }
@@ -467,7 +475,7 @@ function tryMeleeAttack(u){
   let best=null,bd=1e9;
   for(const v of units){
     if(v.team===u.team||!v.alive||v.garrison)continue; // safe up in the tower
-    const d=dist(u,v);
+    const d=_rwT?rwDist(u,v):dist(u,v); // v128.5: as the acting guest saw it
     if(d<u.rng+0.8&&d<bd){bd=d;best=v;}
   }
   if(best){
@@ -533,13 +541,53 @@ function tryRangedAttack(u){
   }
   return false;
 }
-function pistolTarget(u,rng){
+// ==================== v128.5: LAG COMPENSATION, COMBAT SIDE ====================
+// `_rwT` is the host-clock instant the acting guest was looking at, set by driveRemote around a
+// target scan and cleared straight after. Zero means "no rewind" — the host player, every AI
+// bot and the solo game all run through the same code with it at zero and behave identically.
+let _rwT=0;
+function setRewind(t){ _rwT=(typeof t==="number"&&t>0)?t:0; }
+// The distance from `u` to `v` as the ACTOR saw it: the closest v came across the swing's active
+// window, never worse than the present-tick answer. Sampling the window rather than one instant
+// is what makes a swing connect when the target was crossing the arc — the "weapon sweep" half
+// of the problem — and taking the min with the present means compensation can only ever add
+// hits a fair player deserved, never take one away.
+function rwDist(u,v){
+  const ux=u.root.position.x, uz=u.root.position.z;
+  let best=dist2(ux,uz,v.root.position.x,v.root.position.z);
+  if(_rwT&&typeof NET!=="undefined"&&NET.histAt){
+    const W=NET.MELEE_WINDOW_MS||120;
+    for(let k=0;k<3;k++){
+      if(NET.histAt(v,_rwT+W*k*0.5)){
+        const d=dist2(ux,uz,NET._rwX,NET._rwZ);
+        if(d<best)best=d;
+      }
+    }
+  }
+  return Math.sqrt(best);
+}
+function rwDist2(u,v){ const d=rwDist(u,v); return d*d; }
+// Squared distance from point (cx,cz) to the segment (ax,az)-(bx,bz). Scalar, allocation-free —
+// this runs inside the projectile loop.
+function segDist2(ax,az,bx,bz,cx,cz){
+  const dx=bx-ax, dz=bz-az, l2=dx*dx+dz*dz;
+  if(l2<1e-9)return dist2(ax,az,cx,cz);
+  let t=((cx-ax)*dx+(cz-az)*dz)/l2;
+  if(t<0)t=0; else if(t>1)t=1;
+  const px=ax+dx*t, pz=az+dz*t;
+  return dist2(px,pz,cx,cz);
+}
+const ARROW_HIT2=1.25; // the historical point-test radius², now applied to a swept segment
+function pistolTarget(u,rng,rwT){
+  const prev=_rwT;                       // save/restore, never clobber: tryAttack also sets it
+  if(rwT!==undefined)setRewind(rwT);
   let best=null,bd=rng*rng;
   for(const e of units){
     if(!e.alive||e.team===u.team)continue;
-    const d=dist2(e.root.position.x,e.root.position.z,u.root.position.x,u.root.position.z);
+    const d=_rwT?rwDist2(u,e):dist2(e.root.position.x,e.root.position.z,u.root.position.x,u.root.position.z);
     if(d<bd){bd=d;best=e;}
   }
+  _rwT=prev;
   return best;
 }
 let _pistolCtx=false; // v87: killUnit reads this to credit the "Last Shot" quest
@@ -558,7 +606,7 @@ function tryAttack(u){ if(u.dmg<=0)return false;
     let t=null,bd=(by.rng+0.6)*(by.rng+0.6);
     for(const v of units){
       if(v.team===u.team||!v.alive||v.garrison)continue;
-      const dv=dist2(u.root.position.x,u.root.position.z,v.root.position.x,v.root.position.z);
+      const dv=_rwT?rwDist2(u,v):dist2(u.root.position.x,u.root.position.z,v.root.position.x,v.root.position.z);
       if(dv<bd){bd=dv;t=v;}
     }
     if(t){
@@ -865,7 +913,50 @@ function drawFill(){
 // Survivable while every shot did the same damage. Not survivable once the draw multiplies it.
 // `dir` arrives ALREADY CONVERGED from the guest, so what the host launches is the line the guest
 // actually saw leave the bow.
-function fireAimedFor(u,dir,lv){
+// v128.5 CATCH-UP. A guest's arrow is loosed at a world that is ~276ms in the host's past, so
+// spawning it "now" means the shot was aimed at where the target USED to be — the measured
+// error is 1.70 units at median ping against a hit radius of 1.118, i.e. the target has already
+// left the cylinder before the arrow exists. Instead the arrow is born at the instant the guest
+// saw and fast-forwarded to the present, tested each step as a SWEPT SEGMENT against positions
+// rewound to that same step. If it connects during the catch-up it connects; if not it enters
+// the world already at the position it should have reached, and continues normally from there.
+// Returns true when the arrow was consumed (hit, spent, or buried) and must not be pushed.
+function catchUpArrow(p,fromT,now){
+  if(!(fromT>0)||!(fromT<now))return false;
+  if(typeof NET==="undefined"||!NET.histAt)return false;
+  const step=(NET.CATCHUP_STEP_MS||16.7)/1000;
+  const vx=p.vel.x, vy=p.vel.y, vz=p.vel.z;
+  let t=fromT;
+  let guard=0;
+  while(t<now&&guard++<64){
+    const h=Math.min(step,(now-t)/1000);
+    const x0=p.m.position.x, z0=p.m.position.z;
+    p.m.position.x+=vx*h; p.m.position.y+=vy*h; p.m.position.z+=vz*h;
+    p.traveled+=p.spd*h;
+    t+=h*1000;
+    if(p.traveled>p.maxRange)return true;
+    if(p.m.position.y<terrainHeight(p.m.position.x,p.m.position.z)+0.15){
+      puff(p.m.position.x,p.m.position.y+0.3,p.m.position.z,0x9a8a6a); return true;
+    }
+    for(const v of units){
+      if(v.team===p.att.team||!v.alive||v.garrison)continue;
+      NET.histAt(v,t); // writes _rwX/_rwZ, falling back to the present when it has no history
+      if(segDist2(x0,z0,p.m.position.x,p.m.position.z,NET._rwX,NET._rwZ)<ARROW_HIT2){
+        dealDamage(p.att,v,p.dmg*rps(p.attCls,v.cls));
+        return true;
+      }
+    }
+    for(const b of buildings){ // a wall in the way stops it in the past too
+      if(!b.alive||b.def.flat)continue;
+      if(b!==p.ignoreB&&segDist2(x0,z0,p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.r*0.8,2)){
+        if(b.team!==p.att.team)damageBuilding(b,p.dmg,p.att);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function fireAimedFor(u,dir,lv,rwT){
   if(!u||!u.alive||u.atkT>0)return false;
   u.atkT=u.cd; u.swing=0.25; triggerAttackAnim(u);
   u.facing=Math.atan2(dir.x,dir.z);
@@ -879,8 +970,12 @@ function fireAimedFor(u,dir,lv){
   m.position.copy(muzzle);
   m.lookAt(muzzle.clone().add(dir)); m.rotateX(Math.PI/2);
   scene.add(m);
-  projectiles.push({m,free:true,vel:dir.clone().multiplyScalar(36*D.spd),spd:36*D.spd,traveled:0,
-    maxRange:34,att:u,dmg:u.dmg*D.dmg,attCls:u.cls,life:3});
+  const shot={m,free:true,vel:dir.clone().multiplyScalar(36*D.spd),spd:36*D.spd,traveled:0,
+    maxRange:34,att:u,dmg:u.dmg*D.dmg,attCls:u.cls,life:3};
+  // v128.5: a guest's arrow starts in the past and catches up before it joins the world
+  if(rwT&&typeof NET!=="undefined"&&catchUpArrow(shot,rwT,NET.now())){
+    scene.remove(m);
+  }else projectiles.push(shot);
   if(typeof Sound!=="undefined"){
     const k=CLS[u.cls].rig==="musket"?"gun":"bow";
     Sound.play(k,{x:u.root.position.x,z:u.root.position.z});

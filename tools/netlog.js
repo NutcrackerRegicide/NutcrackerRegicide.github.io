@@ -57,6 +57,24 @@ function windows(rows){
 }
 const pct=(a,b)=>b?Math.round(100*a/b)+"%":"—";
 function bar(frac){const n=Math.max(0,Math.min(20,Math.round(frac*20)));return "█".repeat(n)+"·".repeat(20-n);}
+// v128.4 THE JOIN NEVER WORKED FOR A LONG NAME. The host stores a peer under the name it
+// ADMITTED, and hostAdmit does `.slice(0,14)` — so the host's key is "Jorunn the Bla" while
+// the guest's own log says "Jorunn the Black". Section 3 looked that up with h.g[name], missed
+// every time, and reported "no overlapping seconds (do the two files come from the same
+// session?)" — for both guests, in the one field test that mattered. Resolve the key instead.
+function hostKeys(host){
+  const s=new Set(); if(host)host.rows.forEach(r=>Object.keys(r.g||{}).forEach(k=>s.add(k)));
+  return [...s];
+}
+function hostKeyFor(host,name){
+  if(!host||!name)return null;
+  const keys=hostKeys(host);
+  if(keys.includes(name))return name;
+  const hit=keys.filter(k=>name.startsWith(k)||k.startsWith(name));
+  if(hit.length===1)return hit[0];
+  if(hit.length>1)console.warn("! \""+name+"\" matches "+hit.length+" host slots ("+hit.join(", ")+") — join skipped");
+  return null;
+}
 
 console.log("=".repeat(78));
 console.log("REGICIDE NET LOG — "+files.length+" file(s)");
@@ -128,10 +146,31 @@ if(host){
     const g=idx.map(i=>rows[i].g[n]);
     console.log("\n   → "+n+"  ("+g.length+" sampled seconds)");
     show("ping",stat(g.map(x=>x.ping)),"ms");
-    show("sent LOGGED",stat(g.map(x=>x.sent)),"/win");
+    show("sent FAST",stat(g.map(x=>x.sent)),"/win");
     if(fmt<2)show("sent REAL",stat(idx.map(i=>rows[i].g[n].sent/(wins[i]/1000))),"/s");
+    // v128.4: pre-128.4 rows have no sentR — `sent` there is the FAST lane only, and reads 0
+    // through every second the host was relaying at full rate on the reliable one.
+    if(g.some(x=>typeof x.sentR==="number")){
+      show("sent RELAY",stat(g.map(x=>x.sentR)),"/win");
+      show("held RELAY",stat(g.map(x=>x.holdR)),"/win");
+      show("relay lag",stat(g.map(x=>x.lag).filter(x=>x>=0)),"snaps un-applied");
+    }else{
+      const blind=g.filter(x=>!x.fast).length;
+      if(blind)console.log("      ! "+blind+" second(s) with the fast lane DOWN and no sentR field: this build did not");
+      if(blind)console.log("        count reliable-lane sends, so `sent 0` in those rows means UNKNOWN, not idle.");
+    }
+    // v128.5: how far back this guest's attacks were actually resolved. `rw` is what the host
+    // GRANTED after clamping to the peer's own rtt, not what it asked for — a rewind stuck at 0
+    // while ping is high means the claim is not arriving (old guest, or `at` never sent).
+    if(g.some(x=>typeof x.rw==="number"&&x.rw>=0)){
+      show("rewind",stat(g.map(x=>x.rw).filter(x=>x>=0)),"ms granted");
+      const claims=g.filter(x=>x.claim).length;
+      console.log("      view stamps: "+pct(claims,g.length)+" of sampled seconds carried an `at` claim"+
+        (claims?"":"  ← this guest is pre-v128.5, its shots are rtt-estimated only"));
+    }
     show("buf",stat(g.map(x=>x.buf)),"B");
     show("inputAge",stat(g.map(x=>x.inAge)),"ms");
+    if(g.some(x=>typeof x.seen==="number"&&x.seen>=0))show("lastHeard",stat(g.map(x=>x.seen).filter(x=>x>=0)),"ms");
     const skF=g.reduce((s,x)=>s+(x.skipF||0),0), skR=g.reduce((s,x)=>s+(x.skipR||0),0);
     const anySkip=g.filter(x=>x.skipF||x.skipR).length;
     const bufMax=host.meta.bufFast||16384;
@@ -187,6 +226,39 @@ for(const gf of guests){
     console.log("        snap (3.75Hz) alongside a healthy fast lane; applySnap discards those on `q<=lastQ`.");
     console.log("        MIRROR_EVERY drops that to 1Hz.");
   }
+  // ---- v128.4 THE OUTAGE LADDER — the check that would have caught the freeze ----
+  // A guest whose feed goes to ZERO for whole seconds and then takes the whole backlog at
+  // once is not "laggy": the world stops dead and then teleports. v128.2 field data — 20
+  // outages, 144 dead seconds (35% of the session), longest 39s, one flood of 621 snaps /
+  // 528KB with the oldest 40.9s old. The floods delivered 112% of a 15Hz stream, so nothing
+  // was dropped — it was ALL queued on the reliable, ORDERED lane and delivered late.
+  {
+    const outs=[];let cur=null;
+    for(let i=0;i<rows.length;i++){
+      const dead=rows[i].snaps===0&&!rows[i].kb;
+      if(dead){if(!cur)cur={i0:i,n:0};cur.n++;}
+      else if(cur){cur.flood=rows[i].snaps;cur.age=rows[i].ageMax||0;outs.push(cur);cur=null;}
+    }
+    if(cur){cur.flood=0;cur.age=0;outs.push(cur);}
+    const deadSec=outs.reduce((s,o)=>s+o.n,0);
+    const longest=outs.reduce((m,o)=>Math.max(m,o.n),0);
+    const hz=gf.meta.snapHz||15;
+    const expect=deadSec*hz, got=outs.reduce((s,o)=>s+o.flood,0);
+    if(outs.length){
+      console.log("      outages: "+outs.length+" run(s) of ZERO arrivals · "+deadSec+"s dead ("+
+        pct(deadSec,rows.length)+" of the session) · longest "+longest+"s");
+      const fastDown=outs.reduce((s,o)=>{let n=0;for(let i=o.i0;i<o.i0+o.n;i++)if(!rows[i].fast)n++;return s+n;},0);
+      console.log("        fast lane DOWN in "+fastDown+"/"+deadSec+" of those seconds · recovery floods carried "+
+        got+" snaps vs "+expect+" a "+hz+"Hz stream would have pushed ("+pct(got,expect)+")");
+      if(longest>=5&&got>=expect*0.6){
+        console.log("      ⚠ THE RELIABLE-LANE FLOOD. Nothing was lost — it was DELIVERED LATE. When the fast");
+        console.log("        lane dies the host relays snapshots on the reliable, ordered lane, where they");
+        console.log("        queue instead of dropping. Before v128.4 the only guard was bufferedAmount, which");
+        console.log("        cannot see head-of-line blocking. Check REL_ACK_WINDOW / REL_FALLBACK_HZ, and the");
+        console.log("        `held RELAY` and `relay lag` columns in section 1.");
+      }
+    }
+  }
   const ev={};gf.events.forEach(e=>ev[e.k]=(ev[e.k]||0)+1);
   const kinds=Object.keys(ev).sort();
   if(kinds.length)console.log("      events: "+kinds.map(k=>k+" ×"+ev[k]).join(" · "));
@@ -208,24 +280,34 @@ if(host&&guests.length){
   const hRows=host.rows, hWin=windows(hRows);
   for(const gf of guests){
     const name=gf.meta.name;
+    const key=hostKeyFor(host,name); // v128.4: the host truncates names to 14 chars
     const gRows=gf.rows, gWin=windows(gRows);
     let pairs=0,sentSum=0,gotSum=0,hi=0;
-    for(let i=0;i<gRows.length;i++){
+    for(let i=0;i<gRows.length&&key;i++){
       while(hi<hRows.length-1&&hRows[hi].t<gRows[i].t-700)hi++;
       const h=hRows[hi];
       if(Math.abs(h.t-gRows[i].t)>700)continue;
-      const hg=h.g&&h.g[name]; if(!hg)continue;
+      const hg=h.g&&h.g[key]; if(!hg)continue;
       pairs++;
-      sentSum+=hg.sent/(hWin[hi]/1000);
+      sentSum+=((hg.sent||0)+(hg.sentR||0))/(hWin[hi]/1000); // both lanes: relay counts as sent
       gotSum+=gRows[i].snaps/(gWin[i]/1000);
     }
+    if(!key){console.log("\n   → "+name+": no host slot matches this name (host slots: "+hostKeys(host).join(", ")+")");continue;}
     if(!pairs){console.log("\n   → "+name+": no overlapping seconds (do the two files come from the same session?)");continue;}
     const sentR=sentSum/pairs, gotR=gotSum/pairs;
     console.log("\n   → "+name+"  ("+pairs+" matched seconds)");
     console.log("      host sent  "+r1(sentR)+" /s   (target "+(host.meta.snapHz||15)+")");
     console.log("      guest got  "+r1(gotR)+" /s   → "+pct(Math.round(gotR*100),Math.round(sentR*100))+" of what was sent");
     const loss=sentR>0?1-gotR/sentR:0;
-    if(loss>0.15)console.log("      ⚠ "+Math.round(loss*100)+"% did not arrive — that share is the network or the mirror being discarded.");
+    if(gotR>sentR*1.05){
+      // v128.4: arriving MORE than was sent is impossible — it means the host under-counted.
+      // Pre-128.4 hosts incremented nothing for a reliable-lane send, so every second the
+      // fast lane was down is missing from `sent` entirely. That gap IS the relay traffic.
+      console.log("      ⚠ the guest received "+pct(Math.round(gotR*100),Math.round(sentR*100))+" of what the host claims it sent, which cannot happen.");
+      console.log("        This host build counted FAST-lane sends only — the shortfall is the uncounted reliable");
+      console.log("        relay, i.e. exactly the traffic that queues and floods. Re-test on v128.4+ for a real number.");
+    }
+    else if(loss>0.15)console.log("      ⚠ "+Math.round(loss*100)+"% did not arrive — that share is the network or the mirror being discarded.");
     else if(sentR<(host.meta.snapHz||15)*0.9)console.log("      the loss is small; the shortfall is on the HOST side (it never sent "+(host.meta.snapHz||15)+"/s).");
   }
   // two guests in one session is the useful part

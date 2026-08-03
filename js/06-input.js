@@ -222,6 +222,14 @@ addEventListener("keydown",e=>{
     if(menuOpen==="class")closeMenus(); else openTrainMenu(tb);
   }
   if(k==="e"){
+    // v128.4 THE TAP COUNTER. On a guest phone the auto-gather in 12-touch.js writes keys.e
+    // every animation frame, before guestFrame samples it — so the USE button's press was
+    // erased (no node in reach) or the bit was already pinned high (node in reach) and the
+    // host's rising-edge test never fired. Counting real presses here catches both the
+    // physical key and the synthetic keydown the touch button dispatches, and cannot be
+    // clobbered by anything writing keys.e directly. e.repeat has already returned above,
+    // so a held key counts once.
+    if(typeof NET!=="undefined"&&NET.mode==="guest")NET._eTap=(NET._eTap||0)+1;
     // v87 E-PRIORITY: climbing down always wins; otherwise the NEAREST interactable
     // wins the keypress — no more being trapped in a tower by the barracks menu,
     // and the Town Board / Blacksmith stay reachable beside other buildings.

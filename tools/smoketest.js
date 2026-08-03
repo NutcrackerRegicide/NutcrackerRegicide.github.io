@@ -51,7 +51,9 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v124: the draw, the rail's gating predicates, the analog move vector and the epithet roller
   "DRAW_CLASSES,DRAW_FULL,drawScale,isDrawClass,drawLevel,tickDraw,drawFill,fireAimedFor,"+
   "ACTIONS,availableActions,moveVec,readMove,updateRoster,mkName,NAMES,EPITHETS,projectiles,"+
-  "aimPointFor,convergeFrom,setPlayerDraw:v=>{player._drawT=v;}};";
+  "aimPointFor,convergeFrom,setPlayerDraw:v=>{player._drawT=v;},"+
+  // v128.5: lag compensation — the rewind context, the projectile step and THREE itself
+  "updateProjectiles,setRewind,segDist2,rwDist,dist2,THREE};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -1952,6 +1954,284 @@ global.__G.setGameOver(false);
     check("v126 wedged lane: a lane that drained is watched afresh — a later choke on the SAME byte count still starts a new timer",
       r2.fast===fast2&&fast2.closed===false);
     NET.remotes=saveR; NET.now=realNow;
+  }
+  // ---- v128.4: THE RELIABLE LANE IS NOT A SNAPSHOT LANE ----
+  // The v128.2 field logs: with the fast lane down the host relayed the FULL 15Hz stream on
+  // the reliable, ORDERED lane behind one guard — laneBuf < BUF_REL_MAX. That guard is blind:
+  // bufferedAmount reads ~800B while SCTP retransmits, so the host shovelled 600 snapshots
+  // into a stalled pipe and the guest froze for 39 seconds and then took the lot at once
+  // (621 snaps / 528KB, oldest 40.9s, 604 refused stale). 20 outages, 144 dead seconds, 35%
+  // of that session. The floods carried 112% of a 15Hz stream: nothing was dropped, all of it
+  // was delivered late. Two brakes now — the guest's own ack, and a rate cap.
+  {
+    NET.mode="host";
+    const realNow=NET.now; let clk=5e6; NET.now=()=>clk;
+    const saveR=NET.remotes;
+    // the rate cap: a dead fast lane must NOT put SNAP_HZ on the reliable one
+    {
+      const conn=mkLane(); const r=mkRemote("Cap",null,conn);
+      NET.remotes={"peer-C":r};
+      for(let q=0;q<60;q++){NET.bcastFast({t:"snap",q});clk+=1000/NET.SNAP_HZ;}
+      const relayed=conn.sent.length, secs=60/NET.SNAP_HZ;
+      check("v128.4 relay cap: 60 snaps over "+secs.toFixed(1)+"s with the fast lane down → "+relayed+
+        " on the reliable lane (~"+NET.REL_FALLBACK_HZ+"Hz), not 60",
+        relayed>=Math.floor(secs*NET.REL_FALLBACK_HZ)-2&&relayed<=Math.ceil(secs*NET.REL_FALLBACK_HZ)+2);
+      check("v128.4 relay cap: every relayed send is COUNTED — `sent` was sentF, so a relaying host logged 0 and read as idle",
+        r.sentR===relayed&&relayed>0);
+    }
+    // the ack window: a guest that stops applying stops being sent to, however empty the buffer looks
+    {
+      const conn=mkLane(); const r=mkRemote("Ack",null,conn);
+      NET.remotes={"peer-A":r};
+      r.ackQ=0; // the guest is stuck on snapshot 0 — the pipe is head-of-line blocked
+      for(let q=0;q<200;q++){NET.bcastFast({t:"snap",q});clk+=1000/NET.REL_FALLBACK_HZ;} // clock clears the rate cap every time
+      const relayed=conn.sent.length;
+      check("v128.4 ack window: a guest stuck at q=0 stops the relay after ~REL_ACK_WINDOW ("+relayed+
+        " sent of 200, held "+r.holdR+") — bufferedAmount stayed 0 throughout",
+        relayed<=NET.REL_ACK_WINDOW+2&&relayed>=NET.REL_ACK_WINDOW&&r.holdR>0&&conn.dataChannel.bufferedAmount===0);
+      const before=conn.sent.length;
+      r.ackQ=r._relQ;                     // …the guest catches up
+      clk+=1000; NET.bcastFast({t:"snap",q:500});
+      check("v128.4 ack window: the brake RELEASES the moment the guest catches up (a stall must not be terminal)",
+        conn.sent.length===before+1);
+    }
+    // the 1Hz mirror is liveness, not bulk: exempt from the rate cap, still subject to the window
+    {
+      const fast=mkLane(), conn=mkLane(); const r=mkRemote("Mir",fast,conn);
+      NET.remotes={"peer-Mi":r};
+      for(let q=0;q<=NET.MIRROR_EVERY;q++){NET.bcastFast({t:"snap",q});clk+=10;} // 10ms apart: the cap would eat the 2nd mirror
+      const mirrored=conn.sent.length;
+      check("v128.4 mirror: the 1Hz liveness trickle is exempt from the relay rate cap ("+mirrored+" mirrors)",
+        mirrored===2&&fast.sent.length===NET.MIRROR_EVERY+1);
+      r.ackQ=-1000; // …but a guest that is not applying gets no mirror either
+      const before=conn.sent.length;
+      for(let q=NET.MIRROR_EVERY*2;q<=NET.MIRROR_EVERY*3;q++){NET.bcastFast({t:"snap",q});clk+=10;}
+      check("v128.4 mirror: a guest far behind the ack window is not sent mirrors on top of its backlog",
+        conn.sent.length===before);
+    }
+    check("v128.4 constants: the relay window is ~2s of snapshots and the cap is well under SNAP_HZ",
+      NET.REL_ACK_WINDOW>=NET.SNAP_HZ&&NET.REL_ACK_WINDOW<=NET.SNAP_HZ*3&&NET.REL_FALLBACK_HZ<NET.SNAP_HZ/2);
+    NET.remotes=saveR; NET.now=realNow;
+  }
+  // ---- v128.4: THE HOST HAS TO NOTICE PEOPLE LEAVING ----
+  // One `drop` event for at least three departures. PeerJS held a lane open:true for 8 minutes
+  // after the player was gone and fired neither close nor error, so hostDrop — reachable only
+  // from those two events — never ran. The body kept u.remote, updateBot returned on it, and
+  // hostAdmit refused to recycle it: the team was permanently a unit down.
+  {
+    NET.mode="host";
+    const realNow=NET.now; let clk=7e6; NET.now=()=>clk;
+    const saveR=NET.remotes, saveC=NET.conns;
+    const conn=mkLane(); conn.peer="peer-Z";
+    const r=mkRemote("Zombie",null,conn); r.seenAt=clk;
+    const u=r.unit; u.bot={role:"citizen"}; const born=r.oldName;
+    NET.remotes={"peer-Z":r}; NET.conns=[conn];
+    // the 21.3s input silence in the v125 logs RECOVERED — a screen-locked phone is not a departure
+    clk+=25000; NET.reapPeers();
+    check("v128.4 reaper: 25s of silence is NOT a departure (the field logs contain a 21.3s silence that fully recovered)",
+      !!NET.remotes["peer-Z"]&&u.remote==="peer-Zombie");
+    clk+=NET.PEER_DEAD_MS; NET.reapPeers();
+    check("v128.4 reaper: past PEER_DEAD_MS the peer is released and the body goes back to the AI",
+      !NET.remotes["peer-Z"]&&u.remote===null&&u.name===born&&conn.closed===true&&NET.conns.length===0);
+    check("v128.4 reaper: the release is in the event stream, with the reason",
+      NET.LOG.events.some(e=>e.k==="drop"&&/silent/.test(String(e.d))));
+    // …and a clean goodbye does not wait for any of that
+    const conn2=mkLane(); conn2.peer="peer-B";
+    const r2=mkRemote("Byer",null,conn2); r2.seenAt=clk;
+    NET.remotes={"peer-B":r2}; NET.conns=[conn2];
+    NET.hostData(conn2,{t:"bye"});
+    check("v128.4 bye: a guest closing its tab is released instantly, not in 90 seconds",
+      !NET.remotes["peer-B"]&&r2.unit.remote===null&&NET.conns.length===0);
+    check("v128.4 release: hostDrop still works off a bare connection (the old call sites are untouched)",
+      typeof NET.hostDrop==="function"&&NET.hostRelease("nobody-home","x")===false);
+    NET.remotes=saveR; NET.conns=saveC; NET.now=realNow;
+  }
+  // ---- v128.4: AN E TAP THE PINNED BIT CANNOT HIDE ----
+  // 12-touch.js's auto-gather writes keys.e every animation frame on a guest and runs BEFORE
+  // guestFrame, so on a phone the USE button was either erased (bit forced 0) or swallowed
+  // (bit pinned 1, so the host's rising edge never fired). E was the only player action with
+  // no discrete message — every other one is a guestAct RPC. `et` is that discrete message.
+  {
+    NET.mode="host";
+    const tower=G.buildings.find(b=>b.team===0&&b.alive&&b.built&&b.type==="watch_tower");
+    check("v128.4 e-tap: a real watch tower exists to test against (a test that measures nothing must not pass)",!!tower);
+    if(tower){
+      const gu=G.units.find(u=>u.team===0&&u.bot&&!u.isKing&&u.alive&&u.cls==="villager"&&!u.remote);
+      gu.remote="etap-peer"; gu.gathering=null;
+      gu.root.position.set(tower.x+2,0,tower.z);
+      // lastET:0 is what hostAdmit stamps — both ends start the counter at 0 so a rejoin in the
+      // same page load cannot arrive carrying a count the host reads as an instant interact
+      const r={unit:gu,input:{},conn:{open:true,send(){}},name:"Tapper",lastE:false,eUsed:false,lastET:0};
+      r.input={e:1}; NET.driveRemote(r,0.05);      // a clean rising edge still mans the tower
+      const up=gu.garrison===tower;
+      // now the mobile case: auto-gather has held the bit high for frames, so there is no edge left
+      r.lastE=true; r.input={e:1};
+      for(let i=0;i<5;i++)NET.driveRemote(r,0.05);
+      check("v128.4 e-tap: with keys.e PINNED high the rising edge never fires — the mobile bug, still reproducible",
+        up&&gu.garrison===tower);
+      r.input={e:1,et:1};                          // …the same pinned bit, plus one real tap
+      NET.driveRemote(r,0.05);
+      check("v128.4 e-tap: a tap counter rides through the pinned bit — the guest climbs down",gu.garrison===null);
+      gu.root.position.set(tower.x+2,0,tower.z);
+      for(let i=0;i<6;i++)NET.driveRemote(r,0.05); // the SAME et resent every frame is not six taps
+      check("v128.4 e-tap: the counter is edge-triggered, not level-triggered — a resent packet is one tap",
+        gu.garrison===null);
+      r.input={e:1,et:2}; NET.driveRemote(r,0.05); // …and the next real tap is seen
+      check("v128.4 e-tap: the following tap is seen (the counter is not a one-shot)",gu.garrison===tower);
+      r.input={e:1,et:3}; NET.driveRemote(r,0.05);
+      gu.remote=null; gu.garrison=null;
+    }
+  }
+  // ---- v128.5: LAG COMPENSATION ----
+  // Measured from the v128.2 field logs: at the median 212ms ping a fleeing infantryman travels
+  // 1.70 units while a broadsword's whole reach is 3.4 — half the reach gone. Against a fleeing
+  // knight (2.86u) usable reach was 0.54u. At the p90 of 1294ms no guest could land melee on
+  // anything that moved. Every assertion below FIRST reproduces the uncompensated miss, so none
+  // of them can pass by measuring nothing.
+  {
+    NET.mode="host"; G.setGameOver(false);
+    const realNow=NET.now; let clk=9e6; NET.now=()=>clk;
+    const saveR=NET.remotes; NET.remotes={};
+    NET.histReset();
+    // a corner of the map with nobody else in it — these tests stage duels, and `tryAttack`
+    // scans every unit in the world, so a stray bystander would let them pass for the wrong
+    // reason. Asserted, not assumed.
+    const spot=(()=>{
+      for(let x=-120;x<=120;x+=15)for(let z=-120;z<=120;z+=15){
+        let clear=true;
+        for(const v of G.units){if(v.alive&&G.dist2(v.root.position.x,v.root.position.z,x,z)<45*45){clear=false;break;}}
+        if(clear)return {x,z};
+      }
+      return null;
+    })();
+    check("v128.5 setup: an empty corner exists to stage the duels in (no bystander can score them)",!!spot);
+    const SX=spot?spot.x:0, SZ=spot?spot.z:0;
+    // --- the ring itself ---
+    {
+      const mover=G.makeUnit(1,"clubman",SX,SZ,{name:"Ghost",bot:null}); mover.hp=mover.maxHp=9999;
+      const p=mover.root.position;
+      for(let k=0;k<10;k++){ p.set(SX+k*2,p.y,SZ); clk+=50; NET.histSample(clk); } // +2u every 50ms
+      const tNow=clk;
+      NET.histAt(mover,tNow);
+      check("v128.5 ring: the newest sample is the present position",Math.abs(NET._rwX-(SX+18))<0.15);
+      NET.histAt(mover,tNow-200);
+      check("v128.5 ring: 200ms ago it was 8 units back ("+(NET._rwX-SX).toFixed(1)+" vs 18 now)",
+        Math.abs(NET._rwX-(SX+10))<0.35);
+      NET.histAt(mover,tNow-125); // between two samples
+      check("v128.5 ring: a time BETWEEN samples interpolates ("+(NET._rwX-SX).toFixed(2)+")",
+        NET._rwX-SX>12&&NET._rwX-SX<13.5);
+      NET.histAt(mover,tNow-99999); // older than the whole ring
+      check("v128.5 ring: a time older than the ring clamps to the OLDEST sample, not to the origin ("+
+        (NET._rwX-SX).toFixed(1)+")",Math.abs(NET._rwX-SX)<0.2&&Math.abs(NET._rwX)>0.5*Math.abs(SX));
+      const fresh=G.makeUnit(1,"clubman",SX+77,SZ,{name:"Newborn",bot:null});
+      fresh.root.position.set(SX+77,fresh.root.position.y,SZ);
+      NET.histSample(clk+=50);
+      NET.histAt(fresh,clk-400); // born mid-ring: its whole past must be its spawn point
+      check("v128.5 ring: a unit born mid-ring reads its SPAWN point in the past, not the origin ("+
+        (NET._rwX-SX).toFixed(1)+")",Math.abs(NET._rwX-(SX+77))<0.2);
+      check("v128.5 ring: 24 slots × 22ms covers the 500ms compensation ceiling",
+        NET.HIST_SLOTS*NET.HIST_MIN_MS>=NET.LAGCOMP_MAX_MS);
+      mover.alive=false; fresh.alive=false;
+    }
+    // --- the trust boundary: nobody rewinds further than their own latency earns ---
+    {
+      const r={rtt:40,name:"Cheat"};
+      const t=NET.rewindTime(r,clk-500); // claims half a second on a 40ms link
+      check("v128.5 trust: a 500ms claim on a 40ms link is cut to rtt+slack ("+r._rwMs+"ms, not 500)",
+        r._rwMs===40+NET.LAGCOMP_SLACK_MS&&Math.abs((clk-t)-r._rwMs)<1);
+      const r2={rtt:300,name:"Honest"};
+      NET.rewindTime(r2,clk-260);
+      check("v128.5 trust: an honest 260ms claim on a 300ms link is granted in full",r2._rwMs===260);
+      const r3={rtt:2000,name:"Awful"};
+      NET.rewindTime(r3,clk-1500);
+      check("v128.5 trust: nothing exceeds LAGCOMP_MAX_MS however bad the link",r3._rwMs===NET.LAGCOMP_MAX_MS);
+      const r4={rtt:180,name:"Old"};
+      NET.rewindTime(r4,undefined);
+      check("v128.5 trust: a guest that sends no claim still gets an rtt-shaped estimate",r4._rwMs===180);
+      const r5={rtt:100,name:"Future"};
+      NET.rewindTime(r5,clk+5000); // claims to be shooting from the future
+      check("v128.5 trust: a claim in the FUTURE is refused, not honoured",r5._rwMs<=100);
+    }
+    // --- melee: the swing that used to miss ---
+    {
+      const att=G.makeUnit(0,"broadsword",SX,SZ,{name:"Swinger",bot:null});
+      att.root.position.set(SX,att.root.position.y,SZ);
+      att.remote="rw-peer"; att.hp=att.maxHp=9999; att.atkT=0;
+      const vic=G.makeUnit(1,"clubman",SX,SZ,{name:"Runner",bot:null}); vic.hp=vic.maxHp=9999;
+      NET.histReset();
+      // the victim runs away: inside the 3.4u reach a third of a second ago, well clear of it now
+      const vp=vic.root.position;
+      for(let k=0;k<12;k++){ vp.set(SX,vp.y,SZ+1.0+k*0.7); clk+=30; NET.histSample(clk); }
+      const gap=Math.hypot(vp.x-att.root.position.x,vp.z-att.root.position.z);
+      const reach=att.rng+0.8;
+      check("v128.5 melee: the setup is real — the victim is now OUT of reach ("+gap.toFixed(2)+
+        "u vs "+reach.toFixed(2)+"u)",gap>reach);
+      const hp0=vic.hp;
+      G.setRewind(0); G.tryAttack(att);          // present-tick: exactly the v128.4 behaviour
+      check("v128.5 melee: WITHOUT compensation the swing misses — the field bug, reproduced",vic.hp===hp0);
+      att.atkT=0;
+      G.setRewind(clk-330); G.tryAttack(att); G.setRewind(0);
+      check("v128.5 melee: WITH the rewind the same swing connects ("+hp0+" → "+vic.hp+")",vic.hp<hp0);
+      // …and it must not become a licence to hit anyone who was merely nearby at some point
+      att.atkT=0; vp.set(SX,vp.y,SZ+40); clk+=30; NET.histSample(clk);
+      const hp1=vic.hp;
+      G.setRewind(clk-30); G.tryAttack(att); G.setRewind(0);
+      check("v128.5 melee: a target that was never in reach during the swing window is still a miss",vic.hp===hp1);
+      att.alive=false; vic.alive=false;
+    }
+    // --- the arrow that used to step over people ---
+    {
+      const shooter=G.makeUnit(0,"archer",SX,SZ,{name:"Bowman",bot:null}); shooter.hp=shooter.maxHp=9999;
+      shooter.root.position.set(SX,shooter.root.position.y,SZ);
+      // the muzzle sits at +0.8 along the shot and +1 to its right (fireAimedFor), so for a shot
+      // down +x the arrow's line is z = SZ+1 — put the target ON it, not on the shooter's line
+      const target=G.makeUnit(1,"clubman",SX+6.8,SZ+1,{name:"Pincushion",bot:null});
+      target.hp=target.maxHp=9999;
+      target.root.position.set(SX+6.8,target.root.position.y,SZ+1);
+      const step=36*1.6*0.05; // full draw, one clamped 0.05s frame
+      check("v128.5 tunnel: the setup is real — one clamped step ("+step.toFixed(2)+
+        "u) is wider than the hit diameter (2.24u)",step>2.24);
+      const before=target.hp;
+      shooter.atkT=0; G.fireAimedFor(shooter,new G.THREE.Vector3(1,0,0),1);
+      for(let k=0;k<6;k++)G.updateProjectiles(0.05); // straddle the target with long frames
+      check("v128.5 tunnel: a swept arrow hits a target a point sample would step clean over ("+
+        before+" → "+target.hp+")",target.hp<before);
+      shooter.alive=false; target.alive=false;
+    }
+    // --- the arrow loosed at a world that has since moved on ---
+    {
+      const shooter=G.makeUnit(0,"archer",SX,SZ,{name:"Bowman2",bot:null}); shooter.hp=shooter.maxHp=9999;
+      shooter.root.position.set(SX,shooter.root.position.y,SZ);
+      // NOTE ON WHAT COMPENSATION DOES AND DOES NOT BUY. An arrow has travel time, so a player
+      // still has to LEAD a moving target — that skill is the game. What they should not also
+      // have to lead is an invisible, variable network offset. So the test is: the target stood
+      // still while the guest aimed and loosed, then bolted. The guest's shot was correct for
+      // the world it saw; only the host's 300ms-newer world makes it wrong.
+      const target=G.makeUnit(1,"clubman",SX+6.8,SZ+1,{name:"Sprinter",bot:null}); target.hp=target.maxHp=9999;
+      NET.histReset();
+      const tp=target.root.position;
+      for(let k=0;k<10;k++){ tp.set(SX+6.8,tp.y,SZ+1); clk+=30; NET.histSample(clk); }   // standing
+      for(let k=0;k<2;k++){ tp.set(SX+6.8,tp.y,SZ+31); clk+=30; NET.histSample(clk); }   // …then gone
+      const aimT=clk-300;                       // the world the guest was looking at: still standing
+      NET.histAt(target,aimT);
+      const aimZ=NET._rwZ, nowZ=tp.z;
+      check("v128.5 catch-up: the setup is real — the target has moved "+Math.abs(nowZ-aimZ).toFixed(1)+
+        "u since the guest aimed, far beyond the 1.12u hit radius",Math.abs(nowZ-aimZ)>3);
+      const dir=new G.THREE.Vector3(1,0,0);     // straight down the line it was standing on
+      const hp0=target.hp;
+      shooter.atkT=0; G.fireAimedFor(shooter,dir,1);            // no rewind: the v128.4 behaviour
+      for(let k=0;k<10;k++)G.updateProjectiles(0.03);
+      check("v128.5 catch-up: WITHOUT compensation the arrow flies at empty ground — the bug, reproduced",
+        target.hp===hp0);
+      shooter.atkT=0;
+      G.fireAimedFor(shooter,dir,1,aimT);                       // …the same shot, rewound
+      check("v128.5 catch-up: WITH the rewind the arrow finds the target the guest aimed at ("+
+        hp0+" → "+target.hp+")",target.hp<hp0);
+      shooter.alive=false; target.alive=false;
+    }
+    check("v128.5 fairness: the dragoon's pistol is the same length for guests as for the host and the AI",
+      /pistolTarget\(u,15,rwT\)/.test(String(NET.driveRemote)));
+    NET.remotes=saveR; NET.now=realNow; NET.histReset();
   }
   // ---- one dial at a time ----
   // Two callers (the 1200ms redial and the 5s retry) with no idea about each other. Petra:
