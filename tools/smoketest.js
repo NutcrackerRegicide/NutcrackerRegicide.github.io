@@ -53,7 +53,9 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "ACTIONS,availableActions,moveVec,readMove,updateRoster,mkName,NAMES,EPITHETS,projectiles,"+
   "aimPointFor,convergeFrom,setPlayerDraw:v=>{player._drawT=v;},"+
   // v128.5: lag compensation — the rewind context, the projectile step and THREE itself
-  "updateProjectiles,setRewind,segDist2,rwDist,dist2,THREE};";
+  "updateProjectiles,setRewind,segDist2,rwDist,dist2,THREE,"+
+  // v128.6: the atlas and the merge, so the draw budget can be asserted
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -403,13 +405,24 @@ check("under-construction sites keep scaffolding through a restyle",
    flowers>0);
  for(const b of ringG)b.alive=false; clearG.restore(); global.__G.rebuildRoads(0);}
 teamAge[0]=0; global.__G.restyleBuildings(0); // back to the stone age for what follows
+// v128.6: how much geometry actually hangs off a rig node, merged or not — the only measure of
+// "what is on this body" that survives the cluster merge. Direct mesh children only, so a sub-rig
+// (the head under the torso, the forearm under the arm) is not double counted.
+function rigVerts(n){let v=0;if(!n)return 0;
+  for(const c of n.children)if(c.isMesh&&c.geometry&&c.geometry.attributes&&c.geometry.attributes.position)
+    v+=c.geometry.attributes.position.count;
+  return v;}
 // ---- v58: villagers dress for their age, six distinct wardrobes ----
 {const vv=global.__G.makeUnit(0,"villager",-160,70,{name:"Fashion Plate"});
  const sigs=new Set();
  for(let a=0;a<6;a++){
    teamAge[0]=a; global.__G.restyleUnits(0);
-   sigs.add([vv.rig.torso.children.length,vv.rig.head.children.length,
-     vv.rig.faR.children.length,vv.rig.shinL.children.length].join(":"));
+   // v128.6: COUNT VERTICES, NOT MESHES. The rigid-cluster merge welds a wardrobe down to one
+   // mesh per rig node, so children.length is 1 for every age and this test silently stopped
+   // distinguishing anything. Vertex count is invariant under merging — it measures the same
+   // thing before and after — so the signature stays honest whatever the renderer does with it.
+   sigs.add([rigVerts(vv.rig.torso),rigVerts(vv.rig.head),
+     rigVerts(vv.rig.faR),rigVerts(vv.rig.shinL)].join(":"));
  }
  check("villagers wear six distinct wardrobes ("+sigs.size+"/6 unique)",sigs.size===6);
  check("the skeleton survives every restyle (arms, head, legs intact)",
@@ -893,10 +906,12 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
 const meleeFit={};
 for(const mc of ["clubman","shortsword","broadsword","legionaire","vanguard","musketeer","spearman","spearfighter","impspear","hoplite","pikeman","halberdier","slinger","archer","imparcher","comparcher","crossbowman","skirmisher","chariot","heavycav","cataphract","knight","dragoon","scout","elitescout"]){
   const t=global.__G.NET?global.__G.makeUnit(0,mc,-150,90,{name:"Fit "+mc}):null;
-  meleeFit[mc]=t?(t.rig.torso.children.length+"/"+t.rig.head.children.length):"x";
+  meleeFit[mc]=t?(rigVerts(t.rig.torso)+"/"+rigVerts(t.rig.head)):"x";
 }
-check("melee line rigs assemble (torso/head parts: "+Object.entries(meleeFit).map(([k,v])=>v).join(" ")+")",
-  Object.values(meleeFit).every(v=>{const [a,b]=v.split("/").map(Number);return a>=8&&b>=2;}));
+// v128.6: vertices, not child meshes — see rigVerts. Floors are well under the measured minima
+// (708 torso on a scout, 630 head on a chariot) but far above an empty or half-built rig.
+check("melee line rigs assemble (torso/head verts: "+Object.entries(meleeFit).map(([k,v])=>v).join(" ")+")",
+  Object.values(meleeFit).every(v=>{const [a,b]=v.split("/").map(Number);return a>=400&&b>=300;}));
 
 // ---------------- MULTIPLAYER: net layer loopback (host packs → guest applies) ----------------
 // Peer is undefined in Node — the fact that 10-net.js LOADED at all proves the guard works.
@@ -2081,6 +2096,45 @@ global.__G.setGameOver(false);
       r.input={e:1,et:3}; NET.driveRemote(r,0.05);
       gu.remote=null; gu.garrison=null;
     }
+  }
+  // ---- v128.6: THE UNIT DRAW BUDGET ----
+  // The tree budget (v114) asserts a tree is ONE mesh and has caught real regressions twice.
+  // This is the same guard for characters. Units were 86% of the scene's draw calls at 22.8-33.4
+  // each; the rigid-cluster merge welds them to one mesh per ANIMATED node, and the number of
+  // animated nodes is the floor. If someone adds a mesh outside the merge — or breaks the atlas
+  // so materials stop collapsing — the count goes up and this fails.
+  {
+    const G2=global.__G;
+    const meshesOf=u=>{let n=0;u.body.traverse(o=>{if(o.isMesh)n++;});return n;};
+    const matsOf=u=>{const s=new Set();u.body.traverse(o=>{if(o.isMesh)s.add(o.material);});return s;};
+    const foot=G2.makeUnit(0,"broadsword",-150,95,{name:"Budget",bot:null});
+    const horse=G2.makeUnit(0,"knight",-150,97,{name:"Budget2",bot:null});
+    const fm=meshesOf(foot), hm=meshesOf(horse);
+    check("v128.6 draw budget: a foot soldier is ONE mesh per animated node ("+fm+" meshes, was ~51)",fm<=12);
+    check("v128.6 draw budget: a mounted unit stays inside its own floor ("+hm+" meshes, horse legs and knees animate too)",hm<=24);
+    check("v128.6 draw budget: the merge actually ran and welded most of the body ("+foot._merged+" source meshes consumed)",
+      foot._merged>=40);
+    const fMats=matsOf(foot);
+    check("v128.6 atlas: the whole body collapses to a single shared material ("+fMats.size+" material(s), was 26)",
+      fMats.size<=2&&fMats.has(G2.UATLAS.material()));
+    // the atlas must be ONE texture shared by every unit, or nothing was gained
+    check("v128.6 atlas: every unit draws from the same atlas texture",
+      matsOf(horse).has(G2.UATLAS.material())&&G2.UATLAS.material().map===G2.UATLAS.tex);
+    // …and a cell, once handed out, must never move: merged geometry has the UVs baked in
+    const t1=G2.UATLAS.slot(G2.texturedMat("metal",0x7d858f).map);
+    for(let i=0;i<20;i++)G2.texturedMat("cloth",0x100000+i); // force more allocations
+    const t2=G2.UATLAS.slot(G2.texturedMat("metal",0x7d858f).map);
+    check("v128.6 atlas: a cell never moves once allocated — baked UVs would rot if it did",
+      t1.u0===t2.u0&&t1.v0===t2.v0&&t1.us===t2.us);
+    check("v128.6 atlas: flat parts point at a WHITE cell so their vertex colour survives unchanged",
+      G2.UATLAS.whiteSlot().us>0);
+    // the v122 contract: merged geometry is per-unit and must be freed on rebuild
+    const g0=[];foot.body.traverse(o=>{if(o.geometry)g0.push(o.geometry);});
+    let freed=0;for(const g of g0)g.addEventListener("dispose",()=>freed++);
+    G2.setClass(foot,"legionaire");
+    check("v128.6 leak: rebuilding disposes every merged geometry ("+freed+" of "+g0.length+")",
+      freed===g0.length&&g0.length>0);
+    foot.alive=false; horse.alive=false;
   }
   // ---- v128.5: LAG COMPENSATION ----
   // Measured from the v128.2 field logs: at the median 212ms ping a fleeing infantryman travels

@@ -375,8 +375,86 @@ function _tex(sz,draw){
   const t=new THREE.CanvasTexture(c);
   t.encoding=THREE.sRGBEncoding;
   t.magFilter=THREE.NearestFilter; t.minFilter=THREE.NearestFilter; t.generateMipmaps=false;
+  t._src=c; t._sz=sz; // v128.6: the atlas blits from the source canvas — see UATLAS
   return t;
 }
+// ==================== v128.6: THE UNIT SKIN ATLAS ====================
+// The merge in 04-units.js welds each unit's ~51 meshes down to 11 rigid clusters, but a merged
+// cluster still costs ONE DRAW PER MATERIAL it contains — and a broadsword carries 26. Merging
+// geometry alone lands at 41 draw calls, not 11. The materials have to collapse too, and they
+// cannot collapse into vertex colours: 25 of those 51 meshes are TEXTURED, and they are every
+// large surface (torso, both arms, pelvis, thighs, all four armour rows, helm, head, shield).
+// The `uniform` swatch has 1-texel gold button columns on a 64-vertex cylinder and the 64x64 face
+// has 3x4 pupils and 2-texel teeth on a 100-vertex lathe — reproducing those per-vertex means
+// tessellating, which spends back in vertices exactly what the merge saves in draws.
+//
+// So: ONE atlas, ONE material, and both channels at once. The shipped three.min.js runs
+// <map_fragment> then <color_fragment> in meshtoon_frag and both multiply into diffuseColor, so
+// map x vertexColor x TOON_RAMP composes correctly. A textured part gets an atlas cell and white
+// vertex colour; a flat part gets its hex baked to vertex colour and points at a white cell.
+//
+// WHY THIS IS CHEAP HERE, measured: every unit texture is 16x16 or 64x64 (power of two), every
+// one is ClampToEdge + NearestFilter with no mipmaps, and NOTHING on a unit tiles — the only
+// RepeatWrapping texture in the game is the terrain grass. The whole all-classes-all-ages ceiling
+// is 130 textures / 110,080 texels, which fits 512x512 with room to spare.
+const UATLAS={
+  SIZE:1024, PAD:2, cv:null, tex:null, mat:null,
+  slots:new Map(),        // source texture -> {u0,v0,us,vs}
+  x:0, y:0, shelf:0,      // skyline allocator: cells are placed once and NEVER move, so UVs
+  white:null,             // baked into an already-merged geometry stay valid for ever
+  _init(){
+    if(this.cv)return;
+    this.cv=document.createElement("canvas"); this.cv.width=this.cv.height=this.SIZE;
+    const g=this.cv.getContext("2d");
+    g.fillStyle="#ffffff"; g.fillRect(0,0,this.SIZE,this.SIZE); // white by default: an unmapped
+    this.tex=new THREE.CanvasTexture(this.cv);                  // part reads 1.0 and shows its
+    this.tex.encoding=THREE.sRGBEncoding;                       // vertex colour unchanged
+    this.tex.magFilter=THREE.NearestFilter; this.tex.minFilter=THREE.NearestFilter;
+    this.tex.generateMipmaps=false;
+    this.mat=toonMat({map:this.tex,vertexColors:true});
+    this.white=this._alloc(8,(g2,x,y)=>{g2.fillStyle="#ffffff";g2.fillRect(x,y,8,8);});
+  },
+  _alloc(sz,paint){
+    const step=sz+this.PAD*2;
+    if(this.x+step>this.SIZE){this.x=0;this.y+=this.shelf;this.shelf=0;}
+    if(this.y+step>this.SIZE)return this.white||{u0:0,v0:0,us:0,vs:0}; // full: fall back to white
+    const px=this.x+this.PAD, py=this.y+this.PAD;
+    paint(this.cv.getContext("2d"),px,py);
+    this.x+=step; if(step>this.shelf)this.shelf=step;
+    this.tex.needsUpdate=true;
+    const S=this.SIZE;
+    // v-flip: canvas y grows downward, texture v grows upward
+    return {u0:px/S, v0:1-(py+sz)/S, us:sz/S, vs:sz/S};
+  },
+  // Copy a source skin in, with its edge pixels extended into the padding. ClampToEdge is what
+  // these textures do today, so extending the edge reproduces exactly the current appearance at
+  // the seam — and it means a UV that overshoots (r128 SphereGeometry poles run to +-8.3%, which
+  // is ~1.3 texels on a 16x16 cell) lands on the same colour it lands on now instead of on a
+  // neighbouring skin.
+  slot(t){
+    this._init();
+    if(!t)return this.white;
+    let s=this.slots.get(t);
+    if(s)return s;
+    const sz=t._sz||(t.image&&t.image.width)||16, src=t._src||t.image;
+    if(!src)return this.white;
+    s=this._alloc(sz,(g,x,y)=>{
+      const P=this.PAD;
+      g.drawImage(src,x-P,y-P,sz+P*2,sz+P*2);   // cheap edge-extend: oversize blit underneath…
+      g.drawImage(src,x,y,sz,sz);                // …then the true pixels on top
+    });
+    this.slots.set(t,s);
+    return s;
+  },
+  whiteSlot(){ this._init(); return this.white; },
+  material(){ this._init(); return this.mat; }
+};
+// Is this material shared out of _skinCache? Materials that are NOT (every one minted by
+// mat()/box()/cyl()/cone(), which cache nothing) are owned by the single mesh that used them,
+// and the merge is free to dispose them — indeed it must, or it inherits the leak the v122 fix
+// never covered: ~10 orphaned MeshToonMaterials per broadsword rebuild, ~20 per age-5 villager.
+const _skinMats=new Set();
+function isSharedMat(m){ return !m||_skinMats.has(m)||m===UATLAS.mat; }
 function _blocks(ctx,sz,cols){ // 2px woven noise fill
   for(let y=0;y<sz;y+=2)for(let x=0;x<sz;x+=2){
     ctx.fillStyle=cols[(Math.random()*cols.length)|0]; ctx.fillRect(x,y,2,2);
@@ -427,7 +505,7 @@ function texturedMat(kind,hex){
     c.fillStyle="#cfc9b6"; for(let y=3;y<s;y+=5)c.fillRect(0,y,s,1);
   });
   const m=toonMat({map:t});
-  _skinCache.set(key,m); return m;
+  _skinCache.set(key,m); _skinMats.add(m); return m;
 }
 // faces: front gets eyes; sides/back/top get hair
 const SKIN_TONES=[0xe8c39e,0xd9a878,0xb98a5f,0x8a6a4a];
@@ -462,7 +540,7 @@ function headMaterials(skin,hair){ // egg-head wrap: peg nose, handlebar mustach
     for(let x=28,i=0;i<3;x+=3,i++)c.fillRect(x,48,2,8);                  // upper teeth to the seam
   });
   const m=toonMat({map:side});
-  _skinCache.set(key,m); return m;
+  _skinCache.set(key,m); _skinMats.add(m); return m;
 }
 // shields: team field, dark border, one of three emblems
 function heraldryMat(team,seed){
@@ -480,7 +558,7 @@ function heraldryMat(team,seed){
     else {c.fillRect(6,5,4,6);c.fillRect(5,6,6,4);}                // roundel
   });
   const m=toonMat({map:t});
-  _skinCache.set(key,m); return m;
+  _skinCache.set(key,m); _skinMats.add(m); return m;
 }
 
 // plain cached materials (skin hands, boots …)
@@ -488,7 +566,7 @@ function plainMat(hex){
   const key="plain_"+hex;
   if(_skinCache.has(key))return _skinCache.get(key);
   const m=toonMat({color:hex});
-  _skinCache.set(key,m); return m;
+  _skinCache.set(key,m); _skinMats.add(m); return m;
 }
 
 // ---------- gentle terrain: rolling hills, deterministic, flat where you build ----------

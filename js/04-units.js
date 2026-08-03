@@ -125,7 +125,127 @@ function weaponGrip(fa,rotX,z){ // hand-anchored weapon group: pieces stack alon
   const g=new THREE.Group(); g.position.set(0,-0.52,z===undefined?0.15:z);
   g.rotation.x=rotX+Math.PI; fa.add(g); return g;
 }
+// ==================== v128.6: THE RIGID-CLUSTER MERGE ====================
+// Units were 86% of the scene's draw calls — measured at 22.8-33.4 per unit, because every boot,
+// buckle and eyeball was its own mesh with its own material. Trees have been welded into single
+// vertex-coloured geometries since v114 (`_mergeColored`, 02-world.js); characters never were.
+//
+// A unit ANIMATES, so it cannot become one mesh — but almost none of it moves. The clusters below
+// are exactly the nodes `animateUnit` writes a transform to, and everything hanging off one of
+// them is rigid with respect to it in every animation state. NOTE: this is ELEVEN clusters, not
+// the seven an earlier handoff promised — `R.shinL/shinR` (knees) and `R.faL/faR` (elbows) are
+// rotated independently of the thigh and upper arm on every frame, so a leg is two clusters and
+// an arm is two. Eleven is the floor without moving to skinning.
+//
+// Merging geometry alone would NOT have been enough: a merged cluster still costs one draw per
+// material, and `mat()` in 01-engine caches nothing, so a broadsword's 51 meshes carry 26
+// materials and would have landed at 41 draws. UATLAS collapses those into one — see the long
+// comment there for why an atlas and not vertex colours.
+const _MERGE_NODES=["legL","shinL","legR","shinR","torso","head","armL","faL","armR","faR",
+  // …and the parts of the beast and siege rigs that are driven separately
+  "musketG","bowG","goods","horseG","horseNeck","arm","barrel","gunSG","log"];
+function _mergeableMat(m){
+  // Only plain toon materials fold into the atlas. This automatically leaves out the priest's
+  // transparent MeshBasicMaterial aura, any ink hull's ShaderMaterial and the name-tag sprite,
+  // without naming any of them — a filter that stays correct when someone adds another.
+  return !!m&&m.isMeshToonMaterial===true&&!m.transparent&&!m.flatShading&&m.side===THREE.FrontSide;
+}
+function _mergeGeo(parts){
+  let n=0; const bufs=[];
+  for(const p of parts){
+    const g=p.geo.index?p.geo.toNonIndexed():p.geo.clone();
+    // applyMatrix4 carries the NORMALS through the normal matrix, so spheres and cones keep the
+    // smooth shading their geometry gave them — recomputing normals here would flat-shade every
+    // facet, which is the mistake _mergeColored's comment warns about.
+    g.applyMatrix4(p.m4);
+    n+=g.attributes.position.count;
+    bufs.push({g,slot:p.slot,col:p.col});
+  }
+  const pos=new Float32Array(n*3), nor=new Float32Array(n*3),
+        uv=new Float32Array(n*2), col=new Float32Array(n*3);
+  let o=0;
+  for(const b of bufs){
+    const a=b.g.attributes, k=a.position.count;
+    pos.set(a.position.array,o*3);
+    if(a.normal)nor.set(a.normal.array,o*3);
+    const s=b.slot, su=a.uv&&a.uv.array;
+    for(let i=0;i<k;i++){
+      let U=su?su[i*2]:0.5, V=su?su[i*2+1]:0.5;
+      // r128's SphereGeometry emits UVs out to +-8.3% at the poles — ~1.3 texels on a 16x16 skin,
+      // which without this would sample a NEIGHBOURING skin in the atlas. Every unit texture is
+      // ClampToEdge today, so clamping here reproduces the exact pixel it samples now.
+      U=U<0?0:U>1?1:U; V=V<0?0:V>1?1:V;
+      uv[(o+i)*2]=s.u0+U*s.us;
+      uv[(o+i)*2+1]=s.v0+V*s.vs;
+      col[(o+i)*3]=b.col.r; col[(o+i)*3+1]=b.col.g; col[(o+i)*3+2]=b.col.b;
+    }
+    o+=k;
+    b.g.dispose();
+  }
+  const out=new THREE.BufferGeometry();
+  out.setAttribute("position",new THREE.BufferAttribute(pos,3));
+  out.setAttribute("normal",new THREE.BufferAttribute(nor,3));
+  out.setAttribute("uv",new THREE.BufferAttribute(uv,2));
+  out.setAttribute("color",new THREE.BufferAttribute(col,3));
+  out.computeBoundingSphere();
+  return out;
+}
+function _mergeCluster(node,stop){
+  const parts=[];
+  (function walk(o,m4){
+    for(const c of o.children){
+      if(stop.has(c))continue;                     // a different cluster owns this subtree
+      c.updateMatrix();                            // .matrix is stale until a render pass
+      const cm=new THREE.Matrix4().multiplyMatrices(m4,c.matrix);
+      if(c.isMesh&&c.geometry&&_mergeableMat(c.material)&&c.visible!==false){
+        const t=c.material.map;
+        parts.push({obj:c,geo:c.geometry,m4:cm,col:c.material.color,
+          slot:t?UATLAS.slot(t):UATLAS.whiteSlot(),shadow:!!c.castShadow});
+      }
+      if(c.children.length)walk(c,cm);
+    }
+  })(node,new THREE.Matrix4());
+  if(parts.length<2)return 0;                      // nothing to gain from welding one mesh
+  const mesh=new THREE.Mesh(_mergeGeo(parts),UATLAS.material());
+  // only the torso casts a shadow today (04-units torsoM); inheriting the flag from the sources
+  // keeps that true automatically instead of hard-coding which cluster it is
+  mesh.castShadow=parts.some(p=>p.shadow);
+  mesh.receiveShadow=false;
+  node.add(mesh);
+  for(const p of parts){
+    if(p.obj.parent)p.obj.parent.remove(p.obj);
+    p.geo.dispose();
+    // …and dispose the material IF it was minted for this one mesh. box()/cyl()/cone() route
+    // through the uncached mat(), so ~10 per broadsword and ~20 per age-5 villager were being
+    // orphaned on every rebuild — a leak the v122 geometry fix never covered.
+    if(!isSharedMat(p.obj.material))p.obj.material.dispose();
+  }
+  return parts.length;
+}
+function mergeUnitBody(u){
+  if(!u||!u.body||u._modelBody||typeof UATLAS==="undefined")return 0;
+  const R=u.rig||{}, roots=[u.body];
+  const add=o=>{if(o&&roots.indexOf(o)<0)roots.push(o);};
+  for(const k of _MERGE_NODES)add(R[k]);
+  if(R.horseLegs)for(const l of R.horseLegs){add(l);add(l&&l.userData&&l.userData.knee);}
+  if(R.wheels)for(const w of R.wheels)add(w);
+  const stop=new Set(roots);
+  // R.logs toggles its children's visibility INDIVIDUALLY as cargo loads (updateCargoVisual), so
+  // its contents must stay separate meshes. Barring it as a stop node without adding it as a root
+  // leaves the whole subtree alone.
+  if(R.logs)stop.add(R.logs);
+  let merged=0;
+  for(const node of roots)merged+=_mergeCluster(node,stop);
+  u._merged=merged;
+  return merged;
+}
 function buildBodyFor(u){
+  _buildBodyRaw(u);
+  // below the model-registry early return by construction: _buildBodyRaw sets _modelBody itself,
+  // so a glTF-backed body — whose geometry is SHARED with MODELS[cls] — is never touched.
+  if(!u._modelBody)mergeUnitBody(u);
+}
+function _buildBodyRaw(u){
   // v122 THE LEAK THAT CRASHED THE PHONE. This removed the old body's children and never DISPOSED
   // them. Three.js does not free GPU buffers on remove(), so every class change, every arm-up and
   // every respawn-as-a-different-unit orphaned ~25-40 BufferGeometries on the GPU. Across 100 bots
