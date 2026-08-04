@@ -137,19 +137,19 @@
 /* ============ v128.9: SCREENS 2 & 3 — THE ART ============
    One 230 KB JPEG behind both, with a scrim heavy enough that white text is legible over the
    gold sunset and the dark figures alike — MEASURED: the top third of the art averages 122/255
-   luminance and the middle 59/255, which is why the scrim is a three-stop gradient and not a flat
-   wash. A flat scrim either buries the painting or leaves the title unreadable on the sky. `background-attachment:fixed` is NOT used: it
+   luminance, the middle 59/255 and the foot 35/255, which is why the scrim is a three-stop gradient
+   and not a flat wash — the foot needs the LEAST help, not the most. A flat scrim either buries the painting or leaves the title unreadable on the sky. `background-attachment:fixed` is NOT used: it
    is a known scroll-jank/compositing trap on mobile Safari, and 12-touch puts these overlays
    inside a rotated stage where it behaves unpredictably. */
 /* SPECIFICITY, and it bit once already: #startmenu carries an ID-level background colour, and an
    id beats any number of classes — a bare `.menuart` rule was silently overridden and the screens
    showed the live 3D world instead of the painting. Match the id. */
 #startmenu.menuart,#setupscreen.menuart{
-  background:linear-gradient(rgba(10,7,4,.84) 0%,rgba(10,7,4,.46) 42%,rgba(10,7,4,.80) 100%), url("../assets/menu-bg.jpg") center/cover no-repeat;
+  background:linear-gradient(rgba(10,7,4,.84) 0%,rgba(10,7,4,.46) 42%,rgba(10,7,4,.70) 100%), url("../assets/menu-bg.jpg") center/cover no-repeat;
 }
 @media (max-width:900px){ /* the 800px encode: a phone never resolves the 1600 */
   #startmenu.menuart,#setupscreen.menuart{
-    background:linear-gradient(rgba(10,7,4,.84) 0%,rgba(10,7,4,.46) 42%,rgba(10,7,4,.80) 100%), url("../assets/menu-bg-sm.jpg") center/cover no-repeat;}
+    background:linear-gradient(rgba(10,7,4,.84) 0%,rgba(10,7,4,.46) 42%,rgba(10,7,4,.70) 100%), url("../assets/menu-bg-sm.jpg") center/cover no-repeat;}
 }
 .gametitle{font-size:clamp(26px,5.6vw,60px) !important;letter-spacing:clamp(2px,.8vw,8px);
   margin:0 0 2px;color:#f2e7c8;text-shadow:0 3px 0 #000,0 0 34px rgba(0,0,0,.9);text-align:center;}
