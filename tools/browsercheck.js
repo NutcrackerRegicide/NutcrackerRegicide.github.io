@@ -3,6 +3,7 @@
    1) all 79 SFX OGGs decode (Sound._state.ready + buf count) on http AND file://
    2) all 6 music tracks (audio/music/age0-5.ogg) load + play through <audio>
    3) an in-page anthem actually starts when a fake live-game state is armed
+   4) v129.3: the menu bed (audio/music/menu.ogg) loads, loops, and arms from renderFrame
    Usage: node tools/browsercheck.js   (run from the project dir) */
 const {chromium}=require("playwright-core");
 const http=require("http"),fs=require("fs"),path=require("path"),ROOT=path.join(__dirname,"..");
@@ -21,15 +22,30 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
     const page=await browser.newPage();
     page.on("pageerror",e=>console.log("  PAGE ERROR ("+label+"): "+e.message));
     await page.goto(url,{waitUntil:"load"});
+    // v129.4 THE GATE, CHECKED BEFORE ANYTHING TOUCHES THE PAGE. The name screen is silent, and
+    // this has to be asserted BEFORE the autoplay-unlock click below — a click at (400,300) on
+    // the name screen is indistinguishable from the player pressing CONTINUE, and would arm the
+    // bed before the check could see it stay off.
+    const quiet=await page.evaluate(async()=>{
+      await new Promise(r=>setTimeout(r,700)); // ~40 real frames of renderFrame with the gate shut
+      const M=Sound._mm;
+      return {screen:NET.screen,armed:NET.wantMenuBed(),playing:M.playing,fade:M.fade,el:!!M.el};
+    });
+    check(label+": the menu bed stays SILENT on the name screen, and no element is even built ("+
+      JSON.stringify(quiet)+")",
+      quiet.screen==="namescreen"&&quiet.armed===false&&quiet.playing===false&&
+      quiet.fade===0&&quiet.el===false);
     await page.mouse.click(400,300); // autoplay unlock
     const ok=await page.waitForFunction(()=>typeof Sound!=="undefined"&&Sound._state.ready===true,null,{timeout:30000}).catch(()=>null);
     const nbuf=await page.evaluate(()=>[Object.keys(Sound._state.buf).length,Object.keys(Sound._defs).length]);
     check(label+": Sound ready & ALL "+nbuf[1]+" SFX decoded ("+nbuf[0]+")",!!ok&&nbuf[0]===nbuf[1]);
     const mus=await page.evaluate(async()=>{
       const out=[];
-      for(let a=0;a<6;a++){
+      // v129.3: "menu" rides the same loader as the six anthems — it is streamed the same way,
+      // from the same folder, and a missing one is just as silent.
+      for(const a of [0,1,2,3,4,5,"menu"]){
         out.push(await new Promise(res=>{
-          const el=new Audio("audio/music/age"+a+".ogg");
+          const el=new Audio("audio/music/"+(a==="menu"?"menu":"age"+a)+".ogg");
           const t=setTimeout(()=>res({a,ok:false,err:"timeout"}),20000);
           el.addEventListener("canplaythrough",async()=>{clearTimeout(t);
             try{await el.play();el.pause();res({a,ok:el.duration>60,dur:Math.round(el.duration)});}
@@ -40,7 +56,34 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
       }
       return out;
     });
-    check(label+": all 6 anthems load & play ("+mus.map(m=>m.a+":"+(m.ok?m.dur+"s":m.err)).join(" · ")+")",mus.every(m=>m.ok));
+    check(label+": all 6 anthems + the menu bed load & play ("+mus.map(m=>m.a+":"+(m.ok?m.dur+"s":m.err)).join(" · ")+")",mus.every(m=>m.ok));
+    // v129.3 THE MENU BED, IN THE REAL FRAME. The point of this check is the WIRING, not the
+    // file: renderFrame must be reaching Sound.menuTick while inMenu, and the element it arms
+    // must be looping menu.ogg. Nothing asserts that headlessly, because renderFrame draws.
+    // v129.4: and it must arm on the SHIELDS, so this presses CONTINUE the way the button does.
+    const gate=await page.evaluate(()=>{
+      NET.uiName();                             // exactly what the CONTINUE button calls
+      return {screen:NET.screen,armed:NET.wantMenuBed()};
+    });
+    // DO NOT sleep a guessed interval here. The fade is driven by the frame's dt and tickBody
+    // CLAMPS dt to 0.05, so 0.9s of fade costs AT LEAST 18 frames — and this container renders
+    // the game at about 2 fps under swiftshader (deskcheck's own on-screen read-out says "2 fps"),
+    // which puts a full fade nine seconds away in wall time. A 3s sleep caught it at 0.28 and
+    // read as a bug in the game. Poll for the state instead; that is frame-rate-independent and
+    // still fails loudly if the fade genuinely stalls.
+    const full=await page.waitForFunction(()=>Sound._mm.fade>=1,null,{timeout:60000}).catch(()=>null);
+    const bed=await page.evaluate(()=>{
+      const MMs=Sound._mm;
+      return {playing:MMs.playing,src:MMs.el?MMs.el.src:"",loop:MMs.el?MMs.el.loop:null,
+        fade:+MMs.fade.toFixed(2),vol:MMs.el?+MMs.el.volume.toFixed(3):-1,
+        expected:+(Sound.getVol("master")*Sound.getVol("music")*Sound.MUSTRIM).toFixed(3),
+        menu:typeof inMenu==="undefined"?null:inMenu};
+    });
+    check(label+": CONTINUE opens the gate — renderFrame arms the looping bed and fades it up ("+
+      JSON.stringify(gate)+" "+JSON.stringify(bed)+")",
+      gate.screen==="startmenu"&&gate.armed===true&&!!full&&
+      bed.playing===true&&/menu\.ogg/.test(bed.src)&&bed.loop===true&&bed.fade===1&&
+      Math.abs(bed.vol-bed.expected)<0.005);
     // arm a fake live game: the tick should pick MYTEAM's age and start the anthem element
     const armed=await page.evaluate(async()=>{
       // assign the game's LEXICAL globals (top-level let/const never land on window)
@@ -61,16 +104,24 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
     // Netlify's free credits — every fresh phone load streams one. tools/music.sh re-encodes them;
     // this guards the NEXT song swap from silently putting it back. Raise MUSIC_BUDGET_MB
     // deliberately if the new tracks genuinely need it.
-    const MUSIC_BUDGET_MB=32;
+    // v129.3: the menu bed joins the tally, and it is the one track that deserves the most
+    // scrutiny — an anthem streams when your age lands, but menu.ogg streams on EVERY launch,
+    // before the player has done anything at all. Keep it small.
+    const MUSIC_BUDGET_MB=32, MENU_BUDGET_MB=3;
     let total=0, rows=[];
-    for(let a=0;a<6;a++){
-      const f=path.join(ROOT,"audio","music","age"+a+".ogg");
+    for(const a of [0,1,2,3,4,5,"menu"]){
+      const stem=(a==="menu")?"menu":"age"+a;
+      const f=path.join(ROOT,"audio","music",stem+".ogg");
       const b=fs.existsSync(f)?fs.statSync(f).size:0;
-      total+=b; rows.push("age"+a+" "+(b/1048576).toFixed(1));
+      total+=b; rows.push(stem+" "+(b/1048576).toFixed(1));
     }
     const mb=total/1048576;
-    check("v123 music budget: the six anthems total "+mb.toFixed(1)+" MB of "+MUSIC_BUDGET_MB+
+    check("v123 music budget: the six anthems + the menu bed total "+mb.toFixed(1)+" MB of "+MUSIC_BUDGET_MB+
       " ("+rows.join(" · ")+")", total>0&&mb<=MUSIC_BUDGET_MB);
+    const mf=path.join(ROOT,"audio","music","menu.ogg");
+    const mbb=(fs.existsSync(mf)?fs.statSync(mf).size:0)/1048576;
+    check("v129.3 menu bed: every launch streams it, so it stays under "+MENU_BUDGET_MB+" MB ("+
+      mbb.toFixed(2)+" MB)", mbb>0&&mbb<=MENU_BUDGET_MB);
   }
   await browser.close();srv.close();
   console.log(fails?fails+" BROWSER FAILURES":"BROWSER CHECK PASSED");

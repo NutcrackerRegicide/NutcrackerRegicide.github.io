@@ -2188,7 +2188,18 @@ NET.uiScreen=function(id){
     const e=document.getElementById(m);
     if(e)e.style.display=(m===id)?"flex":"none";
   }
+  NET.screen=id;
+  // v129.4 THE MUSIC WAITS AT THE GATE. The name screen is deliberately black, quiet and one
+  // question wide; music under it makes it a title card instead of a question. So the bed arms
+  // the first time the player leaves it — the shields are where the game introduces itself.
+  // It LATCHES rather than tracking the screen, so `✎` back to the name box does not cut the
+  // music off mid-phrase; the request was that it not START there, not that it stop.
+  // (A quiet side effect: by the time this arms, CONTINUE has already been pressed, so the
+  // autoplay gesture always exists and the very first play() attempt is the one that takes.)
+  if(id&&id!=="namescreen")NET._bedArmed=true;
 };
+NET._bedArmed=false;
+NET.wantMenuBed=function(){return NET._bedArmed===true;};
 // Leaving the menu for the world has to close ALL of them, not just the one that used to exist.
 // uiHost and applyWorld both hid "#startmenu" by name, and after v128.9 the player is standing on
 // #setupscreen when a hall opens — so that line would have left the setup screen over the game.

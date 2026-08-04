@@ -343,6 +343,57 @@ const Sound=(function(){
     if(S.bus.ambience)S.bus.ambience.gain.value=S.vol.ambience*MU.duck;
   }
 
+  // ---- v129.3 THE MENU BED — audio/music/menu.ogg ----
+  // The three menu screens get their own looping track, and it hands the room over to the age
+  // anthem the moment the war starts.
+  //
+  // WHY IT CANNOT RIDE musTick(). Sound.tick is called from exactly two places: tickBody's
+  // `if(!gameOver)` block and NET.guestFrame. NEITHER runs while inMenu — 09-main returns at
+  // its menu branch several lines before either one. musTick's `!active` case has therefore
+  // never actually executed in a menu; it only ever fires on game over. So the menu bed is
+  // driven from renderFrame, the one function all three frame paths provably call. That is the
+  // same reasoning that moved the objective fade in v128.8, and the same trap (#12) behind it.
+  //
+  // AUTOPLAY. At first launch there has been no user gesture, so play() is refused. Rather than
+  // give up (the anthem's 3-try budget assumes a match is already running, so a gesture has
+  // certainly happened), this retries every MENURETRY_S until it takes — the player is about to
+  // click the dice, the name box or a shield, and the music should come up the instant they do.
+  // A genuinely missing/broken file fires `error`, which sets MM.dead and stops the retries for
+  // good, so a copy without audio/music/ costs nothing.
+  const MUSMENU=MUSDIR+"menu.ogg", MENUFADE_S=0.9, MENURETRY_S=0.6;
+  const MM={el:null,on:false,playing:false,fade:0,dead:false,wait:0};
+  function musMenuVol(){
+    const v=S.vol.master*S.vol.music*MUSTRIM*(S.mute?0:1)*MM.fade;
+    return v<0?0:v>1?1:v;
+  }
+  function musMenuTick(on,dt){
+    MM.on=!!on; dt=dt>0?dt:0;
+    const step=dt/MENUFADE_S;                       // fade in on arrival, out on the way to war
+    if(MM.on){if(MM.fade<1){MM.fade+=step;if(MM.fade>1)MM.fade=1;}}
+    else{if(MM.fade>0){MM.fade-=step;if(MM.fade<0)MM.fade=0;}}
+    if(MM.el){
+      try{MM.el.volume=musMenuVol();}catch(_){}
+      // hold the element until the fade has actually finished, so leaving the menu is a
+      // crossfade under the starting anthem rather than a cut
+      if(!MM.on&&MM.fade<=0&&MM.playing){try{MM.el.pause();}catch(_){}MM.playing=false;}
+    }
+    if(!MM.on||MM.dead||MM.playing)return;
+    if(MM.wait>0){MM.wait-=dt;return;}
+    MM.wait=MENURETRY_S;
+    if(typeof Audio==="undefined")return;           // node smoketest: the state machine still runs
+    try{
+      if(!MM.el){
+        MM.el=new Audio();MM.el.preload="auto";MM.el.loop=true;
+        MM.el.addEventListener("error",()=>{MM.playing=false;MM.dead=true;});
+        MM.el.src=MUSMENU;
+      }
+      MM.el.volume=musMenuVol();
+      MM.playing=true;
+      const p=MM.el.play();
+      if(p&&p.then)p.catch(()=>{MM.playing=false;}); // autoplay refusal — the next tick tries again
+    }catch(_){MM.playing=false;}
+  }
+
   // ---- per-frame ambient driver (called from tickBody + guestFrame beside tickBoardBang) ----
   let _marchT=0,_hoofT=0,_gateT=0;
   function tick(dt){
@@ -417,10 +468,12 @@ const Sound=(function(){
     if(bus==="master"&&S.master)S.master.gain.value=S.mute?0:v;
     else if(S.bus[bus])S.bus[bus].gain.value=(bus==="ambience"?v*MU.duck:v); // v107: the ambience slider respects the music duck
     if((bus==="master"||bus==="music")&&MU.playing&&MU.el)try{MU.el.volume=musVol(MU.fade);}catch(_){} // v107: the anthem follows the sliders live
+    if((bus==="master"||bus==="music")&&MM.el)try{MM.el.volume=musMenuVol();}catch(_){} // v129.3: and so does the menu bed — the Settings shield is IN the menu
     savePrefs();}
   function getVol(bus){return S.vol[bus];}
   function setMute(m){S.mute=!!m;if(S.master)S.master.gain.value=S.mute?0:S.vol.master;
     if(MU.el)try{MU.el.volume=musVol(MU.fade);}catch(_){} // v107: mute silences the anthem too (audio el is outside the graph)
+    if(MM.el)try{MM.el.volume=musMenuVol();}catch(_){} // v129.3: …and the menu bed, same reason
     savePrefs();return S.mute;}
   function toggleMute(){return setMute(!S.mute);}
   function isMuted(){return S.mute;}
@@ -435,13 +488,15 @@ const Sound=(function(){
   }
 
   return {play,tick,resume,startAmbience,stopAmbience,startLoop,stopLoop,
+    menuTick:musMenuTick, // v129.3: driven from renderFrame — see the note above musMenuTick
     setVol,getVol,setMute,toggleMute,isMuted,
     vox,voxChorus,_voxVoice:voxVoice,_voxKeyFor:voxKeyFor, // v109 THE VOICES
     // test surface (headless-pure):
     _defs:DEFS,_groups:GROUPS,_state:S,_decide:decide,_decideKey:decideConcrete,
     _resolve:resolve,_catOf:catOf,_panFor:panFor,_gainForDist:gainForDist,_throttle:THROTTLE,_capped:CAPPED,
     _mus:MU,_musTick:musTick,_musTrackFor:musTrackFor,_musFadeFor:musFadeFor,_musVol:musVol, // v107
-    NEAR,FAR,PANWIDTH,MAXVOICES,MUSFADE_S,MUSDUCK,MUSTRIM};
+    _mm:MM,_musMenuTick:musMenuTick,_musMenuVol:musMenuVol, // v129.3 the menu bed
+    NEAR,FAR,PANWIDTH,MAXVOICES,MUSFADE_S,MUSDUCK,MUSTRIM,MUSMENU,MENUFADE_S,MENURETRY_S};
 })();
 
 // ---- options panel (global — 06-input's O key & M key call these) ----

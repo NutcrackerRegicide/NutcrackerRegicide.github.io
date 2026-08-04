@@ -3376,5 +3376,126 @@ global.__G.setGameOver(false);
   NET.mode=saveMode;
 }
 
+// ================= v129.3: THE MENU BED =================
+// audio/music/menu.ogg loops behind the three menu screens and crossfades out into the age
+// anthem when the war starts. Two things are asserted here and they are different in kind:
+//   1. the FADE + VOLUME arithmetic, which is pure and testable the way musVol already is;
+//   2. the WIRING — that renderFrame really reaches Sound.menuTick, passing the live inMenu
+//      and a real dt. That second one is the whole reason this test exists. Sound.tick is
+//      never called in a menu (tickBody returns first), so a menu track hung off musTick
+//      would be silent forever and every unit test of the fade would still pass. Trap #12.
+{
+  const G=global.__G, A=G.Sound, MM=A._mm;
+  check("v129.3 menu bed: the track is audio/music/menu.ogg",A.MUSMENU==="audio/music/menu.ogg");
+
+  const savedVol={m:A.getVol("master"),mu:A.getVol("music")}, savedMute=A.isMuted();
+  A.setMute(false);A.setVol("master",1.0);A.setVol("music",1.0);
+
+  // ---- the fade, both directions, with clamping ----
+  MM.el=null;MM.on=false;MM.playing=false;MM.fade=0;MM.dead=true;MM.wait=0; // dead → fade only
+  A._musMenuTick(true,0.3);const f1=MM.fade;
+  A._musMenuTick(true,0.3);A._musMenuTick(true,0.3);const f2=MM.fade;
+  A._musMenuTick(true,0.3);const f3=MM.fade;                               // over the top → clamp
+  check("v129.3 menu bed: it fades UP over MENUFADE_S and clamps at 1 ("+
+    f1.toFixed(2)+" → "+f2.toFixed(2)+" → "+f3.toFixed(2)+")",
+    Math.abs(f1-0.3/A.MENUFADE_S)<1e-9&&f2===1&&f3===1);
+  A._musMenuTick(false,0.45);const g1=MM.fade;
+  A._musMenuTick(false,0.45);const g2=MM.fade;
+  A._musMenuTick(false,0.45);const g3=MM.fade;
+  check("v129.3 menu bed: leaving the menu fades DOWN and clamps at 0 ("+
+    g1.toFixed(2)+" → "+g2.toFixed(2)+" → "+g3.toFixed(2)+")",
+    Math.abs(g1-0.5)<1e-9&&g2===0&&g3===0);
+
+  // ---- the volume, on the same trim as the anthems, and silenced by mute ----
+  MM.fade=1;
+  A.setVol("master",0.8);A.setVol("music",0.5);
+  const v1=A._musMenuVol();
+  MM.fade=0.5; const vHalf=A._musMenuVol();
+  MM.fade=1; A.setMute(true); const vMute=A._musMenuVol(); A.setMute(false);
+  check("v129.3 menu bed: volume is master×music×MUSTRIM×fade, and mute kills it",
+    Math.abs(v1-0.8*0.5*A.MUSTRIM)<1e-9&&Math.abs(vHalf-v1*0.5)<1e-9&&vMute===0);
+
+  // ---- v129.4 THE GATE. The bed must not play on the NAME screen — it arms the first time the
+  // player leaves it, and then LATCHES so `✎` back to the name box does not cut the music.
+  const NETm=G.NET, savedScreen=NETm.screen, savedArmed=NETm._bedArmed;
+  NETm._bedArmed=false;
+  NETm.uiScreen("namescreen");
+  const atName=NETm.wantMenuBed();
+  NETm.uiScreen("startmenu");
+  const atShields=NETm.wantMenuBed();
+  NETm.uiScreen("namescreen");
+  const backAtName=NETm.wantMenuBed();
+  check("v129.4 menu bed: silent on the name screen, arms at the shields, and LATCHES ("+
+    atName+" → "+atShields+" → "+backAtName+")",
+    atName===false&&atShields===true&&backAtName===true&&NETm.screen==="namescreen");
+  check("v129.4 menu bed: uiScreen records which screen is up, for anything else that has to know",
+    NETm.MENUS.indexOf(NETm.screen)>=0);
+
+  // ---- THE WIRING. Drive the REAL renderFrame (trap #10) and prove it reached menuTick with
+  // the live inMenu ANDed against the gate, and the frame's own dt — not a constant, and not
+  // some other function. 0.45s is exactly half of MENUFADE_S, so from 0.5 the fade lands on
+  // 1 or 0 and the direction is unambiguous.
+  const menu=G.menuUp();
+  NETm._bedArmed=true;                                     // gate open: inMenu alone decides
+  MM.on=!menu;MM.fade=0.5;MM.dead=true;MM.playing=false;
+  G.renderFrame(0.45);
+  check("v129.4 menu bed: renderFrame drives it, passing the live inMenu ("+menu+") and a real dt"+
+    " (fade 0.50 → "+MM.fade.toFixed(2)+")",
+    MM.on===!!menu&&MM.fade===(menu?1:0));
+  NETm._bedArmed=false;                                    // gate shut: it must be OFF regardless
+  MM.on=true;MM.fade=0.5;
+  G.renderFrame(0.45);
+  check("v129.4 menu bed: with the gate shut renderFrame turns it OFF even if inMenu is true",
+    MM.on===false&&MM.fade===0);
+  NETm._bedArmed=savedArmed;if(savedScreen!==undefined)NETm.screen=savedScreen;
+
+  // ---- the element: loop flag, throttled autoplay retry, and the error→dead stop ----
+  // A synchronous thenable stands in for play()'s promise so the whole test stays in one tick.
+  const REJ={then(){return REJ;},catch(cb){cb(new Error("NotAllowedError"));return REJ;}};
+  const RES={then(cb){if(cb)cb();return RES;},catch(){return RES;}};
+  let tries=0;
+  function FakeAudio(){this.src="";this.loop=false;this.volume=1;this.preload="";this.paused=true;
+    this._h={};
+    this.addEventListener=(k,f)=>{(this._h[k]=this._h[k]||[]).push(f);};
+    this.play=()=>{tries++;if(FakeAudio.refuse)return REJ;this.paused=false;return RES;};
+    this.pause=()=>{this.paused=true;};
+    this.fire=k=>{(this._h[k]||[]).forEach(f=>f());};}
+  const hadAudio=global.Audio; global.Audio=FakeAudio; FakeAudio.refuse=true;
+  MM.el=null;MM.on=false;MM.playing=false;MM.fade=0;MM.dead=false;MM.wait=0;
+
+  A._musMenuTick(true,0.016);                        // first attempt — refused, no gesture yet
+  const el=MM.el, afterFirst={tries,playing:MM.playing,loop:el&&el.loop,src:el&&el.src};
+  for(let i=0;i<30;i++)A._musMenuTick(true,0.016);    // 0.48s — still inside MENURETRY_S
+  const throttled=tries;
+  for(let i=0;i<12;i++)A._musMenuTick(true,0.016);    // …past 0.6s → exactly one more attempt
+  const retried=tries;
+  check("v129.3 menu bed: an autoplay refusal re-arms on a "+A.MENURETRY_S+"s throttle, not every frame"+
+    " (1 → "+throttled+" over 0.48s → "+retried+" past the throttle)",
+    afterFirst.tries===1&&afterFirst.playing===false&&throttled===1&&retried===2);
+  check("v129.3 menu bed: the element loops menu.ogg (a 2:34 bed under an open-ended menu)",
+    afterFirst.loop===true&&afterFirst.src==="audio/music/menu.ogg");
+
+  FakeAudio.refuse=false;                            // the player clicks the dice — it takes
+  for(let i=0;i<45;i++)A._musMenuTick(true,0.016);
+  const playing=MM.playing&&el.paused===false, triesAfter=tries;
+  for(let i=0;i<80;i++)A._musMenuTick(true,0.016);   // and it is NOT restarted every frame
+  check("v129.3 menu bed: once the gesture lands it plays, and is never re-play()ed while playing",
+    playing===true&&tries===triesAfter);
+
+  for(let i=0;i<80;i++)A._musMenuTick(false,0.016);  // 1.28s — past the 0.9s fade
+  check("v129.3 menu bed: it is held through the fade-out, then paused — a crossfade, not a cut",
+    MM.fade===0&&MM.playing===false&&el.paused===true);
+
+  MM.playing=false;MM.wait=0;el.fire("error");       // a copy with no audio/music/ folder
+  const deadTries=tries;
+  for(let i=0;i<200;i++)A._musMenuTick(true,0.016);  // 3.2s of retries that must not happen
+  check("v129.3 menu bed: a missing file marks it dead ONCE and stops retrying forever",
+    MM.dead===true&&tries===deadTries);
+
+  if(hadAudio===undefined)delete global.Audio; else global.Audio=hadAudio;
+  MM.el=null;MM.on=false;MM.playing=false;MM.fade=0;MM.dead=false;MM.wait=0;
+  A.setVol("master",savedVol.m);A.setVol("music",savedVol.mu);A.setMute(savedMute);
+}
+
 console.log(fails?("\n"+fails+" FAILURES"):"\nALL SMOKE TESTS PASSED");
 process.exit(fails?1:0);

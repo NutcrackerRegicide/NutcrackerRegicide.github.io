@@ -705,6 +705,15 @@ function tickObjectiveFade(){
 // camera chase + atmosphere + draw — shared by the host/solo sim and the guest's thin frame
 function renderFrame(dt){
   tickObjectiveFade();
+  // v129.3 THE MENU BED. Same reasoning as the fade above, and the same reason it lives HERE:
+  // Sound.tick never runs while inMenu (tickBody returns at the menu branch below), so the menu
+  // track cannot ride musTick. renderFrame is the one function all three frame paths call.
+  // v129.4: …and it does not play on the NAME screen. NET.wantMenuBed() is the latch — see
+  // NET.uiScreen. The typeof guards keep this honest against an older 10-net.js.
+  if(typeof Sound!=="undefined"&&Sound.menuTick){
+    const bed=inMenu&&(typeof NET==="undefined"||typeof NET.wantMenuBed!=="function"||NET.wantMenuBed());
+    Sound.menuTick(bed,dt);
+  }
   if(inMenu){ // MAIN MENU: a slow cinematic orbit over the sleeping kingdoms
     menuOrbitT+=dt;
     const ma=menuOrbitT*0.045;

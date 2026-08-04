@@ -36,14 +36,17 @@ AC="${MUSIC_AC:-1}"    # channels: 1 mono, 2 stereo
 AR="${MUSIC_AR:-44100}"
 DRY=0; [ "${1:-}" = "--dry" ] && DRY=1
 
-# age -> source file. EDIT THIS when the songs are replaced; nothing else needs to change.
+# track -> source file. EDIT THIS when the songs are replaced; nothing else needs to change.
+# The left column is the OUTPUT STEM, not an index: age0-5 are the anthems, "menu" is the
+# v129.3 main-menu bed that loops behind the three menu screens.
 declare -a MAP=(
-  "0|Stone Age.mp3"
-  "1|Bronze Age Up2.mp3"
-  "2|Iron Age Up2.mp3"
-  "3|Classical Era Age Up.mp3"
-  "4|Medieval Era Age Up.mp3"
-  "5|Enlightenment Era Age Up.mp3"
+  "age0|Stone Age.mp3"
+  "age1|Bronze Age Up2.mp3"
+  "age2|Iron Age Revamped.mp3"          # v129.3: was "Iron Age Up2.mp3"
+  "age3|Classical Era Age Up.mp3"
+  "age4|Medieval Era Age Up.mp3"
+  "age5|Enlightenment Era Age Up.mp3"
+  "menu|Main Menu Music.mp3"            # v129.3: loops on the name / shields / setup screens
 )
 
 command -v ffmpeg >/dev/null || { echo "ffmpeg not found"; exit 1; }
@@ -51,8 +54,8 @@ mkdir -p "$OUT"
 printf "%-32s %9s %9s %8s %7s\n" "track" "was" "now" "saved" "secs"
 before=0; after=0
 for row in "${MAP[@]}"; do
-  age="${row%%|*}"; file="${row#*|}"
-  in="$SRC/$file"; dst="$OUT/age$age.ogg"
+  stem="${row%%|*}"; file="${row#*|}"   # the trailing "# …" notes above are bash comments, not data
+  in="$SRC/$file"; dst="$OUT/$stem.ogg"
   [ -f "$in" ] || { echo "MISSING: $in"; exit 1; }
   old=0; [ -f "$dst" ] && old=$(stat -c%s "$dst")
   if [ "$DRY" = "1" ]; then
