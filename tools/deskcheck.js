@@ -60,7 +60,11 @@ const PORT=8133;                   // NOT 8132 — mobilecheck may be running in
       mode.bar&&!mode.touch&&mode.dbar&&
       !mode.stage&&!mode.pad&&!mode.rail&&!mode.btns&&!mode.grid&&!mode.sticks);
 
-    await page.waitForSelector("#btnsolo",{state:"visible",timeout:8000}).catch(()=>{});
+    // v128.9: the name screen comes first on a fresh profile. CONTINUE accepts the prefilled name.
+  await page.evaluate(()=>{const ns=document.getElementById("namescreen");
+    if(ns&&getComputedStyle(ns).display!=="none")document.getElementById("btnname").click();}).catch(()=>{});
+  await page.waitForTimeout(250);
+  await page.waitForSelector("#btnsolo",{state:"visible",timeout:8000}).catch(()=>{});
     await page.click("#btnsolo").catch(async()=>{
       await page.evaluate(()=>document.getElementById("btnsolo").click()).catch(()=>{});
     });

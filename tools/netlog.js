@@ -259,6 +259,15 @@ for(const gf of guests){
       }
     }
   }
+  // v128.8: which candidate type actually carried the session. `ice-relay` means TURN did the
+  // work; `ice-failed` with no pair at all is the carrier-NAT case — a host on mobile data cannot
+  // accept a direct connection and no amount of STUN changes that.
+  {
+    const ice=gf.events.filter(e=>/^ice-/.test(e.k)).map(e=>e.k.slice(4));
+    if(ice.length)console.log("      ICE: "+[...new Set(ice)].join(", ")+
+      (ice.indexOf("relay")>=0?"   (a TURN relay carried this — expect the extra hop in `ping`)":"")+
+      (ice.indexOf("failed")>=0?"   ⚠ a candidate pair FAILED — see the host-on-cellular note":""));
+  }
   const ev={};gf.events.forEach(e=>ev[e.k]=(ev[e.k]||0)+1);
   const kinds=Object.keys(ev).sort();
   if(kinds.length)console.log("      events: "+kinds.map(k=>k+" ×"+ev[k]).join(" · "));

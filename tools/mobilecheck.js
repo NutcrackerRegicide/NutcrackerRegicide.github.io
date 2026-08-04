@@ -76,6 +76,12 @@ const DEVICES=[
     // ---- v124.1: the MAIN MENU has to fit the stage, and every overlay has to out-rank it ----
     const menu=await page.evaluate(async()=>{
       const wait=ms=>new Promise(r=>setTimeout(r,ms));
+      // v128.9: a fresh profile has no stored name, so the FIRST screen is the name screen —
+      // that is the point of it. Walk through it the way a new player does before measuring the
+      // shields, or every measurement below is taken against a display:none element and reads 0.
+      const nsFirst=document.getElementById("namescreen");
+      const sawNameFirst=getComputedStyle(nsFirst).display!=="none";
+      if(sawNameFirst){document.getElementById("btnname").click(); await wait(250);}
       const sm=document.getElementById("startmenu");
       const fits=()=>sm.scrollHeight<=sm.offsetHeight+2;
       const scrolls=getComputedStyle(sm).overflowY==="auto"||
@@ -84,13 +90,46 @@ const DEVICES=[
       // at rest NOTHING may be clipped: John lost the title off the top and the version off the
       // bottom, because .overlay centres its content and never scrolled
       const atRest=fits()&&h1.offsetTop>=0&&h1.offsetTop<sm.offsetHeight;
-      // and once every disclosure is open it must at least be REACHABLE by scrolling
-      document.getElementById("btnfriends").click(); await wait(200);
-      const friendsFit=fits();
+      // v128.9 THE THREE-SCREEN MENU. The disclosure this used to open (#btnfriends → #friendsrow)
+      // is gone: host and join now live on their own screen, reached from the CO-OP or PVP shield.
+      // The QUESTION is unchanged — can a phone still see and reach everything — so the checks are
+      // the same shape, driven through the new controls.
+      const ss=document.getElementById("setupscreen");
+      // TRAP #1, and it caught this test on its first run: #tstage is rotate(90deg), so
+      // getBoundingClientRect() inside it returns the TRANSPOSED box — width reads as height and
+      // "left" runs down the screen. Layout questions are answered in LAYOUT space with offset*.
+      // (Hit-testing is the exception and still uses the rect — see shieldTop below, because
+      // elementFromPoint takes viewport coordinates, which is what the rect gives.)
+      const shieldBox=id=>{const e=document.getElementById(id);
+        return {x:e.offsetLeft,y:e.offsetTop,w:e.offsetWidth,h:e.offsetHeight,
+                r:e.offsetLeft+e.offsetWidth,b:e.offsetTop+e.offsetHeight};};
+      const shSolo=shieldBox("btnsolo"),shCoop=shieldBox("btncoop"),shPvp=shieldBox("btnpvp");
+      const vw=sm.offsetWidth,vh=sm.offsetHeight;
+      const shieldsFit=[shSolo,shCoop,shPvp].every(b=>b.w>28&&b.h>28&&b.x>=-2&&b.r<=vw+2&&b.y>=-2&&b.b<=vh+2);
+      const shieldsRow=shSolo.r<=shCoop.x+2&&shCoop.r<=shPvp.x+2; // left → middle → right, no wrap
+      const shieldDbg=JSON.stringify({vw,vh,solo:shSolo,pvp:shPvp,
+        smScroll:sm.scrollHeight,smBox:sm.offsetHeight});
+      // a shield must be the thing under its own middle — nothing may sit over it
+      // HIT-TESTING is the one question asked in VIEWPORT space, so this one legitimately uses
+      // the rect — elementFromPoint takes viewport coordinates, and inside the rotated stage the
+      // rect is exactly what maps to them.
+      let hitWho="";
+      const shieldTop=(()=>{const r2=document.getElementById("btnpvp").getBoundingClientRect();
+        const px=Math.round(r2.left+r2.width/2),py=Math.round(r2.top+r2.height/2);
+        const hit=document.elementFromPoint(px,py);
+        hitWho=hit?((hit.id||hit.tagName)+"."+(hit.className&&hit.className.baseVal!==undefined?hit.className.baseVal:hit.className||"")).slice(0,40)+
+          " @"+px+","+py:"nothing @"+px+","+py;
+        return !!hit&&document.getElementById("btnpvp").contains(hit);})();
+      // PVP → screen 3, then open both disclosures on it
+      document.getElementById("btnpvp").click(); await wait(220);
+      const onSetup=getComputedStyle(ss).display!=="none"&&getComputedStyle(sm).display==="none";
       document.getElementById("btnhost").click(); await wait(200);
       document.getElementById("btnjoin").click(); await wait(260);
-      const reachable=scrolls;                       // expanded rows may overflow, but must scroll
-      // AUDIO OPTIONS must land ON TOP of the menu, not behind it
+      const setupScrolls=getComputedStyle(ss).overflowY==="auto"||getComputedStyle(ss).overflowY==="scroll";
+      const reachable=scrolls&&setupScrolls;         // expanded rows may overflow, but must scroll
+      document.getElementById("btnsetupback").click(); await wait(200);
+      const backHome=getComputedStyle(sm).display!=="none"&&getComputedStyle(ss).display==="none";
+      // SETTINGS must land ON TOP of the menu, not behind it
       document.getElementById("btnoptions").click(); await wait(260);
       const os=document.getElementById("optionsscreen"), box=document.getElementById("optbox");
       const r=box.getBoundingClientRect();
@@ -98,29 +137,43 @@ const DEVICES=[
       const audioOnTop=getComputedStyle(os).display!=="none"&&!!hit&&os.contains(hit)&&
         (+getComputedStyle(os).zIndex>+getComputedStyle(sm).zIndex);
       document.getElementById("btnoptback").click(); await wait(200);
-      // the dice rolls a NEW name in John's format
+      // the dice rolls a NEW name in John's format — driven through the REAL flow now that it
+      // lives in the name box: ✎ opens screen 1, the die rolls the FIELD and the stored name
+      // together, CONTINUE carries it back. A die that rolled only one of the two would let the
+      // box silently overwrite the roll on the way out.
       const before=document.getElementById("myname").textContent;
+      document.getElementById("btnrename").click(); await wait(200);
+      const nameUp=getComputedStyle(document.getElementById("namescreen")).display!=="none";
       let changed=false;
       for(let i=0;i<6&&!changed;i++){
         document.getElementById("btnreroll").click(); await wait(90);
         changed=document.getElementById("myname").textContent!==before;
       }
+      const boxVal=document.getElementById("playername").value;
       const after=document.getElementById("myname").textContent;
-      // put the menu back the way we found it
-      document.getElementById("btnjoin").click();
-      const hr=document.getElementById("hostrow"); if(hr)hr.style.display="none";
-      const jr=document.getElementById("joinrow"); if(jr)jr.style.display="none";
-      await wait(150);
-      return {atRest,friendsFit,reachable,audioOnTop,changed,shaped:/ the /.test(after),after};
+      const boxAgrees=boxVal===after;
+      document.getElementById("btnname").click(); await wait(200);   // CONTINUE, back to the shields
+      const carried=document.getElementById("myname").textContent===after&&
+        getComputedStyle(sm).display!=="none";
+      return {sawNameFirst,atRest,shieldsFit,shieldsRow,shieldTop,hitWho,shieldDbg,onSetup,reachable,backHome,audioOnTop,
+        nameUp,changed,boxAgrees,carried,shaped:/ the /.test(after),after};
     });
-    check(dev.name+": v124.1 menu — nothing is clipped at rest and PLAY WITH FRIENDS still fits",
-      menu.atRest&&menu.friendsFit);
-    check(dev.name+": v124.1 menu — every disclosure open, the menu is still reachable by scroll",
+    check(dev.name+": v128.9 name — a first-time player meets the name screen before anything else",menu.sawNameFirst);
+    check(dev.name+": v128.9 menu — nothing is clipped at rest ("+menu.shieldDbg+")",menu.atRest);
+    check(dev.name+": v128.9 shields — all three fit on screen, left→middle→right, none wrapped ("+menu.shieldDbg+")",
+      menu.shieldsFit&&menu.shieldsRow);
+    check(dev.name+": v128.9 shields — a shield is the topmost thing at its own centre (hit: "+menu.hitWho+")",
+      menu.shieldTop);
+    check(dev.name+": v128.9 menu — PVP opens the setup screen, BACK returns to the shields",
+      menu.onSetup&&menu.backHome);
+    check(dev.name+": v128.9 menu — with host AND join open, both screens are still reachable by scroll",
       menu.reachable);
-    check(dev.name+": v124.1 menu — AUDIO OPTIONS opens ON TOP of the start menu, not behind it",
+    check(dev.name+": v128.9 menu — SETTINGS opens ON TOP of the start menu, not behind it",
       menu.audioOnTop);
-    check(dev.name+": v124.1 menu — the dice rolls a fresh <Name> the <Epithet> ("+menu.after+")",
-      menu.changed&&menu.shaped);
+    check(dev.name+": v128.9 name — ✎ opens the name screen and the die rolls a fresh <Name> the <Epithet> ("+menu.after+")",
+      menu.nameUp&&menu.changed&&menu.shaped);
+    check(dev.name+": v128.9 name — the die rolls the BOX too, and CONTINUE carries it back to the shields",
+      menu.boxAgrees&&menu.carried);
 
     // start a solo battle through the real menu.
     // v124: the name screen is GONE — you are auto-titled ("Alexander the Great") and land straight
@@ -534,9 +587,30 @@ const DEVICES=[
       // v124.7: use a line the ALLOW-list actually promotes. Routine AI chatter deliberately stays
       // in the feed now, so testing the move with "Red riders wheel toward..." tested the old rule.
       msg("⚑ Blue advances to the BRONZE AGE!","gold");
-      await wait(260);
-      const noDup=feed.children.length===0&&
-        /BRONZE/.test(document.getElementById("tbanner").textContent);
+      // v128.8: POLL FOR THE OUTCOME, AND SAY WHAT HAPPENED. This was a flat `await wait(260)`
+      // reporting a single boolean, and it is the flakiest assertion in the suite — it failed in
+      // most runs of one session and passed in the next on identical code, which is how a test
+      // stops being evidence. Promotion is a MutationObserver on #feed, so it is asynchronous;
+      // waiting for the RESULT with a ceiling is strictly better than betting on a fixed delay.
+      // Be honest about scope: this makes the failure DIAGNOSABLE, it does not prove the cause.
+      // The happy path lands in ~60ms, so a future failure at the 1500ms ceiling means the line
+      // genuinely never reached the banner — msgOnce swallowing a duplicate from an earlier block
+      // is the first suspect, since these blocks share one page and inherit each other's state.
+      const tb=document.getElementById("tbanner");
+      let waited=0;
+      // BOTH halves, not one. The first version of this poll waited only for the banner and then
+      // asserted the feed was empty in the same breath — so it caught the promotion mid-flight,
+      // with the line already copied up and not yet removed below, and reported `feed=1` on a
+      // system that was working correctly. Promotion is two DOM operations; wait for both.
+      const done=()=>feed.children.length===0&&/BRONZE/.test(tb.textContent||"");
+      while(waited<1500&&!done()){await wait(60);waited+=60;}
+      const feedN=feed.children.length, bannerTxt=(tb.textContent||"").slice(0,40);
+      // …and report BOTH halves, because "noDup" false never said which one broke: the line
+      // failing to reach the banner and the line being left behind in the feed are different bugs
+      // with different causes, and the label named neither.
+      const noDup=feedN===0&&/BRONZE/.test(bannerTxt);
+      const noDupWhy=noDup?("ok in "+waited+"ms"):
+        ("feed="+feedN+" banner=\""+bannerTxt+"\" after "+waited+"ms");
       // 3. the picker's CLOSE must be the TOPMOST thing at its own centre. It shipped inside
       //    #touchpad (z-index:30 => its own stacking context) so its z-index:57 could not climb
       //    past the menu's 52 — it rendered underneath and John could not leave the build menu.
@@ -715,7 +789,7 @@ const DEVICES=[
       const topBoxes={bar:barB,ttop:topB,map:mapB,swallowed,spansStage,
         hits:ov(topB,mapB)?"ttop/map":""};
       const barOnStage=barB[0]+barB[2]<=document.getElementById("tstage").offsetWidth+2;
-      return {oneRow,holds,noDup,reachable,escaped,drew,camMoved,fill,
+      return {oneRow,holds,noDup,noDupWhy,reachable,escaped,drew,camMoved,fill,
         kingsIn,kingsInside,crownsWhole,crownBoxes,fatRes,fatWide,gRight,topClean,barOnStage,topBoxes,
         hp0,hp1,hurt,refilled,glyphs,noBar,clipped,
         atBottom,stacked,feedTop,zoneClears,ageOK,quiet,mineTicking,
@@ -726,8 +800,8 @@ const DEVICES=[
     });
     check(dev.name+": v124.1 HUD — resources, age, roster and carry are ONE strip on one row",
       v1241.oneRow&&v1241.holds);
-    check(dev.name+": v124.1 feed — a promoted line is MOVED to the banner, never duplicated",
-      v1241.noDup);
+    check(dev.name+": v124.1 feed — a promoted line is MOVED to the banner, never duplicated ("+
+      v1241.noDupWhy+")",v1241.noDup);
     check(dev.name+": v124.2 HUD — the king bars live IN the strip and are not clipped by it ("+
       v1241.kingsIn+"/"+v1241.kingsInside+")",v1241.kingsIn&&v1241.kingsInside);
     check(dev.name+": v124.13a HUD — a five-digit treasury does NOT clip a crown out of the strip "+

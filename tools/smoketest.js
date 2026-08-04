@@ -53,7 +53,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "ACTIONS,availableActions,moveVec,readMove,updateRoster,mkName,NAMES,EPITHETS,projectiles,"+
   "aimPointFor,convergeFrom,setPlayerDraw:v=>{player._drawT=v;},"+
   // v128.5: lag compensation — the rewind context, the projectile step and THREE itself
-  "updateProjectiles,setRewind,segDist2,rwDist,dist2,THREE,"+
+  "updateProjectiles,setRewind,segDist2,rwDist,dist2,THREE,renderFrame,tickObjectiveFade,"+
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   "UATLAS,mergeUnitBody,texturedMat,isSharedMat};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
@@ -2097,6 +2097,64 @@ global.__G.setGameOver(false);
       gu.remote=null; gu.garrison=null;
     }
   }
+  // ---- v128.7: THE DEPLOY ACTUALLY REACHES THE DEVICE ----
+  // This file has now shipped stale code to a real phone once (v128.2, an unbumped VERSION) and
+  // a stale DOCUMENT to a real desktop once (v128.6 — John's desktop reported v128.5 while his
+  // phone reported v128.6, because "network-first" was a bare fetch() that the browser answered
+  // from its own HTTP cache). Both were invisible failures that cost a session each. Neither is
+  // detectable from inside the game, so assert it from the source text.
+  {
+    const swSrc=fs.readFileSync(path.join(ROOT,"sw.js"),"utf8");
+    const htmlSrc=fs.readFileSync(path.join(ROOT,"index.html"),"utf8");
+    const swV=(swSrc.match(/const VERSION="([^"]+)"/)||[])[1];
+    const pageV=((htmlSrc.match(/class="verstamp">([^<]+)</)||[])[1]||"").trim().split(/\s+—\s+/)[0];
+    // THE v128.2 GUARD. The cache is keyed on VERSION and every old cache is deleted on activate,
+    // so a deploy that forgets to bump it serves the previous build's js/ out of cache for ever.
+    // The verstamp is the number a human reads off the menu; if the two disagree, the diagnostic
+    // everyone trusts is lying about which build is running.
+    check("v128.7 deploy: sw.js VERSION matches the menu verstamp ("+swV+" vs "+pageV+")",
+      !!swV&&!!pageV&&swV===pageV);
+    // THE v128.6 GUARD. A bare fetch() consults the browser's HTTP cache and may answer without
+    // ever reaching the origin, which makes "network-first" a promise the code does not keep.
+    const netFirst=swSrc.slice(swSrc.indexOf("if(isDoc||isCode)"),swSrc.indexOf("CACHE-FIRST for the rest"));
+    check("v128.7 deploy: the network-first branch REVALIDATES (fetch with cache:no-cache), it does not just ask nicely",
+      /fetch\(req,\s*\{\s*cache:\s*["']no-cache["']\s*\}\)/.test(netFirst));
+    check("v128.7 deploy: the cache-first branch is NOT forced to revalidate (that is the half that must stay cheap)",
+      /fetch\(req\)/.test(swSrc.slice(swSrc.indexOf("CACHE-FIRST for the rest"))));
+    check("v128.7 deploy: sw.js itself is registered with updateViaCache:none",
+      /register\(\s*["']sw\.js["']\s*,\s*\{[^}]*updateViaCache\s*:\s*["']none["']/.test(htmlSrc));
+    // the automatic second load, and the two guards that stop it looping or bouncing a first visit
+    check("v128.7 deploy: a new worker taking over reloads the page once, automatically",
+      /controllerchange/.test(htmlSrc)&&/location\.reload\(\)/.test(htmlSrc));
+    check("v128.7 deploy: …but never on a FIRST visit, and never twice (both guards present)",
+      /hadController/.test(htmlSrc)&&/swReloaded/.test(htmlSrc)&&
+      /if\(!hadController\|\|swReloaded\)return;/.test(htmlSrc));
+    // and never mid-match: there is no host migration, so a host reloading ends the game for
+    // everyone in it. The TDZ guard matters too — `typeof` on an uninitialised top-level `let`
+    // THROWS, and an exception in this handler would take the reload with it.
+    check("v128.7 deploy: the auto-reload refuses to fire during a live match",
+      /inMenu/.test(htmlSrc)&&/inGame/.test(htmlSrc)&&/try\{\s*inGame=/.test(htmlSrc));
+    const shell=(swSrc.match(/const SHELL=\[([\s\S]*?)\];/)||["",""])[1];
+    const shellPaths=[...shell.matchAll(/"\.\/([^"]*)"/g)].map(m=>m[1]).filter(Boolean);
+    // A TYPO IN THE SHELL IS INVISIBLE. install() deliberately swallows a 404 per entry so one
+    // bad path cannot disable the whole worker — which also means a path that drifts out of step
+    // with the repo silently stops being precached, for ever, with no symptom but a slow launch.
+    const dead=shellPaths.filter(p=>!fs.existsSync(path.join(ROOT,p)));
+    check("v128.7 deploy: every SHELL entry resolves to a real file ("+
+      (dead.length?dead.join(", "):shellPaths.length+" checked")+") — install() swallows 404s, so a typo here is silent",
+      dead.length===0);
+    // the 14 game scripts are what "boot" means; audio-data.js is 3.9 MB of sound and is
+    // deliberately left to be fetched on demand, so it is excluded from this by name
+    const tags=[...htmlSrc.matchAll(/<script src="(js\/[^"]+)"/g)].map(m=>m[1])
+      .filter(t=>!/audio-data\.js$/.test(t));
+    const missing=tags.filter(t=>shell.indexOf(t)<0);
+    check("v128.7 deploy: every boot script the page loads is precached in the SHELL ("+
+      (missing.length?missing.join(", "):tags.length+" checked")+")",missing.length===0&&tags.length>=14);
+    // …and the one script that is NOT precached must be on the cheap path, not revalidated on
+    // every load — it is a megabyte-class file that changes about once a year
+    check("v128.7 deploy: the 3.9 MB audio blob is cache-first, not revalidated on every load",
+      /audio-data\.js/.test(swSrc.slice(swSrc.indexOf("const isCode"),swSrc.indexOf("if(isDoc||isCode)"))));
+  }
   // ---- v128.6: THE UNIT DRAW BUDGET ----
   // The tree budget (v114) asserts a tree is ONE mesh and has caught real regressions twice.
   // This is the same guard for characters. Units were 86% of the scene's draw calls at 22.8-33.4
@@ -3261,6 +3319,36 @@ global.__G.setGameOver(false);
   const guestLeak=GUEST_MUST_NOT.filter(d=>orig[d]&&hits[d].guest>0);
   check("v127 wiring: the guest frame runs NO host-authoritative driver"+
     (guestLeak.length?(" — LEAKED: "+guestLeak.join(", ")):""),spied>0&&guestLeak.length===0);
+}
+
+// ---- v128.8: THE OBJECTIVE RIBBON LEAVES ON A GUEST TOO ----
+// Field report: "⚔ Slay the enemy King before yours falls" never went away, as a guest, on both
+// desktop and mobile. Its fade was inside tickBody's `if(!gameOver)` block, which tickBody
+// returns before reaching on a guest — trap #12, the same shape as the board "!" that was
+// invisible to guests for 27 versions. It lives in renderFrame now, which every frame path calls.
+// This test DRIVES THE REAL FRAME in guest mode rather than calling the fader by hand, because a
+// test that reaches past the entry point cannot see a missing call site.
+{
+  const G=global.__G, NET=G.NET;
+  const el=global.document.getElementById("objective");
+  const saveMode=NET.mode;
+  delete window._objFaded; delete window._objAt; el.style.opacity=""; el.style.display="";
+  NET.mode="guest";
+  const before=window._objFaded;
+  G.tick(1/30);                                     // one guest frame: starts the clock, no fade
+  const armedNotFired=!window._objFaded&&typeof window._objAt==="number";
+  // 20 seconds of WALL time — the harness's synthetic clock advances inside getDelta
+  for(let i=0;i<700&&!window._objFaded;i++)G.tick(1/30);
+  check("v128.8 objective: the ribbon is still up on a guest's first frame (it must be READ before it goes)",
+    !before&&armedNotFired);
+  check("v128.8 objective: …and a GUEST frame fades it — the bug, driven through the real entry point",
+    window._objFaded===true&&el.style.opacity==="0");
+  // and it must be wall time, not the match clock: a guest inherits T from the host's snapshots,
+  // so a late joiner arrives with T in the hundreds and would never see the banner at all
+  check("v128.8 objective: the delay is measured in WALL time, so a guest joining an old match still sees it",
+    /window\._objAt/.test(String(G.renderFrame||"")) ||
+    /_objAt/.test(require("fs").readFileSync(require("path").join(ROOT,"js/09-main.js"),"utf8")));
+  NET.mode=saveMode;
 }
 
 console.log(fails?("\n"+fails+" FAILURES"):"\nALL SMOKE TESTS PASSED");

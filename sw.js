@@ -28,7 +28,7 @@
    If this ever misbehaves, unregistering it in devtools returns the site to plain HTTP loading —
    nothing in the game depends on it being there.                                              */
 
-const VERSION="v128.6";
+const VERSION="v129";
 const CACHE="regicide-"+VERSION;
 
 // The shell: enough to boot and show something. Deliberately NOT the whole 29 MB — a first visit
@@ -85,14 +85,31 @@ self.addEventListener("fetch",e=>{
   // still answers when the network is gone, so offline play is unaffected.
   // Cache-first stays where it earns its keep: libs/ and assets/ — the megabytes that only ever
   // change on a real version bump.
-  const isCode=url.pathname.includes("/js/")||url.pathname.includes("/css/");
+  // v128.7: …with one exception, and it is the one this rule was never written for.
+  // js/audio-data.js is 3.9 MB of base64 audio that changes about once a year. It is in js/ for
+  // historical reasons only — by the policy stated above it belongs with libs/ and assets/, "the
+  // megabytes that only ever change on a real version bump". Network-first was making a phone
+  // revalidate it on every single load; cache-first serves it instantly and refreshes it when
+  // VERSION changes, which is exactly the contract the rest of the megabytes get.
+  const isCode=(url.pathname.includes("/js/")||url.pathname.includes("/css/"))
+               &&!url.pathname.endsWith("/audio-data.js");
 
   if(isDoc||isCode){
     // NETWORK-FIRST for anything that names the build. A cached index.html is how a player ends up
     // running last week's PROTO against today's host and being told they are the wrong version.
     e.respondWith((async()=>{
       try{
-        const fresh=await fetch(req);
+        // v128.7 "NETWORK-FIRST" WAS NOT REACHING THE NETWORK. A bare fetch() uses the default
+        // cache mode, which consults the browser's own HTTP cache and may answer from it WITHOUT
+        // revalidating for as long as the response is fresh — and GitHub Pages ships HTML with a
+        // max-age. So the worker faithfully asked for index.html, the browser answered out of its
+        // own cache, and the page reported a version that had been superseded ten minutes ago.
+        // v128.3's comment already describes the behaviour we want — "GitHub Pages sends ETags,
+        // so in the common case this is a conditional request that comes back 304" — but a plain
+        // fetch() never guarantees the request is made. `no-cache` does: it always revalidates
+        // with the origin, and still takes the cheap 304 when nothing changed.
+        // Symptom this cost: John's desktop sat on v128.5 while his phone showed v128.6.
+        const fresh=await fetch(req,{cache:"no-cache"});
         // only cache a REAL answer: a 404 or a 5xx stored here would be served back as though it
         // were the file, and the game would boot into a wall of missing-function errors.
         if(fresh&&fresh.ok){const c=await caches.open(CACHE); c.put(req,fresh.clone());}

@@ -17,11 +17,42 @@
      run from a local file as well as from Pages. -->
 <script>
 if("serviceWorker" in navigator && location.protocol.startsWith("http")){
+  // v128.7: was this page loaded by an EXISTING worker? Sampled before registration, because it
+  // is the difference between "a new build just took over" and "the very first worker just
+  // claimed a page that had none" — and only the first of those deserves a reload.
+  const hadController=!!navigator.serviceWorker.controller;
+  let swReloaded=false;
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{
+    // THE SECOND LOAD, AUTOMATED. skipWaiting + clients.claim mean a new worker takes over the
+    // moment it installs — but this page was already served by the OLD one, so the version on
+    // screen is the version that just got replaced. That is why the rule was "reload twice", and
+    // why John's desktop reported v128.5 while his phone reported v128.6. Reload once, guarded
+    // both ways so a first-ever visit does not bounce and a repeat event cannot loop.
+    if(!hadController||swReloaded)return;
+    // …and NEVER mid-match. If the host reloads, the match ends for everyone in it — there is no
+    // host migration. A worker can take over at any moment the browser decides to check sw.js, so
+    // this has to be checked at fire time, not assumed. `inMenu` is a top-level `let` in
+    // 00-data.js: readable from here once that script has run, and in the temporal dead zone
+    // before it — where even `typeof` throws — hence the try/catch.
+    let inGame=false;
+    try{ inGame=(typeof inMenu!=="undefined"&&inMenu===false); }catch(_){ inGame=false; }
+    if(inGame){
+      console.log("[sw] new build ready — holding until this match ends");
+      try{ msg("⚑ A new version is ready — reload when this match ends.","gold"); }catch(_){}
+      return; // deliberately does NOT latch swReloaded: take the next chance instead
+    }
+    swReloaded=true;
+    console.log("[sw] new build took over — reloading once");
+    location.reload();
+  });
   addEventListener("load",()=>{
-    navigator.serviceWorker.register("sw.js").then(reg=>{
+    // updateViaCache:"none" — never let the HTTP cache answer for sw.js itself. Modern browsers
+    // mostly bypass it already; saying so explicitly costs nothing and removes the last place a
+    // stale copy can hide.
+    navigator.serviceWorker.register("sw.js",{updateViaCache:"none"}).then(reg=>{
       console.log("[sw] registered",reg.scope);
-      // a new deploy should not need a second manual reload to take effect
       reg.addEventListener("updatefound",()=>console.log("[sw] update downloading"));
+      reg.update().catch(()=>{}); // ask on every load, rather than on the browser's own schedule
     }).catch(e=>console.warn("[sw] register failed:",e&&e.message));
   });
 }
@@ -109,52 +140,74 @@ if("serviceWorker" in navigator && location.protocol.startsWith("http")){
 <div id="netstatus" class="panel"><button id="netmin" type="button" aria-label="Collapse the connection panel">✕</button><div id="netmsg"></div><span id="netchip">⚑</span></div>
 <div id="scoreboard" class="panel"></div>
 
+<!-- ============================ SCREEN 1 — THE NAME ============================
+     Black. One question. The box arrives already holding a name in the game's own
+     <Name> the <Epithet> style, so a stranger can press CONTINUE without inventing
+     anything, and the die rerolls it in place. -->
 <div class="overlay" id="namescreen">
-  <h1>REGICIDE <span class="pvp">PVP</span></h1>
-  <p class="tagline">Declare yourself, warrior — this name rides into every battle</p>
+  <p class="nameask">What's your name, Warrior?</p>
   <div id="namerow">
-    <input id="playername" maxlength="14" placeholder="your name">
-    <button id="btnname">CONTINUE ⚔</button>
+    <input id="playername" maxlength="28" placeholder="your name" autocomplete="off" spellcheck="false">
+    <button id="btnreroll" type="button" title="roll a new name" aria-label="Roll a new name">🎲</button>
   </div>
+  <button id="btnname">CONTINUE ⚔</button>
 </div>
 
-<div class="overlay" id="startmenu" style="display:none">
-  <h1>REGICIDE <span class="pvp">PVP</span></h1>
-  <p class="tagline">50v50 medieval war · every soldier is a player · slay the enemy King</p>
-  <!-- v124: PLAY dominates. The old menu opened on a three-way choice between SOLO, HOST and JOIN
-       before a stranger had seen a single frame of the game. The solo code path is untouched —
-       only the CHOICE is gone: hosting depends on the public PeerJS broker, so making it the way
-       to play alone would mean no offline play and a dead game whenever that broker is down. -->
-  <div class="startbtns">
-    <button id="btnsolo" class="playbtn">⚔ PLAY</button>
-    <div class="optline" id="solodiff">ENEMY AI
-      <button class="pick on" id="sdEasy">🌱 EASY</button>
-      <button class="pick" id="sdHard">🔥 HARD</button>
-    </div>
-    <button id="btnfriends" class="howbtn">⚑ PLAY WITH FRIENDS</button>
-    <div id="friendsrow" style="display:none">
-      <button id="btnhost">⚑ HOST — open your own hall</button>
-      <button id="btnjoin">🛡 JOIN — browse halls or enter a code</button>
-    </div>
-    <div id="whoami">You fight as <b id="myname">—</b>
-      <button id="btnreroll" class="renamebtn" title="roll a new name">🎲</button>
-      <button id="btnrename" class="renamebtn" title="type your own">✎</button></div>
-    <button id="btnhow" class="howbtn">📜 HOW TO PLAY</button>
-    <button id="btnoptions" class="howbtn">⚙ AUDIO OPTIONS</button>
+<!-- ============================ SCREEN 2 — THE SHIELDS ==========================
+     Three shields, one decision. SOLO drops you straight into the war; CO-OP and PVP
+     both need a hall, so they go on to screen 3.
+     #startmenu keeps its id, its <h1> and its z-index below #optionsscreen (70) —
+     mobilecheck asserts all three, and the options overlay opening UNDER the menu was a
+     real shipped bug (see the note by #optionsscreen in style.css). -->
+<div class="overlay menuart" id="startmenu" style="display:none">
+  <h1 class="gametitle">NUTCRACKER <span class="pvp">REGICIDE</span></h1>
+  <div class="undertitle">
+    <button id="btnhow" class="linkbtn">📜 HOW TO PLAY</button>
+    <button id="btnoptions" class="linkbtn">⚙ SETTINGS</button>
+  </div>
+  <div class="shields">
+    <button id="btnsolo" class="shield sh-solo" type="button">
+      <svg viewBox="0 0 100 118" aria-hidden="true"><path d="M50 3 L95 17 Q95 74 50 115 Q5 74 5 17 Z"/></svg>
+      <span class="shlabel">SOLO</span><span class="shsub">alone vs the AI</span>
+    </button>
+    <button id="btncoop" class="shield sh-coop" type="button">
+      <svg viewBox="0 0 100 118" aria-hidden="true"><path d="M50 3 L95 17 Q95 74 50 115 Q5 74 5 17 Z"/></svg>
+      <span class="shlabel">CO-OP</span><span class="shsub">friends vs the AI</span>
+    </button>
+    <button id="btnpvp" class="shield sh-pvp" type="button">
+      <svg viewBox="0 0 100 118" aria-hidden="true"><path d="M50 3 L95 17 Q95 74 50 115 Q5 74 5 17 Z"/></svg>
+      <span class="shlabel">PVP</span><span class="shsub">crown vs crown</span>
+    </button>
+  </div>
+  <div class="optline" id="solodiff">ENEMY AI
+    <button class="pick on" id="sdEasy" type="button">🌱 EASY</button>
+    <button class="pick" id="sdHard" type="button">🔥 HARD</button>
+  </div>
+  <div id="whoami">You fight as <b id="myname">—</b>
+    <button id="btnrename" class="renamebtn" type="button" title="change your name">✎</button></div>
+  <p class="verstamp">v129 — THE KING IN THE MIDDLE</p>
+</div>
+
+<!-- ====================== SCREEN 3 — HOST, JOIN, THE HALL =======================
+     Only reached from CO-OP or PVP. Every id below is the one wireMenu already binds
+     (10-net.js), so the host/join/hall logic is untouched — this is a relayout, not a
+     rewrite of the netcode's entry points. -->
+<div class="overlay menuart" id="setupscreen" style="display:none">
+  <button id="btnsetupback" class="backbtn" type="button">‹ BACK</button>
+  <h2 id="setuptitle">PVP</h2>
+  <div class="setupsplit">
+    <button id="btnhost" class="bigpick" type="button">⚑ HOST<small>open your own hall</small></button>
+    <button id="btnjoin" class="bigpick" type="button">🛡 JOIN<small>browse halls or enter a code</small></button>
   </div>
   <div id="hostrow">
-    <div class="optline">MODE
-      <button class="pick on" id="hmPvp">⚔ PvP</button>
-      <button class="pick" id="hmCoop">🤝 CO-OP vs AI</button>
-    </div>
-    <div class="optline" id="hdiffline" style="display:none">ENEMY AI
-      <button class="pick on" id="hdEasy">🌱 EASY</button>
-      <button class="pick" id="hdHard">🔥 HARD</button>
-    </div>
     <div class="optline">HALL
-      <button class="pick on" id="hvPub">🌐 PUBLIC</button>
-      <button class="pick" id="hvPriv">🔒 PRIVATE</button>
+      <button class="pick on" id="hvPub" type="button">🌐 PUBLIC</button>
+      <button class="pick" id="hvPriv" type="button">🔒 PRIVATE</button>
       <input id="hostpw" maxlength="16" placeholder="password" style="display:none">
+    </div>
+    <div class="optline" id="hdiffline">ENEMY AI
+      <button class="pick on" id="hdEasy" type="button">🌱 EASY</button>
+      <button class="pick" id="hdHard" type="button">🔥 HARD</button>
     </div>
     <button id="btnhostgo">⚑ OPEN THE GATES</button>
   </div>
@@ -172,7 +225,6 @@ if("serviceWorker" in navigator && location.protocol.startsWith("http")){
   <div id="serverlist" style="display:none"></div>
   <p class="netnote">Multiplayer needs the game served over HTTP (not file://) —
   it lives at <b>nutcrackerregicide.github.io</b>, or run <b>python -m http.server</b> in this folder.</p>
-  <p class="verstamp">v128.6 — ELEVEN PIECES AND ONE ATLAS</p>
 </div>
 
 <div class="overlay" id="howto">

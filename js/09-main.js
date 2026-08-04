@@ -637,9 +637,6 @@ function tickBody(skipRender){
     for(const D of directors){ if(T>D.nextThink){D.nextThink=T+(AI_DIFF[diffFor(D.team)]||AI_DIFF.normal).think; directorThink(D);} }
     // hints
     while(hintI<hints.length&&T>hints[hintI][0]){msg(hints[hintI][1]);hintI++;}
-    if(T>20&&!window._objFaded){window._objFaded=true;
-      const o=document.getElementById("objective");o.style.opacity="0";
-      setTimeout(()=>o.style.display="none",1100);}
     updatePlayer(dt);
     for(const u of units){
       if(!u.alive){
@@ -680,8 +677,34 @@ function tickBody(skipRender){
   }
   if(!skipRender)renderFrame(dt);
 }
+// v128.8 THE BANNER THAT NEVER LEFT. The objective ribbon's fade lived inside tickBody's
+// `if(!gameOver)` block — which a GUEST NEVER REACHES, because tickBody returns at the guest
+// branch above and hands the frame to NET.guestFrame. So "⚔ Slay the enemy King before yours
+// falls" sat across the top of the screen for the entire match on every guest, host and mobile
+// alike. Trap #12 in the handoff, word for word: anything display-only added to the host branch
+// must be added to guestFrame too.
+//
+// It lives in renderFrame now, which is the ONE function all three frame paths provably call —
+// guest (631), menu (633) and host (678) — so it cannot fall out of step again.
+//
+// And it counts WALL time, not sim time. `T` is the match clock, which a guest adopts from the
+// host's snapshots: a guest joining a ten-minute-old match arrives with T=600 and would never
+// see the banner at all. Twenty real seconds from the moment this client entered the war is the
+// same for everyone.
+function tickObjectiveFade(){
+  if(window._objFaded||inMenu)return;
+  const now=(typeof NET!=="undefined"&&NET.now)?NET.now():Date.now();
+  if(!window._objAt){window._objAt=now;return;}
+  if(now-window._objAt<20000)return;
+  window._objFaded=true;
+  const o=document.getElementById("objective");
+  if(!o)return;
+  o.style.opacity="0";
+  setTimeout(()=>{o.style.display="none";},1100);
+}
 // camera chase + atmosphere + draw — shared by the host/solo sim and the guest's thin frame
 function renderFrame(dt){
+  tickObjectiveFade();
   if(inMenu){ // MAIN MENU: a slow cinematic orbit over the sleeping kingdoms
     menuOrbitT+=dt;
     const ma=menuOrbitT*0.045;

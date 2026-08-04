@@ -806,8 +806,20 @@
   .touch-mode #hostrow,.touch-mode #joinrow{width:min(460px,72%)}
   .touch-mode #joinrow input,.touch-mode #joinrow select{font-size:13px;padding:8px 10px}
   /* the deploy note is desktop advice — on a phone the game is already served over HTTPS */
-  .touch-mode #startmenu .netnote{display:none}
-  .touch-mode #startmenu .verstamp{font-size:10px;opacity:.55;margin:4px 0 0}
+  .touch-mode #setupscreen .netnote{display:none}
+  /* v128.9: the shields must never wrap or shrink below a thumb — three across is the design,
+     and a stacked column pushes SOLO off the top of a 590x273 landscape stage. */
+  .touch-mode .shields{gap:8px}
+  .touch-mode .shield{width:clamp(76px,19vw,120px)}
+  .touch-mode .shield .shsub{display:none}      /* no room, and the label already says it */
+  .touch-mode .gametitle{font-size:clamp(19px,4.4vw,30px) !important;letter-spacing:2px}
+  .touch-mode .undertitle{gap:8px}
+  .touch-mode .linkbtn{font-size:12px;padding:8px 14px}
+  .touch-mode .backbtn{font-size:12px;padding:8px 14px}
+  .touch-mode .bigpick{min-width:150px;padding:12px 16px;font-size:14px}
+  .touch-mode .nameask{font-size:clamp(17px,4vw,26px);margin-bottom:18px}
+  .touch-mode #namerow{width:min(420px,90vw)}
+  .touch-mode #startmenu .verstamp,.touch-mode #setupscreen .verstamp{font-size:10px;opacity:.55;margin:4px 0 0}
   .touch-mode #whoami{font-size:12px}
   .touch-mode #optbox{max-height:82%;overflow-y:auto;font-size:13px}
   .touch-mode #howtobox{max-height:88%;font-size:13px}

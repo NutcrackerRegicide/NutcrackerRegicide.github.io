@@ -107,10 +107,81 @@ var HALL_ID="regicide-hall-v1";
 // (permanent 🐢 or no connection at all — matters most once strangers join via THE HALL).
 // Stand up coturn per docs/TURN-SERVER-GUIDE.md, then fill in this ONE line:
 NET.TURN=null; // e.g. {urls:"turn:YOUR.VPS.IP:3478",username:"regicide",credential:"YOUR-SECRET"}
+// v128.8 THE 5G HOST, and why this line is not optional any more.
+// Field report: hosting from a phone on mobile data, nobody could join; the same phone on Wi-Fi
+// worked first try. That is not a bug, it is the one thing STUN cannot do. Carriers put phones
+// behind CGNAT, which is almost always SYMMETRIC: a different external port is allocated per
+// destination, so the address STUN discovers is meaningless to any other peer and no direct
+// candidate pair can ever succeed. Home routers are usually cone NAT, where STUN works — hence
+// "fine on Wi-Fi, dead on 5G", every time, for every guest. TURN is the only fix, because a relay
+// is a fixed address both sides can reach.
+// Until one is stood up (docs/TURN-SERVER-GUIDE.md), the least this can do is SAY SO — see
+// NET.watchIce below, which used to report a live host as "no answer".
+NET.turnCfg=function(){
+  if(NET.TURN)return NET.TURN;
+  // …and a relay can be tried on a DEVICE without a deploy, the same reasoning as `?ink=`: the
+  // person holding the phone that cannot connect is not the person who can edit this file.
+  // localStorage.reg_turn = {"urls":"turn:1.2.3.4:3478","username":"u","credential":"p"}
+  try{const raw=localStorage.getItem("reg_turn"); if(raw)return JSON.parse(raw);}catch(_){}
+  return null;
+};
 NET.peerOpts=function(){
   const ice=[{urls:"stun:stun.l.google.com:19302"}];
-  if(NET.TURN)ice.push(NET.TURN);
+  const t=NET.turnCfg();
+  if(t)ice.push(t);
   return {config:{iceServers:ice}};
+};
+// Is this machine on mobile data? Chrome on Android answers; iOS Safari does not implement the
+// API at all, so a null answer means "unknown", never "no".
+NET.onCellular=function(){
+  try{
+    const c=navigator.connection||navigator.mozConnection||navigator.webkitConnection;
+    if(!c)return null;
+    if(c.type)return c.type==="cellular";
+    if(c.effectiveType&&/^([23]g|slow-2g)$/.test(c.effectiveType))return true;
+    return null;
+  }catch(_){return null;}
+};
+// THE HONEST FAILURE. `iceconnectionstatechange` → "failed" is the definitive signal that no
+// candidate pair worked, and it is a completely different thing from the broker saying the room
+// does not exist. Distinguishing them is the whole point: one means "the host is not there", the
+// other means "the host is there and unreachable", and the player can only act on the second.
+NET.watchIce=function(conn,who){
+  try{
+    const pc=conn&&conn.peerConnection;
+    if(!pc||pc.__regIce)return;
+    pc.__regIce=true;
+    pc.addEventListener("iceconnectionstatechange",()=>{
+      const s=pc.iceConnectionState;
+      if(s==="connected"||s==="completed"){NET._iceOK=true;NET.candKind(pc);}
+      if(s!=="failed")return;
+      NET.logEvent("ice-failed",who||"");
+      if(NET.mode==="guest"||!NET.mode){
+        NET.status("⚠ Found the host, but no route to them. If they are hosting on mobile data, "+
+          "ask them to host from Wi-Fi — a phone on 5G cannot accept direct connections.");
+        msg("No route to the host. Mobile data (5G) blocks direct connections — ask them to host on Wi-Fi.","warn");
+      }else{
+        msg("A player found this hall but could not reach it. If you are on mobile data, host from Wi-Fi instead.","warn");
+      }
+    });
+  }catch(_){}
+};
+// Which kind of candidate actually won — host / srflx / relay. This is the number that answers
+// "did TURN do anything" in a field log, and it cannot be guessed from anywhere else.
+NET.candKind=function(pc){
+  try{
+    if(!pc.getStats)return;
+    pc.getStats().then(rep=>{
+      let pair=null;
+      rep.forEach(r=>{if(r.type==="candidate-pair"&&(r.selected||r.state==="succeeded")&&!pair)pair=r;});
+      if(!pair)return;
+      const loc=rep.get&&rep.get(pair.localCandidateId);
+      const kind=(loc&&loc.candidateType)||"?";
+      if(NET._candKind===kind)return;
+      NET._candKind=kind;
+      NET.logEvent("ice-"+kind);
+    }).catch(()=>{});
+  }catch(_){}
 };
 const CLS_KEYS=Object.keys(CLS), CLS_IDX={};
 CLS_KEYS.forEach((k,i)=>CLS_IDX[k]=i);
@@ -431,6 +502,9 @@ NET.uiShowHost=function(){ // the HOST button reveals the options row
   if(jr)jr.style.display="none"; if(sl)sl.style.display="none";
   const hr=document.getElementById("hostrow");
   if(hr)hr.style.display=hr.style.display==="flex"?"none":"flex";
+  const bh=document.getElementById("btnhost"),bj=document.getElementById("btnjoin");
+  if(bj)bj.classList.remove("on");
+  if(bh)bh.classList.toggle("on",!!hr&&hr.style.display==="flex");
   if(hr&&hr.style.display==="flex"&&NET._reveal)NET._reveal(hr); // v124.1
 };
 NET.uiHost=function(){
@@ -443,12 +517,21 @@ NET.uiHost=function(){
   const abc="abcdefghjkmnpqrstuvwxyz23456789";
   let code="regicide-";for(let i=0;i<4;i++)code+=abc[(Math.random()*abc.length)|0];
   NET.roomCode=code;
+  // v128.8: warn BEFORE anyone wastes a minute failing to join. A phone on mobile data sits
+  // behind carrier NAT that no amount of STUN can punch through, so hosting from it does not
+  // half-work — it fails for everyone, every time. Chrome on Android answers this; iOS Safari
+  // does not implement the API, so `null` means unknown and stays silent rather than crying wolf.
+  if(NET.onCellular()===true&&!NET.turnCfg()){
+    msg("⚠ You are on MOBILE DATA. Players will not be able to join — a phone on 5G cannot accept "+
+        "direct connections. Switch to Wi-Fi before opening a hall.","warn");
+    NET.logEvent("host-on-cellular");
+  }
   NET.status("Opening the gates…");
   const peer=new Peer(code,NET.peerOpts()); NET.peer=peer;
   peer.on("open",()=>{
     NET.mode="host";
     inMenu=false; // the host walks the world while the lobby gathers
-    document.getElementById("startmenu").style.display="none";
+    NET.uiHideMenus(); // v128.9: the player is standing on #setupscreen when a hall opens
     NET.lobby();
     NET.hallJoin(); // stand in the hall (or become it) so browsers can find public games
     msg("You are HOSTING a "+(NET.gameMode==="coop"?"CO-OP":"PvP")+" "+(NET.isPublic?"public":"private")+" hall. Room code: "+code,"gold");
@@ -475,6 +558,7 @@ NET.uiHost=function(){
       c.on("close",()=>{const rr=NET.remotes[c.peer];if(rr&&rr.fast===c)rr.fast=null;});
       return;
     }
+    NET.watchIce(c,"guest"); // v128.8: a host whose guests cannot route to them should be told
     c.on("data",d=>NET.hostData(c,d));
     c.on("close",()=>NET.hostDrop(c));
     c.on("error",()=>NET.hostDrop(c));
@@ -1405,6 +1489,7 @@ NET.uiJoin=function(){
   peer.on("error",e=>{msg("Join error: "+e.type,"warn");NET.status("Broker error: "+e.type);NET.peer=null;});
   peer.on("open",()=>{
     const c=peer.connect(code,{reliable:true}); NET.conn=c;
+    NET.watchIce(c,"host"); // v128.8: say "unreachable" rather than "not there" — they differ
     c.on("open",()=>c.send({t:"hello",name,proto:NET.PROTO,
       team:(document.getElementById("jointeam")||{value:"auto"}).value,
       pw:String((document.getElementById("joinpw")||{value:""}).value||"").slice(0,16)})); // private halls check the word
@@ -1413,7 +1498,17 @@ NET.uiJoin=function(){
       NET.status("⚠ CONNECTION LOST — refresh the page to rejoin.");
       msg("Connection to the host was lost. Refresh to rejoin.","warn");
     });
-    setTimeout(()=>{if(NET.mode!=="guest"&&!NET._admitted)NET.status("No answer from "+code+" — is the host still up?");},8000);
+    // v128.8: the old line said "is the host still up?" for EVERY failure, including the common
+    // one where the host is perfectly up and simply unroutable. Only claim they are absent when
+    // the transport never even got a candidate pair going.
+    setTimeout(()=>{
+      if(NET.mode==="guest"||NET._admitted)return;
+      const iceDead=NET.conn&&NET.conn.peerConnection&&
+        /failed|disconnected/.test(NET.conn.peerConnection.iceConnectionState||"");
+      NET.status(iceDead
+        ? "⚠ Found "+code+" but could not reach them. A host on mobile data (5G) cannot accept direct connections — ask them to host from Wi-Fi."
+        : "No answer from "+code+" — is the host still up?");
+    },8000);
   });
 };
 NET.dialFast=function(){ // the unreliable lane: dropped packets never dam the stream
@@ -1596,7 +1691,7 @@ NET.applyWorld=function(w){
     if(kB)_chestShow(campStates[i],kB,true);  else _chestHide(campStates[i],true);
   }
   inMenu=false; // the guest steps out of the menu into the host's world
-  document.getElementById("startmenu").style.display="none";
+  NET.uiHideMenus(); // v128.9: …and off whichever menu screen they were standing on
   closeMenus();cancelPlacing();
   updateResHud();updateAgeHud();updateKingBars();updatePlayerHud();
   NET.connectedTxt="⚑ CONNECTED — you fight as <b>"+player.name+"</b><br><span class='netsub'>the host runs the war · your body answers instantly</span>";
@@ -2084,12 +2179,42 @@ NET.guestAct=function(a){
 };
 
 // ========================================================= START MENU =======
+// v128.9 THREE SCREENS. 1: your name, on black. 2: three shields — SOLO / CO-OP / PVP. 3: host,
+// join and the hall, reached only from the two multiplayer shields. Every id wireMenu binds is
+// unchanged; this is a relayout, not a rewrite of the entry points.
+NET.MENUS=["namescreen","startmenu","setupscreen"];
+NET.uiScreen=function(id){
+  for(const m of NET.MENUS){
+    const e=document.getElementById(m);
+    if(e)e.style.display=(m===id)?"flex":"none";
+  }
+};
+// Leaving the menu for the world has to close ALL of them, not just the one that used to exist.
+// uiHost and applyWorld both hid "#startmenu" by name, and after v128.9 the player is standing on
+// #setupscreen when a hall opens — so that line would have left the setup screen over the game.
+NET.uiHideMenus=function(){ for(const m of NET.MENUS){const e=document.getElementById(m);if(e)e.style.display="none";} };
 NET.uiSolo=function(){
   inMenu=false; // the horns sound — the solo war begins NOW
-  document.getElementById("startmenu").style.display="none";
+  NET.uiHideMenus();
   msg("The kings are crowned. The war begins.","gold");
 };
+// The two multiplayer shields. The mode is decided HERE, by which shield was pressed, so the old
+// PvP/Co-op pick-pair on the host row is gone — one decision, made once, in the place it is asked.
+NET.uiMode=function(mode){
+  NET.gameMode=(mode==="coop")?"coop":"pvp";
+  const t=document.getElementById("setuptitle");
+  if(t)t.textContent=(NET.gameMode==="coop")?"CO-OP vs AI":"PVP";
+  const hr=document.getElementById("hostrow"), jr=document.getElementById("joinrow"),
+        sl=document.getElementById("serverlist");
+  if(hr)hr.style.display="none"; if(jr)jr.style.display="none"; if(sl)sl.style.display="none";
+  const bh=document.getElementById("btnhost"), bj=document.getElementById("btnjoin");
+  if(bh)bh.classList.remove("on"); if(bj)bj.classList.remove("on");
+  NET.uiScreen("setupscreen");
+  if(typeof Sound!=="undefined")Sound.play("ui_select");
+};
 NET.uiShowJoin=function(){
+  const bh=document.getElementById("btnhost"),bj=document.getElementById("btnjoin");
+  if(bh)bh.classList.remove("on"); if(bj)bj.classList.add("on");
   const hr=document.getElementById("hostrow"); if(hr)hr.style.display="none";
   const jr=document.getElementById("joinrow");
   jr.style.display="flex";
@@ -2100,13 +2225,13 @@ NET.uiShowJoin=function(){
   if(!document.documentElement.classList.contains("touch-mode"))
     document.getElementById("joincode").focus();
 };
-NET.uiName=function(){ // v92: the name screen — first thing a warrior does
+NET.uiName=function(){ // the name screen — first thing a warrior does
   const v=String((document.getElementById("playername")||{value:""}).value||"").trim().slice(0,28);
   NET.myName=v||NET.rollName();
   try{localStorage.setItem("regicideName",NET.myName);}catch(_){}
-  const ns=document.getElementById("namescreen"); if(ns)ns.style.display="none";
-  const sm=document.getElementById("startmenu"); if(sm)sm.style.display="flex";
+  NET.uiScreen("startmenu");
   NET.showWhoAmI();
+  if(typeof player!=="undefined"&&player&&!player.isKing)player.name=NET.myName;
 };
 // v124: the name gate is gone. Typing on a phone before you have seen the game is a real drop-off
 // point, and the name only matters once other people can read it. You are auto-titled in John's
@@ -2141,17 +2266,21 @@ NET.uiHowTo=function(show){
     if(!elm)return;
     setTimeout(()=>{try{elm.scrollIntoView({block:"nearest",behavior:"smooth"});}catch(_){}},60);
   };
-  if(el("btnfriends"))el("btnfriends").onclick=()=>{
-    const r=el("friendsrow");
-    if(r){r.style.display=r.style.display==="none"?"block":"none";
-      if(r.style.display!=="none")NET._reveal(r);}
-  };
-  if(el("btnrename"))el("btnrename").onclick=NET.uiRename;
-  // v124.1: the dice. Typing a name on a phone means summoning a keyboard over the menu — rolling
-  // one is a single tap, and the pools are good enough that most people will just keep tapping.
+  // v128.9: the two multiplayer shields
+  if(el("btncoop"))el("btncoop").onclick=()=>NET.uiMode("coop");
+  if(el("btnpvp"))el("btnpvp").onclick=()=>NET.uiMode("pvp");
+  if(el("btnsetupback"))el("btnsetupback").onclick=()=>NET.uiScreen("startmenu");
+  if(el("btnrename"))el("btnrename").onclick=()=>{NET.uiScreen("namescreen");
+    const p=el("playername"); if(p){p.value=NET.myName||"";
+      if(!document.documentElement.classList.contains("touch-mode")){p.focus();p.select();}}};
+  // v128.9: the die now lives INSIDE the name box on screen 1, so it rolls the FIELD as well as
+  // the stored name — otherwise a player would roll a name, see it in the box, and then have the
+  // box's own text silently overwrite it on CONTINUE. Same id, same behaviour mobilecheck asserts
+  // (#myname changes and still reads "<Name> the <Epithet>"), one more thing kept in step.
   if(el("btnreroll"))el("btnreroll").onclick=()=>{
     NET.myName=NET.rollName();
     try{localStorage.setItem("regicideName",NET.myName);}catch(_){}
+    const p=el("playername"); if(p)p.value=NET.myName;
     NET.showWhoAmI();
     if(typeof player!=="undefined"&&player&&!player.isKing)player.name=NET.myName;
     if(typeof Sound!=="undefined")Sound.play("ui_select");
@@ -2172,14 +2301,19 @@ NET.uiHowTo=function(show){
     el("playername").addEventListener("keydown",e=>{if(e.key==="Enter")NET.uiName();e.stopPropagation();});
     try{const n=localStorage.getItem("regicideName");if(n)el("playername").value=n;}catch(_){}
   }
-  // v124: skip the name screen entirely — auto-title and go straight to PLAY.
-  (function autoName(){
+  // v128.9 THE NAME SCREEN COMES BACK — but it is never a gate for a RETURNING player.
+  // v124 removed it because typing a name before you have seen the game is a real drop-off
+  // point. That reasoning still holds, and it is satisfied by PREFILLING: the box arrives
+  // already holding a rolled name, so CONTINUE is one tap and nobody has to invent anything.
+  // Someone who has played before skips it entirely and lands on the shields.
+  (function firstRun(){
     let n=null; try{n=localStorage.getItem("regicideName");}catch(_){}
+    const known=!!n;
     NET.myName=n||NET.rollName();
     try{localStorage.setItem("regicideName",NET.myName);}catch(_){}
-    const ns=el("namescreen"); if(ns)ns.style.display="none";
-    const sm=el("startmenu"); if(sm)sm.style.display="flex";
+    const p=el("playername"); if(p)p.value=NET.myName;
     NET.showWhoAmI();
+    NET.uiScreen(known?"startmenu":"namescreen");
   })();
   // v92: host option toggles
   const pickPair=(idA,idB,set)=>{
@@ -2187,8 +2321,8 @@ NET.uiHowTo=function(show){
     el(idA).onclick=()=>{el(idA).classList.add("on");el(idB).classList.remove("on");set(true);};
     el(idB).onclick=()=>{el(idB).classList.add("on");el(idA).classList.remove("on");set(false);};
   };
-  pickPair("hmPvp","hmCoop",v=>{NET.gameMode=v?"pvp":"coop";
-    const dl=el("hdiffline"); if(dl)dl.style.display=v?"none":"flex";}); // the AI dial matters when the AI is the enemy
+  // NOTE: the hmPvp/hmCoop pair is gone with v128.9 — the shield IS the mode choice. pickPair is
+  // guarded on both ids existing, so this simply no longer binds. NET.uiMode sets gameMode.
   pickPair("sdEasy","sdHard",v=>{aiDifficulty=v?"easy":"hard";
     // the two dials mirror each other — one setting, two doors
     if(el("hdEasy")&&el("hdHard")){el("hdEasy").classList.toggle("on",v);el("hdHard").classList.toggle("on",!v);}});

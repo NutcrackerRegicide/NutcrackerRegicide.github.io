@@ -1,6 +1,29 @@
+/* ============ v128.9: IM FELL ENGLISH ============
+   SELF-HOSTED, not linked from Google Fonts, for the same reason libs/ is vendored: this game is
+   expected to run offline and from file://, and a CDN <link> is a blank first paragraph on a
+   plane and a hard failure on a local file. 58 KB woff2, SIL Open Font License — the licence
+   ships beside it at assets/fonts/IMFellEnglish-OFL.txt. (Worth saying out loud given the
+   unresolved Epic Stock Media question on the audio: this one is properly licensed and the
+   licence is in the repo.)
+   `font-display:swap` on purpose — against a ~29 MB first load, a blocked title is worse than a
+   title that arrives in Trebuchet and changes a beat later. */
+@font-face{
+  font-family:"IM Fell English";
+  src:url("../assets/fonts/imfell-en-400.woff2") format("woff2");
+  font-weight:400;font-style:normal;font-display:swap;
+}
+@font-face{
+  font-family:"IM Fell English";
+  src:url("../assets/fonts/imfell-en-400-italic.woff2") format("woff2");
+  font-weight:400;font-style:italic;font-display:swap;
+}
 :root{
     --ink:#2b1d12; --parch:#e8d9b0; --parch2:#d9c48f; --blue:#3d6ef2; --red:#d94a3d;
     --gold:#e0a92e; --food:#c0392b;
+    /* A DISPLAY face, not a body face. IM Fell is a low-contrast antique with a small x-height —
+       gorgeous at 30px, mud at 11px on a 0.7-ratio phone. It carries the game's VOICE (titles,
+       shields, headings, the objective) and the sans keeps the readouts a player scans mid-fight. */
+    --fell:"IM Fell English","Trebuchet MS",Georgia,serif;
   }
   *{margin:0;padding:0;box-sizing:border-box;user-select:none;-webkit-user-select:none}
   html,body{width:100%;height:100%;overflow:hidden;background:#1a2410;
@@ -86,6 +109,23 @@
   #objective{position:fixed;top:74px;left:50%;transform:translateX(-50%);padding:8px 18px;z-index:10;
     font-weight:bold;font-size:14px;letter-spacing:.5px;transition:opacity 1s}
 
+/* ---- where the display face is worn ----
+   Every overlay (the three menu screens, HOW TO PLAY, SETTINGS, the end screens) plus the
+   standing objective. Deliberately NOT the HUD strip: 12-touch's 34px bar is held up by ~190
+   geometry assertions measured in a rotated stage, and swapping the face under them changes every
+   segment width at once. If the whole game should wear it, that is a deliberate second step with
+   a mobilecheck run behind it — not a side effect of restyling a menu. */
+.overlay,.overlay h1,.overlay h2,.overlay h3,.overlay p,.overlay button,
+#objective,.gametitle,#setuptitle,.nameask,#howtobox h2,#howtobox h3,#optbox h2{
+  font-family:var(--fell);
+}
+/* …the antique face needs a little more air between letters to read as lettering rather than as
+   a smudge, and its numerals are old-style, so anything NUMERIC stays on the sans. */
+.overlay .verstamp,.overlay .netnote,#serverlist,.overlay input,.overlay select,.overlay .optline{
+  font-family:"Trebuchet MS",Verdana,sans-serif;
+}
+#namerow input{font-family:var(--fell);font-size:clamp(17px,2.6vw,22px);}
+
 /* pointer-lock UI */
 #crosshair{position:fixed;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;
   background:rgba(255,255,255,.85);box-shadow:0 0 0 1px rgba(0,0,0,.5);z-index:15;display:none;pointer-events:none}
@@ -94,6 +134,85 @@
 #lockhint{position:fixed;left:50%;top:56%;transform:translateX(-50%);padding:10px 16px;
   font-weight:bold;z-index:14}
 
+/* ============ v128.9: SCREENS 2 & 3 — THE ART ============
+   One 230 KB JPEG behind both, with a scrim heavy enough that white text is legible over the
+   gold sunset and the dark figures alike — MEASURED: the top third of the art averages 122/255
+   luminance and the middle 59/255, which is why the scrim is a three-stop gradient and not a flat
+   wash. A flat scrim either buries the painting or leaves the title unreadable on the sky. `background-attachment:fixed` is NOT used: it
+   is a known scroll-jank/compositing trap on mobile Safari, and 12-touch puts these overlays
+   inside a rotated stage where it behaves unpredictably. */
+/* SPECIFICITY, and it bit once already: #startmenu carries an ID-level background colour, and an
+   id beats any number of classes — a bare `.menuart` rule was silently overridden and the screens
+   showed the live 3D world instead of the painting. Match the id. */
+#startmenu.menuart,#setupscreen.menuart{
+  background:linear-gradient(rgba(10,7,4,.84) 0%,rgba(10,7,4,.46) 42%,rgba(10,7,4,.80) 100%), url("../assets/menu-bg.jpg") center/cover no-repeat;
+}
+@media (max-width:900px){ /* the 800px encode: a phone never resolves the 1600 */
+  #startmenu.menuart,#setupscreen.menuart{
+    background:linear-gradient(rgba(10,7,4,.84) 0%,rgba(10,7,4,.46) 42%,rgba(10,7,4,.80) 100%), url("../assets/menu-bg-sm.jpg") center/cover no-repeat;}
+}
+.gametitle{font-size:clamp(26px,5.6vw,60px) !important;letter-spacing:clamp(2px,.8vw,8px);
+  margin:0 0 2px;color:#f2e7c8;text-shadow:0 3px 0 #000,0 0 34px rgba(0,0,0,.9);text-align:center;}
+.gametitle .pvp{color:#e8c53a;}
+.undertitle{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-bottom:6px;}
+.overlay .linkbtn{font-family:inherit;font-size:13px;font-weight:bold;letter-spacing:1px;cursor:pointer;
+  padding:7px 16px;border-radius:20px;color:#e6d9b4;background:rgba(20,18,12,.72);
+  border:1px solid rgba(224,169,46,.45);transition:background .14s,color .14s,border-color .14s;}
+.overlay .linkbtn:hover{background:rgba(224,169,46,.18);color:#fff3d0;border-color:var(--gold);}
+
+/* ---- THE THREE SHIELDS ----
+   An SVG heater shield per mode, with the label sitting on the face. SVG rather than a CSS
+   clip-path so the border, the fill and the hover glow are one shape at any size — a clip-path
+   shield cannot carry a stroke, and these need an edge to read against a busy photograph. */
+.shields{display:flex;gap:clamp(10px,3vw,34px);justify-content:center;align-items:flex-start;
+  flex-wrap:nowrap;margin:6px 0 2px;}
+.overlay .shield{position:relative;background:none;border:0;padding:0;cursor:pointer;
+  width:clamp(96px,17vw,180px);aspect-ratio:100/118;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  transition:transform .16s cubic-bezier(.2,.8,.3,1.2),filter .16s;
+  filter:drop-shadow(0 8px 16px rgba(0,0,0,.75));}
+.overlay .shield svg{position:absolute;inset:0;width:100%;height:100%;}
+.overlay .shield svg path{stroke:#2b1d12;stroke-width:4;transition:fill .16s,stroke .16s;}
+/* the face of each shield. Kept as three one-line rules rather than one shared list: the hover
+   pair below has to sit next to the base colour or the two drift apart. */
+.overlay .sh-solo svg path{fill:#e0c887;}
+.overlay .sh-coop svg path{fill:#7fa8e8;}
+.overlay .sh-pvp  svg path{fill:#e0796d;}
+.overlay .shield .shlabel{position:relative;white-space:nowrap;font-family:inherit;font-weight:bold;color:#2b1d12;
+  font-size:clamp(13px,2.1vw,22px);letter-spacing:1.5px;text-shadow:0 1px 0 rgba(255,255,255,.35);
+  pointer-events:none;}
+.overlay .shield .shsub{position:relative;font-size:clamp(7.5px,1.05vw,11px);letter-spacing:.3px;
+  color:rgba(43,29,18,.82);margin-top:3px;max-width:64%;text-align:center;line-height:1.2;
+  pointer-events:none;}
+.overlay 
+.overlay .shield:hover{transform:translateY(-8px) scale(1.045);filter:drop-shadow(0 14px 22px rgba(0,0,0,.85));}
+.overlay .sh-solo:hover svg path{fill:#f3e0aa;stroke:var(--gold);}
+.overlay .sh-coop:hover svg path{fill:#a6c6f5;stroke:#cfe2ff;}
+.overlay .sh-pvp:hover svg path{fill:#f0998e;stroke:#ffd9d2;}
+.overlay .shield:active{transform:translateY(-2px) scale(.99);}
+.overlay .shield:focus-visible{outline:3px solid var(--gold);outline-offset:6px;border-radius:8px;}
+
+/* the HALL / ENEMY AI labels are dark ink by default, which is right on parchment and unreadable
+   on a night sky. Lift them only where they sit on the art. */
+#startmenu .optline,#setupscreen .optline{color:#d8cba6;text-shadow:0 1px 3px rgba(0,0,0,.9);}
+/* ---- SCREEN 3 ---- */
+#setupscreen{display:none;z-index:60;}
+#setuptitle{color:#f2e7c8;font-size:clamp(18px,3vw,30px);letter-spacing:5px;margin:0;
+  text-shadow:0 2px 0 #000;}
+.overlay .backbtn{position:absolute;top:calc(14px + env(safe-area-inset-top));left:14px;font-family:inherit;
+  font-size:13px;font-weight:bold;letter-spacing:1px;cursor:pointer;padding:8px 16px;border-radius:20px;
+  color:#e6d9b4;background:rgba(20,18,12,.8);border:1px solid rgba(224,169,46,.45);}
+.overlay .backbtn:hover{background:rgba(224,169,46,.2);color:#fff3d0;}
+.setupsplit{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;}
+.overlay .bigpick{font-family:inherit;font-size:16px;font-weight:bold;letter-spacing:1px;cursor:pointer;
+  padding:16px 26px;min-width:210px;border-radius:10px;color:#2b1d12;
+  background:linear-gradient(180deg,#eadfb4,#d3c088);border:3px solid var(--ink);
+  box-shadow:0 4px 0 rgba(0,0,0,.5);display:flex;flex-direction:column;gap:4px;align-items:center;
+  transition:transform .12s,filter .12s;}
+.overlay .bigpick small{font-size:11px;font-weight:normal;letter-spacing:.2px;opacity:.75;}
+.overlay .bigpick:hover{filter:brightness(1.08);transform:translateY(-2px);}
+.overlay .bigpick.on{background:linear-gradient(180deg,#f6e9b8,#e0c887);box-shadow:0 0 0 3px var(--gold),0 4px 0 rgba(0,0,0,.5);}
+
 /* ---------- multiplayer: start menu + net status ---------- */
 #startmenu{display:flex;z-index:60;background:rgba(8,10,18,0.82);}
 /* v124.1: .overlay is z-index 50 but #startmenu overrides to 60, so AUDIO OPTIONS opened from the
@@ -101,15 +220,26 @@
    buttons and could not touch them. Not a mobile bug: it has been broken on desktop for as long as
    the options screen has existed, and nobody had opened it from the main menu. */
 #optionsscreen{z-index:70;}
-/* v92: the name screen greets first; the main menu waits behind it */
-#namescreen{display:flex;z-index:70;background:rgba(8,10,18,0.88);}
-#namescreen h1{font-size:52px;letter-spacing:6px;margin:0 0 4px;color:#e8ddc2;}
-#namescreen h1 .pvp{color:#e8c53a;}
-#namescreen .tagline{color:#b9c2d8;margin:0 0 26px;letter-spacing:1px;}
-#namerow{display:flex;gap:8px;width:min(400px,86vw);}
-#namerow input{flex:1;min-width:0;font:inherit;font-size:17px;padding:12px 14px;border-radius:8px;
-  border:1px solid #5a64a0;background:#141827;color:#efe6cf;text-align:center;letter-spacing:1px;}
-#namerow input::placeholder{color:#6f7894;}
+/* ============ v128.9: SCREEN 1 — THE NAME ============
+   Deliberately BLACK, and deliberately the only thing on it. The art arrives on screen 2;
+   this one asks a single question and gets out of the way. */
+#namescreen{display:flex;z-index:70;background:#000;}
+.overlay .nameask{color:#f0e6cd;font-size:clamp(22px,4.4vw,38px);letter-spacing:1px;
+  margin:0 0 30px;text-align:center;text-shadow:0 2px 12px rgba(0,0,0,.9);max-width:90vw;}
+/* the die sits INSIDE the box — one control, not two things that happen to be adjacent */
+#namerow{display:flex;align-items:stretch;width:min(460px,88vw);
+  border:2px solid #6b5a33;border-radius:10px;background:#12100b;overflow:hidden;
+  box-shadow:0 0 0 1px rgba(0,0,0,.8), 0 8px 30px rgba(0,0,0,.7);}
+#namerow:focus-within{border-color:var(--gold);box-shadow:0 0 0 1px rgba(0,0,0,.8),0 0 22px rgba(224,169,46,.35);}
+#namerow input{flex:1;min-width:0;font:inherit;font-size:clamp(15px,2.4vw,19px);padding:14px 16px;
+  border:0;background:transparent;color:#f2e8ce;text-align:center;letter-spacing:.6px;outline:none;}
+#namerow input::placeholder{color:#7d7460;}
+#namerow #btnreroll{flex:0 0 auto;width:56px;border:0;border-left:2px solid #3a3222;background:#1c1810;
+  color:#e8c53a;font-size:22px;cursor:pointer;transition:background .12s,transform .12s;}
+#namerow #btnreroll:hover{background:#2a2416;}
+#namerow #btnreroll:active{transform:scale(.9);}
+#namescreen #btnname{margin-top:24px;font-size:17px;letter-spacing:1.5px;padding:12px 34px;
+  background:linear-gradient(180deg,#f0dfa8,#d8c084);}
 #namerow button{flex:0 0 auto;font-family:inherit;font-size:17px;font-weight:bold;padding:10px 22px;cursor:pointer;
   color:#efe6cf;background:linear-gradient(180deg,#3a4568,#232c48);border:1px solid #5a64a0;border-radius:8px;}
 #namerow button:hover{background:linear-gradient(180deg,#4a5470,#2c3550);}
@@ -151,10 +281,10 @@
   border:1px solid #5a64a0;background:#141827;color:#efe6cf;}
 #joinrow input::placeholder{color:#6f7894;}
 #joinrow button{flex:0 0 auto;text-align:center;}
-#startmenu .netnote{margin-top:22px;max-width:min(480px,88vw);text-align:center;
+#startmenu .netnote,#setupscreen .netnote{margin-top:22px;max-width:min(480px,88vw);text-align:center;
   color:#8a93ad;font-size:13px;line-height:1.5;}
-#startmenu .netnote b{color:#c9d2ea;}
-#startmenu .verstamp{margin-top:10px;color:#5f6880;font-size:12px;letter-spacing:2px;}
+#startmenu .netnote b,#setupscreen .netnote b{color:#c9d2ea;}
+#startmenu .verstamp,#setupscreen .verstamp{margin-top:10px;color:#5f6880;font-size:12px;letter-spacing:2px;}
 .startbtns .howbtn{background:linear-gradient(180deg,#4a4030,#2e2818);border-color:#8a7a4a;}
 .startbtns .howbtn:hover{background:linear-gradient(180deg,#5c5040,#3a3222);border-color:#c9b06a;}
 /* ---------- HOW TO PLAY ---------- */
@@ -173,9 +303,22 @@
   padding:9px 26px;cursor:pointer;color:#efe6cf;background:linear-gradient(180deg,#3a4258,#242b3d);
   border:1px solid #5a64a0;border-radius:8px;}
 #btnhowback:hover{background:linear-gradient(180deg,#4a5470,#2c3550);border-color:#8fa0e8;}
-#netstatus{display:none;position:absolute;top:60px;left:50%;transform:translateX(-50%);
-  z-index:22;padding:5px 26px 5px 10px;text-align:center;font-size:12px;color:#e8ddc2;opacity:0.92;
+/* v128.8: OUT OF THE MIDDLE OF THE SCREEN. Top-centre put it directly under the objective ribbon
+   and, once folded, left a small unexplained square hovering over the battlefield. It is a status
+   readout, not a thing you look at while playing — it belongs in a corner.
+   `position:absolute` is kept deliberately: #netstatus lives OUTSIDE #tstage, and switching it to
+   `fixed` changes what it anchors to under the touch layer's rotated stage. Same positioning
+   scheme as before, different edge. */
+#netstatus{display:none;position:absolute;top:10px;right:10px;left:auto;transform:none;
+  z-index:22;padding:5px 26px 5px 10px;text-align:right;font-size:12px;color:#e8ddc2;opacity:0.92;
   max-width:min(560px,86vw);}                 /* v128.2: it used to grow to whatever the text wanted */
+/* …but the minimap owns that corner whenever it is on screen (top:10 right:10, ~184x134), so drop
+   below it in the two cases where one is showing: classic (always on) and bar-mode once the
+   player has toggled it. Classic is "neither layout class present" — there is no .classic-mode.
+   The touch layer is NOT in this list on purpose: it keeps the panel top-centre, where a
+   top-right minimap cannot reach it. */
+html:not(.touch-mode):not(.bar-mode) #netstatus,
+.bar-mode.dmapon #netstatus{top:158px;}
 #netstatus .netsub{font-size:11.5px;color:#98a2bf;}
 /* the fold control: a real 28px touch target, parked in the panel's corner */
 #netmin{position:absolute;top:2px;right:2px;width:26px;height:26px;line-height:24px;
@@ -189,8 +332,12 @@
 #netstatus.netfold #netmsg{display:none;}
 #netstatus.netfold #netmin{display:none;}
 #netstatus.netfold #netchip{display:inline-block;}
-/* on a phone the whole thing sits smaller and higher, clear of the quest ribbon */
-.touch-mode #netstatus{top:38px;font-size:11px;max-width:70vw;}
+/* On a phone the whole thing sits smaller and higher, clear of the quest ribbon — and it stays
+   TOP-CENTRE there. The touch strip is 34px in a rotated stage held up by ~190 assertions that
+   took thirteen field-test rounds to get green; the desktop panel moving to a corner is not a
+   reason to go near it. Explicit left/right/transform so the new base rule cannot leak in. */
+.touch-mode #netstatus{top:38px;left:50%;right:auto;transform:translateX(-50%);text-align:center;
+  font-size:11px;max-width:70vw;}
 .touch-mode #netstatus .netsub{font-size:10.5px;}
 
 /* room code: readable, selectable, copyable */
@@ -236,6 +383,10 @@
 .playbtn{font-size:1.35em!important;padding:16px 20px!important;letter-spacing:2px}
 #friendsrow{display:none;margin-top:6px}
 #friendsrow button{display:block;width:100%;margin-top:6px}
+#whoami .renamebtn,.overlay .renamebtn{font-size:14px;padding:6px 12px;line-height:1;
+  background:rgba(20,18,12,.75);border:1px solid rgba(224,169,46,.45);color:#e6d9b4;border-radius:8px;
+  box-shadow:none;cursor:pointer;}
+.overlay .renamebtn:hover{background:rgba(224,169,46,.2);color:#fff3d0;}
 #whoami{margin-top:12px;font-size:12px;color:#b9ad8c;text-align:center;letter-spacing:.5px}
 #whoami b{color:#e8d9b0;font-weight:normal}
 .renamebtn{background:none;border:none;color:#b9ad8c;cursor:pointer;font-size:12px;padding:2px 4px}
