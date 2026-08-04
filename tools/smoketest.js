@@ -2097,6 +2097,31 @@ global.__G.setGameOver(false);
       gu.remote=null; gu.garrison=null;
     }
   }
+  // ---- v129.2: THE MENU OPENS ON THE NAME SCREEN, EVERY TIME ----
+  // v128.9 skipped this screen for anyone with a stored name. Since v124 has been writing one on
+  // every first load, that meant essentially nobody ever saw it — they got a black flash instead,
+  // because the CSS shows #namescreen at parse time and the skip could not run until all fourteen
+  // scripts had loaded. Assert the opening screen, not the intention.
+  {
+    const G3=global.__G, scr=id=>(global.document.getElementById(id).style||{}).display;
+    // THE OPENING STATE CANNOT BE READ HERE — uiSolo ran hundreds of checks ago and hid every
+    // menu, which is correct. So assert the two things that PRODUCE it instead: the boot has no
+    // branch that can route past the name screen, and uiScreen does what the boot asks of it.
+    const netSrc=fs.readFileSync(path.join(ROOT,"js/10-net.js"),"utf8");
+    const boot=netSrc.slice(netSrc.indexOf("function firstRun()"),netSrc.indexOf("function firstRun()")+900);
+    check("v129.2 menu: the boot opens on the name screen UNCONDITIONALLY — no stored-name shortcut",
+      /uiScreen\(\s*["']namescreen["']\s*\)/.test(boot)&&!/known\s*\?/.test(boot));
+    check("v129.2 menu: …and it prefills the box first, so CONTINUE is one tap and nobody invents a name",
+      /playername/.test(boot)&&boot.indexOf("p.value=NET.myName")<boot.indexOf("uiScreen"));
+    G3.NET.uiScreen("namescreen");
+    check("v129.2 menu: uiScreen shows exactly one screen and hides the rest",
+      scr("namescreen")==="flex"&&scr("startmenu")==="none"&&scr("setupscreen")==="none");
+    global.document.getElementById("playername").value="Ragnar the Bold";
+    G3.NET.uiName();
+    check("v129.2 menu: CONTINUE takes the typed name and carries you to the shields",
+      G3.NET.myName==="Ragnar the Bold"&&scr("namescreen")==="none"&&scr("startmenu")==="flex");
+    G3.NET.uiHideMenus(); // the game is running — leave the menus down, as we found them
+  }
   // ---- v128.7: THE DEPLOY ACTUALLY REACHES THE DEVICE ----
   // This file has now shipped stale code to a real phone once (v128.2, an unbumped VERSION) and
   // a stale DOCUMENT to a real desktop once (v128.6 — John's desktop reported v128.5 while his

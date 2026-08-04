@@ -2301,19 +2301,27 @@ NET.uiHowTo=function(show){
     el("playername").addEventListener("keydown",e=>{if(e.key==="Enter")NET.uiName();e.stopPropagation();});
     try{const n=localStorage.getItem("regicideName");if(n)el("playername").value=n;}catch(_){}
   }
-  // v128.9 THE NAME SCREEN COMES BACK — but it is never a gate for a RETURNING player.
-  // v124 removed it because typing a name before you have seen the game is a real drop-off
-  // point. That reasoning still holds, and it is satisfied by PREFILLING: the box arrives
-  // already holding a rolled name, so CONTINUE is one tap and nobody has to invent anything.
-  // Someone who has played before skips it entirely and lands on the shields.
+  // v129.2 THE NAME SCREEN IS A STEP, NOT A GATE — and it shows EVERY launch.
+  //
+  // v128.9 skipped it for anyone with a stored name, reasoning that a returning player should not
+  // be asked twice. That was wrong in practice for a reason the code made invisible: v124's
+  // autoName has been WRITING a rolled name to localStorage on every first load since v124, so
+  // essentially every existing player is already "returning" and nobody ever saw the screen. What
+  // they saw instead was a black flash — the CSS shows #namescreen at parse time, and the skip
+  // could not run until all fourteen scripts had loaded. A screen that appears and then leaves on
+  // its own reads as a bug, and John reported it as one.
+  //
+  // v124's original concern — typing a name before you have seen the game is a real drop-off
+  // point — is answered by PREFILLING, not by skipping: the box arrives holding a rolled name, so
+  // CONTINUE is one tap and nobody has to invent anything. Showing it always is also the honest
+  // use of that moment: the game is still pulling ~29 MB behind this screen.
   (function firstRun(){
     let n=null; try{n=localStorage.getItem("regicideName");}catch(_){}
-    const known=!!n;
     NET.myName=n||NET.rollName();
     try{localStorage.setItem("regicideName",NET.myName);}catch(_){}
     const p=el("playername"); if(p)p.value=NET.myName;
     NET.showWhoAmI();
-    NET.uiScreen(known?"startmenu":"namescreen");
+    NET.uiScreen("namescreen");
   })();
   // v92: host option toggles
   const pickPair=(idA,idB,set)=>{
