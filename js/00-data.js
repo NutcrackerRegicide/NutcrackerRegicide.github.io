@@ -345,29 +345,233 @@ function rps(attCls,defCls){ // ---- the v84 wheel ----
   }
   return 1.0;
 }
+// ============ BUILDING RADII — v131.6, AND THE FIELD IS NOW SPLIT IN TWO ============
+// ONE NUMBER WAS DOING THREE JOBS AND IT COULD NOT DO ALL THREE. `r` was the building's collision
+// circle AND its spacing circle AND the distance every reach test measured from:
+//   PHYSICAL   the hard push out of the wall (05-combat.js:663, `r+0.7`), the steer that walks a
+//              unit around the edge (:694 and :709, `r+1.4`), the shots that must not pass through
+//              masonry (:126/:167/:951, `r*0.8`) and the sight line that picks the target (:195,
+//              `r*0.85`).                                        —> these are `rBlock` now.
+//   REACH      melee and siege against a structure (:470/:502, `dist - r`), every interact prompt
+//              (06-input.js:315-318, 338, 350, 360, 370 and the 10-net mirrors at :978/:986/:995/
+//              :1135/:2027), the bot builder's stand point (07-ai.js:930) and how close an attacker
+//              walks to a wall (:617/:1052/:1101).                —> these are `bSurf` now.
+//   SPACING    validFor (06-input.js:674/677) refuses any plot within `r + b.def.r + 2.2`, and
+//              findSpot/findSpotNear keep `r+2.6` of hammer room (07-ai.js:266/:278).
+//   AND THE REST, all still plain `r`: splash against a structure (05-combat.js:70, `r*0.6`), the
+//              plaza disc for the APRON_COURT types (03-buildings.js:3143, `r*0.92`), the road plan
+//              (:639/:643/:653/:655), the tree fell radius (:3217, `r+2.2`), the deposit prompt
+//              (09-main.js:170 and 10-net.js:1178, `r+3.5`) and the arrival test for a shot aimed
+//              AT a building (05-combat.js:150).
+// 03-buildings.js:2985 has said so in as many words the whole time: "def.r is a spacing radius —
+// 11 for a town centre whose widest hide is 7.5".
+//
+// THE BUG. The v131 buildings pass rewrote 2,168 lines and ~590 geometry calls across six ages and
+// changed NOT ONE `r:`. Every rebuilt model blocked against the circle its PREVIOUS model needed —
+// the owner's report was "a lot of new models, specifically with the buildings and mountains, that
+// have a new footprint but I can walk through them", and that is exactly what it was.
+//
+// AND THE FIRST FIX MADE IT WORSE. Growing `r` to the measured footprint fixed the walking-through
+// and broke the building: the exclusion disc goes as `(r + r' + 2.2)^2`, so the buildable yard
+// shrinks QUADRATICALLY in a number that was only ever meant to describe masonry. Measured with the
+// game's own findSpot() in a real AI-built town (`node tools/_plotroom.js`), placement success went
+// stable 8.5-11.1% -> 0.0-0.7%, market 2.9-6.2% -> 0.0-0.3%, siege_workshop 3.0-6.0% -> 0.0-0.1%,
+// archery_range 16.6-20.1% -> 3.3%, temple 33.3-42.6% -> 10.5-11.5%. The AI's desire ladder
+// (07-ai.js:364-392) is a bare `else if` chain with NO FALLBACK — once it wants a stable it can
+// never place, `need()` stays true forever and the ladder never reaches the blacksmith — so the
+// smoketest's "the AI directors raise a blacksmith at Iron" went red 6 runs in 12. Deterministic,
+// not flake. Three types (barracks 10.9, blacksmith 8.6, castle 19.1) could not be spent as `r` at
+// ALL: the castle's own exclusion against the town centre alone would leave a 3.5-wide annulus in
+// the ring findSpot samples, i.e. 0/400 legal plots on an EMPTY map.
+//
+// SO: `rBlock` IS THE PHYSICAL FOOTPRINT AND NOTHING ELSE, and `r` IS BACK TO ITS PRE-v131.5 VALUE
+// ON EVERY SINGLE TYPE — the table below is the shipped v131 table, digit for digit. THE PLACEMENT
+// RULES NEVER SEE rBlock, so the AI's yard is not merely similar to what it was, it is IDENTICAL:
+// `node tools/_plotsame.js` freezes one AI-built town to a file, rebuilds it in two working trees
+// and SEEDS Math.random before asking findSpot, and the reverted-r tree and this one return the
+// same number in every cell of the table — 2165 legal plots out of 11200 samples in a 57-building
+// town, 7543 in a 31-building one, in both. The v131.5 radii scored 1871 and 7776 on the same two
+// towns with the same dice.
+// rBlock DEFAULTS TO r when absent (the loop under the table), so anything without one — walls,
+// gates, the farm, and anything added later — behaves exactly as before.
+// THE ONE THING THAT IS NOT FREE is REACH, and it has its own note at bSurf below: a body shoved
+// out by a bigger wall has to still be able to touch the building. That cost is paid there.
+//
+// HOW THESE WERE DERIVED, AND VERIFIED TWICE BECAUSE FOUR TOOLS HAVE LIED IN THIS PROJECT.
+//   1. `node tools/_bldfoot.js --ages` builds every (type, age, plot), merges the body, CLIPS every
+//      triangle to the player's own height band (y 1.30-2.40 on a 2.6-tall figure) and area-gates
+//      outliers at 85%/1.25x the way _bFootprint gates the apron, so a flagpole planted 8.8 out on
+//      its own yard cannot size a blocker. Its header names the two bugs it had: whole-triangle
+//      extents reported the star fort's sloped GLACIS at its 24.0 base radius, and a band floor
+//      under 1.3 swallowed every moat, ditch and plinth in the file.
+//   2. `node tools/_blockprobe.js` measures the same thing with NOTHING in common but buildingMesh:
+//      THREE.Raycaster fired inward from 60 units out along 72 bearings at 12 heights, first hit
+//      wins, outliers trimmed by BEARING COUNT rather than by area. The two instruments agree to
+//      0.15 on ten of the fourteen (house 4.81 vs 4.81, castle 23.84 vs 23.76, watch tower 4.73
+//      vs 4.70, temple 7.43 vs 7.38); where they part it is the gate, not the geometry — the
+//      market's age-3 canopy corner is 9.97 by area gate and 10.60 by bearing count.
+//   3. `node tools/_blockprobe.js --sim` throws away geometry altogether and drives a real unit
+//      into a real placed building with the game's own moveUnit() from 72 bearings: every type
+//      stops at exactly rBlock+0.7, which is the collision system agreeing in its own words.
+// THE RULE: block = min( circumscribing - 0.35*(circumscribing - inscribed), inscribed + 1.2 ),
+// then rBlock = block - 0.7. Circumscribing, because a player must not stand inside rendered
+// geometry; minus a third of the corner excess, because a circle on the exact corner radius stops
+// you in open air along the middle of every flat face; capped at inscribed + 1.2, because half the
+// v131 types are a shell with a yard feature bolted to ONE side and a circle chasing that
+// appendage blocks a body-width of nothing on the opposite side.
+//
+// WHAT A CIRCLE STILL CANNOT DO, now that spacing is no longer the excuse:
+//   · the AGE SPREAD is up to 2x on one type. The Enlightenment guard tower is 11.8 x 12.5 and the
+//     Medieval one a 7.9-wide drum, so an rBlock that fits age 5 stands ~2.6 off the age-4 wall.
+//   · the ARCHERY RANGE'S BACKSTOP is an appendage and is deliberately NOT collided — see its line.
+//   · the CASTLE is two concentric rings and then a star; 19.1 is the best single circle and it is
+//     still the wrong primitive. See its line.
+//   · WALLS AND GATES are not this circle at all — see the note above BLD.wood_wall.
 const BLD={
-  towncenter:{name:"Town Center",hp:1500,r:11,cost:null,hits:0},
-  house:     {name:"House",      hp:220, r:4.6,cost:{wood:40}, hits:8},
-  barracks:  {name:"Barracks",   hp:480, r:7.2,cost:{gold:30,wood:100},hits:14},
-  tower:     {name:"Guard Tower",hp:400, r:4.0,cost:{stone:250,wood:100},hits:10,atk:{dmg:9,rng:18,cd:1.1}}
+  // rBlock 12.2 against a spacing r of 11. Measured 11.2 x 12.6 half-extents, corners at 13.01;
+  // the old blocker stood at 11.7 and let you into the age-4 keep's forebuilding. Worst age is 4.
+  // `r` STAYS 11 — it is the earth court (`r*0.92`, 03-buildings.js:3143), the deposit prompt
+  // (09-main.js:170, `r+3.5`) and the widest exclusion disc on the map.
+  towncenter:{name:"Town Center",hp:1500,r:11,  rBlock:12.2,cost:null,hits:0},
+  // rBlock 3.8 against a spacing r of 4.6 — THE ONLY ONE THAT SHRINKS, and it is a fix. Every age
+  // of the house measures 2.8-3.8 half-width with corners at 4.81, and the blocker at 5.3 was 1.5
+  // units of phantom wall around the most numerous building in the game. Houses still SPACE at
+  // 4.6, so no town re-plans itself over this.
+  house:     {name:"House",      hp:220, r:4.6, rBlock:3.8, cost:{wood:40}, hits:8},
+  // rBlock 10.9 against a spacing r of 7.2, and this is one of the three that could not ship at all
+  // as a single number. Measured: ages 0-4 are 14.7 x 11.1, the Enlightenment drill hall 19.9 x
+  // 20.8 with corners at 13.12, so the old blocker at 7.9 was inside the wall of EVERY age and
+  // melee troops stood in the middle of a barracks to hit it. Barracks come 2-4 to a town and their
+  // exclusion is `r + r' + 2.2` against everything else: at 10.9 the same yard went from 414 legal
+  // plots in 800 samples to 0. Physical 10.9, spacing 7.2, and both are now true at once.
+  barracks:  {name:"Barracks",   hp:480, r:7.2, rBlock:10.9,cost:{gold:30,wood:100},hits:14},
+  // rBlock 5.9 against a spacing r of 4.0. Classical is a 7.2 x 11.4 hall, Medieval a 7.9 drum,
+  // Enlightenment 11.8 x 12.5 — the old 4.7 blocker sat inside all three. Age 4 is the drum and
+  // gets ~2.0 of air out of the age spread; that is the price of one circle for six models.
+  tower:     {name:"Guard Tower",hp:400, r:4.0, rBlock:5.9, cost:{stone:250,wood:100},hits:10,atk:{dmg:9,rng:18,cd:1.1}}
 };
-BLD.storage_pit={name:"Storage Pit",hp:250,r:6.6,cost:{wood:75},hits:8};
-BLD.archery_range={name:"Archery Range",hp:420,r:6.4,cost:{wood:125},hits:12};
-BLD.stable={name:"Stable",hp:450,r:6.8,cost:{wood:125},hits:12};
-BLD.temple={name:"Temple",hp:380,r:5.6,cost:{wood:150},hits:12,heal:{rng:10,rate:2}};
+// rBlock 6.9 against a spacing r of 6.6. Barely moves: the pit is 13.1 x 10.5 at its widest (age 4)
+// and the old circle was already close. Its plaza is `r*0.92` and stays exactly where it was.
+BLD.storage_pit={name:"Storage Pit",hp:250,r:6.6,rBlock:6.9,cost:{wood:75},hits:8};
+// rBlock 7.0, SIZED TO THE SHELL AND NOT TO THE BUTTS — the one place the measured number is
+// deliberately NOT spent even though rBlock is free. The worst case measures 13.71, and the mesh
+// says exactly where it comes from: the SHELL is one box, x -5.60..5.60 by z -4.40..4.40 (11.2 x
+// 8.8) with corner posts out to 5.77 / 4.57, and everything past z 4.6 is YARD — the ages-4/5 turf
+// butt, a 6.5 x 6.8 mound 2.6 tall centred at (-4.6, 8.4), and the age-5 earth backstop, an
+// 11.0 x 2.6 bank centred at (1.6, 10.6). Both stand entirely at +z with open grass at -z past 4.4.
+// A 13.7 circle would stop a player 8.5 units short of the south wall in order to block a prop, and
+// being stopped by nothing is a worse bug than walking through a mound of turf. So: sized to the
+// shell, and the butts stay walkable BY DESIGN. Measured with `node tools/_blockprobe.js --type
+// archery_range`: at 7.0 the ages 1-3 range has ONE bearing of 72 poking in, by 0.38; ages 4 and 5
+// have 10 and 15, all of them the mound and the bank. Fixing those wants a second, OFFSET circle —
+// the same shape of change as the wall OBB, and the same answer: not this round.
+BLD.archery_range={name:"Archery Range",hp:420,r:6.4,rBlock:7.0,cost:{wood:125},hits:12};
+BLD.stable={name:"Stable",hp:450,r:6.8,rBlock:7.6,cost:{wood:125},hits:12};   // 12.8 x 14.6, corners 8.89
+BLD.temple={name:"Temple",hp:380,r:5.6,rBlock:6.5,cost:{wood:150},hits:12,heal:{rng:10,rate:2}}; // 12.8 x 13.6, corners 7.43
+// FARM IS `flat:true` — 05-combat.js:643 skips it before the circle is ever tested, so it has never
+// collided and needs no rBlock at all. Its `r` is placement spacing (farms pack at gap 0.5), the
+// ripe-corn prompt (`r+2.5`) and the plaza disc, and none of those is a wall. Measured 12.2 x 13.7
+// against a spacing radius of 6.6, so the fences do overlap slightly at maximum packing — that is
+// cosmetic, it fixes no walk-in, and changing it only churns where the AI lays fields.
 BLD.farm={name:"Farm",hp:150,r:6.6,cost:{wood:75},hits:8,flat:true};
-BLD.market={name:"Market",hp:520,r:7.2,cost:{gold:25,stone:25,wood:125},hits:14};
-BLD.siege_workshop={name:"Siege Workshop",hp:480,r:7.2,cost:{wood:200},hits:14};
-BLD.watch_tower={name:"Watch Tower",hp:220,r:2.4,cost:{stone:50,wood:50},hits:6,vision:80};
-BLD.blacksmith={name:"Blacksmith",hp:420,r:5.6,cost:{wood:100},hits:12}; // v87: spend quest XP here (E) — max 1 per team
+BLD.market={name:"Market",hp:520,r:7.2,rBlock:7.8,cost:{gold:25,stone:25,wood:125},hits:14}; // 14.6 x 13.6, corners 9.97 (the age-3 canopy corner still clips by 1.5)
+BLD.siege_workshop={name:"Siege Workshop",hp:480,r:7.2,rBlock:8.0,cost:{wood:200},hits:14};  // 15.5 x 14, corners 9.29
+// rBlock 4.0 against a spacing r of 2.4. BSCALE shrinks this one to 0.75 and even so the
+// Enlightenment tower measures 7.5 x 9.3 against a 3.1 blocker — you could stand in the middle of
+// the stair. NOTE the garrison spit-out is `r+1.6` (06-input.js:350, 10-net.js:978) and stays on
+// `r`: it is a gameplay position, and at 4.0 it would drop the rider two units further out.
+BLD.watch_tower={name:"Watch Tower",hp:220,r:2.4,rBlock:4.0,cost:{stone:50,wood:50},hits:6,vision:80};
+// rBlock 8.6 against a spacing r of 5.6, and the SECOND of the three that could not ship as one
+// number. Measured: ages 2-3 are 11.9 x 7.5, age 4 is 11.4 x 11.7 and the Enlightenment forge is
+// 16.1 x 14 with corners at 10.38, so the old blocker at 6.3 was inside the age-4 and age-5 walls.
+// There is exactly ONE forge per team and it is placed LATE into a yard that is already full, so it
+// is the type whose own radius most directly gates its own plot: `node tools/_plotroom.js 16200
+// --sweep blacksmith 5.6,6.4,7,7.6,8.6` in a 51-building town returns 59 / 25 / 0 / 0 / 0 legal
+// plots out of 400. As rBlock it costs nothing at all.
+BLD.blacksmith={name:"Blacksmith",hp:420,r:5.6,rBlock:8.6,cost:{wood:100},hits:12}; // v87: spend quest XP here (E) — max 1 per team
+// WALLS AND GATES DO NOT USE THIS CIRCLE AT ALL, so they get NO rBlock and nothing here moves.
+// Anything with `wall:true` is blocked by an ORIENTED BOX in 05-combat.js:645-660 whose half-
+// extents are hard-coded there — `hl=6.25+0.55, hw=0.6+0.7` — and `r` only feeds placement chaining
+// (06-input.js:672, `r+r-3.4`) and the wall-line router. The 6.25 is exactly right: every wall
+// segment in the file measures 6.25 of half-length. THE 0.6 HALF-WIDTH IS NOT:
+//     wood_wall   a2 1.30  a3-a4 1.36   a5 3.90     stone/fort_wall  a3 0.85  a4 3.51  a5 3.60
+//     wood_gate   a2 5.50   a3-a5 1.40-1.60           stone/fort_gate  a3 3.15  a4 5.95  a5 3.70
+// i.e. the Enlightenment palisade is 3x wider than the box that blocks it, the age-2 wood gate is
+// 4.2x wider, and the gate towers stand 7.90 out along the wall's OWN axis against a 6.80 half-
+// length. (The age-4 stone/fort curtain is stranger still: its wall proper starts at y 2.60, ABOVE
+// a 2.6-tall figure's head, and the only thing standing in the band is a battered rampart of half-
+// extent 3.51 on BOTH axes — so along the wall's length the box currently blocks more than the
+// model has, and across it, less.) That fix belongs in the OBB in 05-combat.js — it wants per-type
+// half-extents, not a radius — so it is reported and NOT half-done here. Measured with
+// `node tools/_blockprobe.js --walls`, which clips to the band and does NOT apply an area gate: a
+// percentile gate is right for sizing a circle and wrong for sizing a box, and _bldfoot's gate cuts
+// the age-4 curtain's own length off (it reports 3.51 x 3.51 for a 12.5-long segment).
 BLD.wood_wall={name:"Wood Wall",hp:650,r:5.5,cost:{wood:55},hits:6,wall:true};
 BLD.wood_gate={name:"Wood Gate",hp:560,r:5.8,cost:{wood:85},hits:7,wall:true,gate:true};
 BLD.stone_wall={name:"Stone Wall",hp:1700,r:5.5,cost:{stone:100},hits:8,wall:true};
 BLD.stone_gate={name:"Stone Gate",hp:1400,r:5.8,cost:{stone:75},hits:8,wall:true,gate:true};
 BLD.fort_wall={name:"Fortified Wall",hp:3400,r:5.5,cost:{stone:200},hits:10,wall:true};
 BLD.fort_gate={name:"Fortified Gate",hp:2800,r:5.8,cost:{stone:75},hits:10,wall:true,gate:true};
-BLD.castle={name:"Castle",hp:3000,r:11,cost:{stone:500,wood:150},hits:30,
+// rBlock 19.1 against a spacing r of 11 — THE LARGEST MISS IN THE FILE, by a factor of two, and the
+// THIRD that could not ship as one number. §F.5's age-4 concentric castle is TWO rings: an outer
+// curtain of eight 13.6-long segments standing at radius 15.4 (16.3 to the outer face, 17.66 at the
+// corners) round an inner keep, with a twin-towered gatehouse whose drawbridge reaches 23.8 to +z.
+// §F.6's age-5 star fort is a 20x20 terreplein with four diamond BASTIONS whose salients reach 19.9
+// on the diagonals. The blocker at 11.7 was inside the outer curtain of one and inside the bastion
+// ring of the other: you walked through 33 units of masonry and stood in the ward. As `r` this was
+// unshippable — findSpot samples a ring 11-37 from the town centre and the castle's exclusion
+// against the TC alone (19.1+11+2.2 = 32.3) leaves barely any annulus, measured 0/400 legal plots
+// on an EMPTY yard against 214/400 at 11. As rBlock it costs nothing. It is still ONE CIRCLE round
+// TWO RINGS: the gatehouse drawbridge at 23.8 and the age-4 corner turrets past 19.8 stay clippable,
+// and the honest fix is four bastion circles plus an oriented box. 19.1 is the best single number.
+BLD.castle={name:"Castle",hp:3000,r:11,rBlock:19.1,cost:{stone:500,wood:150},hits:30,
   atk:{dmg:14,rng:22,cd:4.5,volley:5,vcd:0.15},vision:75}; // v84: five arrows in rapid succession, then the long wind-down (DPS-neutral with the old 0.9s single shots)
+// THE DEFAULT, AND IT IS WHY THIS SPLIT IS SAFE. Anything without an explicit rBlock — every wall,
+// every gate, the farm, and anything added to this table tomorrow — gets its own `r` and therefore
+// behaves EXACTLY as it did before the field existed. There is no third state to reason about, and
+// 05-combat can read `def.rBlock` unguarded.
+for(const _k in BLD)if(BLD[_k].rBlock===undefined)BLD[_k].rBlock=BLD[_k].r;
+
+// ---- bSurf: HOW FAR IS THE WALL? THE THIRD THING `r` WAS DOING, AND THE ONE THAT BITES BACK ----
+// Splitting the blocker out of `r` is not free, and this is the bill. A dozen tests in the game ask
+// "how far is this body from the BUILDING" and spell it `dist - def.r` or `def.r + k`:
+//     05-combat.js:470/:502   melee and siege reach against a structure   (dist - r < rng + 0.6)
+//     06-input.js:315-318/338 the E prompt and the builder's hammer       (r + 2.4 … r + 2.6)
+//     06-input.js:350         where a garrison spits you out             (r + 1.6)
+//     07-ai.js:930            where a bot builder STANDS to swing        (r + 0.9, arrive within 1.3)
+//     07-ai.js:617/1052/1101  how close an attacker walks to a wall      (rng + r - 0.6)
+// Every one of them is measured from the SURFACE. While `r` was also the blocker they were exact,
+// because a body pressed against a building sat at `r + 0.7` and 0.7 is inside every one of those
+// constants. The moment the blocker became rBlock they stopped being exact, and where rBlock ran
+// far ahead of r they stopped being SATISFIABLE: a villager shoved out to 9.3 by a blacksmith
+// cannot reach a hammer radius of 8.2, so it walks up, gets pushed off, walks up again and the
+// foundation never rises. That is not theory — the first cut of this change failed the smoketest's
+// "the AI directors raise a blacksmith at Iron (0 ever built)" on every single run, because
+// 07-ai.js:930 wants the builder within 1.3 of `r + 0.9` and the wall now stands 3.0 further out.
+// Broken by construction for barracks (rBlock-r 3.7), blacksmith (3.0), castle (8.1) and, by a
+// tenth, the guard tower (1.9).
+// SO: THE WALL IS max(r, rBlock), AND ONLY REACH USES IT. It never shrinks anything — the house is
+// the only type whose rBlock is smaller than its r, and its prompt and gather radii stay at 4.6
+// exactly as before — and it never touches SPACING (validFor, findSpot), the apron, the plaza, the
+// road plan, the tree fell or the splash disc, all of which are still plain `r`.
+function bSurf(def){return def.rBlock>def.r?def.rBlock:def.r;}
+// ---- bStand: AND THE HARD-CODED STOP DISTANCES MOVE WITH THE WALL BY THE SAME AMOUNT ----
+// Not every approach in the file is written as `def.r + k`. Two of them aim at a point a few units
+// off a building's centre and declare arrival inside a bare literal, and both literals were tuned
+// against the blocker as it stood:
+//     07-ai.js:917  a citizen converting to a soldier walks to (bar.x+3, bar.z+3) and must get
+//                   within 4. A barracks blocker at 7.9 puts the nearest reachable point 3.66 from
+//                   that target — it cleared the literal by 0.34.
+//     07-ai.js:972  a hauler banks its load at (dp.x+2.5, dp.z+2) and must get within 9 at a town
+//                   centre. A TC blocker at 11.7 puts the nearest reachable point 8.98 away — it
+//                   cleared the literal by 0.02. TWO HUNDREDTHS OF A UNIT.
+// Move the wall out and both stop dead: measured, a hauler at the v131.5 town-centre radius NEVER
+// DEPOSITS (closest approach 9.82 against a stop of 9), which is a silent economy failure that
+// nothing in the smoketest names. So the rule is arithmetic, not judgement: the wall moved out by
+// bSurf-r, so a stop distance measured against that wall moves out by exactly bSurf-r. Anything
+// that worked before still works; anything that was already broken (a castle used as a drop-off
+// has been unreachable at 6.5 since long before this change) stays broken and stays reportable.
+function bStand(def,want){return want+bSurf(def)-def.r;}
 BLD.towncenter.age=0; BLD.house.age=0; BLD.storage_pit.age=0; BLD.barracks.age=0;
 BLD.archery_range.age=1; BLD.stable.age=1; BLD.farm.age=1; BLD.watch_tower.age=1;
 BLD.siege_workshop.age=2; BLD.wood_wall.age=2; BLD.wood_gate.age=2; BLD.blacksmith.age=2;

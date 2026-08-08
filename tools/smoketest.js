@@ -57,7 +57,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -299,9 +299,114 @@ check("forests planted ("+woods+" choppable trees)",woods>=60);
 check("castle mesh has geometry",buildingMesh("castle",0).children.length>=8);
 check("wall mesh has geometry",buildingMesh("stone_wall",0).children.length>=2);
 // ---- v53: six ages of architecture, 2x footprints, live restyle ----
-check("footprints: 2x mains, farm-sized storage pit",
-  BLD.towncenter.r===11&&BLD.house.r===4.6&&BLD.castle.r===11&&
-  BLD.farm.r===6.6&&BLD.storage_pit.r===6.6&&BLD.watch_tower.r===2.4);
+// v131.5 THIS PINNED SIX LITERALS AND THAT IS ALL IT EVER CHECKED, so it stayed green through the
+// entire v131 buildings pass — 2,168 lines and ~590 geometry calls across six ages, and not one
+// `r:` moved with them. A pin cannot notice that a model outgrew its blocker.
+// v131.6 the pin now covers BOTH FIELDS. `r` is the spacing/gameplay radius and is back to exactly
+// what it was before v131.5 touched it — every literal below is the shipped v131 value, and if one
+// of them moves again the AI's buildable yard changes shape underneath it. `rBlock` is the physical
+// footprint, pinned beside it, so the two can never be silently confused for each other again.
+check("footprints: spacing r is the shipped v131 table, untouched",
+  BLD.towncenter.r===11&&BLD.house.r===4.6&&BLD.castle.r===11&&BLD.blacksmith.r===5.6&&
+  BLD.farm.r===6.6&&BLD.storage_pit.r===6.6&&BLD.watch_tower.r===2.4&&
+  BLD.barracks.r===7.2&&BLD.tower.r===4.0&&BLD.archery_range.r===6.4&&BLD.stable.r===6.8&&
+  BLD.temple.r===5.6&&BLD.market.r===7.2&&BLD.siege_workshop.r===7.2);
+check("rBlock: the physical footprint is its own field, and falls back to r where absent",
+  BLD.towncenter.rBlock===12.2&&BLD.house.rBlock===3.8&&BLD.barracks.rBlock===10.9&&
+  BLD.blacksmith.rBlock===8.6&&BLD.castle.rBlock===19.1&&BLD.watch_tower.rBlock===4.0&&
+  BLD.farm.rBlock===BLD.farm.r&&BLD.wood_wall.rBlock===BLD.wood_wall.r&&
+  BLD.fort_gate.rBlock===BLD.fort_gate.r);
+// THE BLOCKER MUST COVER THE BUILDING. Measured live off the merged body: the standing mass in the
+// player's own height band (y 1.3-2.4 on a 2.6-tall figure), area-gated the way _bFootprint gates
+// the apron so a flagpole on the far side of a yard cannot size the answer. The hard push is at
+// `rBlock+0.7` (05-combat.js:663), so `rBlock+0.7` must reach at least the model's widest FLAT face
+// or a player can stand inside rendered wall. Corners are allowed to be clipped — a circle on the
+// exact corner radius stops you in open air along the middle of every face, which is a worse bug.
+// v131.6 THIS SKIPPED FOUR TYPES AND NOW IT SKIPS ONE. barracks / castle / blacksmith were excluded
+// because their measured blockers (10.9 / 19.1 / 8.6) could not be spent as `r` — `r` is ALSO the
+// spacing radius (06-input.js:675) and at those values the AI could not place them at all: measured
+// in ONE town with `tools/_plotroom.js --pairs`, the barracks went from 414 legal plots in 800
+// samples to 0. rBlock costs placement NOTHING, so all three are in the gate now, and passing.
+//   archery_range is the one that remains, and not because it is hard: the age-4 turf butt and the
+//     age-5 earth backstop stand at +z 8.4-11.9 with nothing at -z past 4.4, so ONE CIRCLE that
+//     covers them stops the player 8.5 units short of the south wall. rBlock is deliberately sized
+//     to the SHELL (7.0) and the butt mounds stay walkable. Blocking them wants a second, OFFSET
+//     circle — the same shape of change as the wall OBB at 05-combat.js:645, and the same answer.
+// Anything else appearing in this list is a real regression.
+{
+  const RBAND_LO=1.3, RBAND_HI=2.4, SKIP={archery_range:1};
+  const clipY=(poly,sign,lim)=>{const out=[];
+    for(let i=0;i<poly.length;i++){const A=poly[i],B=poly[(i+1)%poly.length];
+      const da=(A[1]-lim)*sign, db=(B[1]-lim)*sign;
+      if(da>=0)out.push(A);
+      if((da>0&&db<0)||(da<0&&db>0)){const t=da/(da-db);
+        out.push([A[0]+(B[0]-A[0])*t,A[1]+(B[1]-A[1])*t,A[2]+(B[2]-A[2])*t]);}}
+    return out;};
+  const area=P=>{let nx=0,ny=0,nz=0;
+    for(let i=0;i<P.length;i++){const a=P[i],b=P[(i+1)%P.length];
+      nx+=(a[1]-b[1])*(a[2]+b[2]);ny+=(a[2]-b[2])*(a[0]+b[0]);nz+=(a[0]-b[0])*(a[1]+b[1]);}
+    return Math.hypot(nx,ny,nz)*0.5;};
+  // the body is measured UNMERGED — mergeBuildingBody only welds buffers, it moves no vertex, and
+  // buildingMesh's own tree already carries every part's transform once updateMatrixWorld has run.
+  const inscribed=(type,age)=>{
+    const g=buildingMesh(type,0,age,0,0); g.updateMatrixWorld(true);
+    const bs=global.__G.BSCALE[type]||1, T=[]; const v=new THREE.Vector3();
+    g.traverse(o=>{if(!o.isMesh||!o.geometry||!o.geometry.attributes.position)return;
+      const p=o.geometry.attributes.position, ix=o.geometry.index, m=o.matrixWorld, n=ix?ix.count:p.count;
+      const get=i=>{v.set(p.getX(i),p.getY(i),p.getZ(i)).applyMatrix4(m).multiplyScalar(bs);return [v.x,v.y,v.z];};
+      for(let i=0;i+2<n;i+=3){
+        const a=get(ix?ix.getX(i):i),b=get(ix?ix.getX(i+1):i+1),c=get(ix?ix.getX(i+2):i+2);
+        if(Math.max(a[1],b[1],c[1])<=RBAND_LO||Math.min(a[1],b[1],c[1])>=RBAND_HI)continue;
+        const Q=clipY(clipY([a,b,c],1,RBAND_LO),-1,RBAND_HI); if(Q.length<3)continue;
+        const w=area(Q); if(!(w>1e-7))continue;
+        let mx=0,mz=0; for(const q of Q){mx=Math.max(mx,Math.abs(q[0]));mz=Math.max(mz,Math.abs(q[2]));}
+        T.push({w,x:mx,z:mz});}});
+    if(!T.length)return 0;
+    let A=0; for(const t of T)A+=t.w;
+    const gate=k=>{const s=T.slice().sort((p,q)=>p[k]-q[k]); let acc=0,g2=s[s.length-1][k];
+      for(const t of s){acc+=t.w; if(acc>=A*0.85){g2=t[k]*1.25;break;}}
+      let m2=0; for(const t of s)if(t[k]<=g2&&t[k]>m2)m2=t[k]; return m2;};
+    return Math.max(gate("x"),gate("z"));
+  };
+  const bad=[];
+  for(const type of Object.keys(BLD)){
+    const d=BLD[type];
+    if(d.wall||d.flat||SKIP[type])continue;         // walls use the OBB; farms are walkable
+    for(let age=(d.age||0);age<6;age++){
+      const ins=inscribed(type,age);
+      if(d.rBlock+0.7 < ins-0.05)bad.push(type+" a"+age+" "+(d.rBlock+0.7).toFixed(1)+"<"+ins.toFixed(2)); // v131.6 rBlock is the wall now
+    }
+  }
+  check("no blocker is inside its own building ("+(bad.length?bad.join(" · "):"all clear")+")",bad.length===0);
+}
+// …AND THE OTHER HALF OF THE SAME COIN: A BLOCKER YOU CANNOT REACH PAST IS ALSO A BUG.
+// v131.6 this check exists because splitting rBlock out of `r` broke the game the first time it was
+// wired in, silently and in three different ways at once. A body is shoved out to `rBlock+0.7`, but
+// a dozen reach tests were still written against `r`: a villager stood 9.3 from a blacksmith and its
+// hammer reached 8.2, so the foundation never rose ("the AI directors raise a blacksmith at Iron:
+// 0 ever built", every run); a hauler could not get within 9 of a town centre's drop point and
+// NOTHING WAS EVER BANKED; a citizen could not get within 4 of a barracks to become a soldier.
+// None of those is a geometry bug, and the check above would pass through all three. So: place one
+// of every type, DRIVE A REAL UNIT INTO IT with the game's own moveUnit, and assert that from where
+// it is actually stopped it can still swing a hammer, land a sword, and stand where a bot builder
+// is told to stand. This is the check that would have caught all three.
+{
+  const bad=[], G=global.__G, bS=G.bSurf;
+  for(const type of Object.keys(BLD)){
+    const d=BLD[type];
+    if(d.wall||d.flat)continue;
+    const b=G.makeBuilding(0,type,-150,-105,true);
+    const u=G.makeUnit(0,"villager",-110,-105,{name:"Reacher"});
+    for(let i=0;i<600;i++)G.moveUnit(u,-1,0,1/30);      // walk straight at it until the wall stops us
+    const stop=Math.hypot(u.root.position.x-b.x,u.root.position.z-b.z), surf=bS(d);
+    if(stop>surf+2.6)bad.push(type+" hammer "+stop.toFixed(1)+">"+(surf+2.6).toFixed(1));  // 06-input.js:338
+    if(stop-surf>=CLS.villager.rng+0.6)bad.push(type+" melee gap "+(stop-surf).toFixed(1)); // 05-combat.js:502
+    if(stop-(surf+0.9)>1.3)bad.push(type+" bot-stand "+(stop-surf-0.9).toFixed(1)+">1.3");  // 07-ai.js:930
+    b.alive=false; u.alive=false;
+  }
+  check("a body stopped by the wall can still reach the building ("+
+        (bad.length?bad.join(" · "):"hammer, sword and builder's stand all clear")+")",bad.length===0);
+}
 check("scales: farm 0.6375, pit fills its footprint at 0.95, watch tower 0.75",
   global.__G.BSCALE.farm===0.6375&&global.__G.BSCALE.storage_pit===0.95&&global.__G.BSCALE.watch_tower===0.75);
 // THE MILL LAYOUT: eight farms must fit evenly around one storage pit on clear land
@@ -3005,7 +3110,14 @@ global.__G.setGameOver(false);
   // 5) THE CARTS: both rebuilt on jointed, trotting anatomy
   {
     const ox=G.makeUnit(0,"villager",-150,-8,{name:"Wain",bot:null}); G.setClass(ox,"oxcart");
-    const mule=G.makeUnit(0,"trader",-150,-14,{name:"Mule",bot:null});
+    // v131.7 THIS BUILT `trader` AND CALLED IT A MULE, WHICH IS WHY IT NEVER CAUGHT ANYTHING.
+    // `trader` and `tradecart` are two classes; until this round they were ONE MODEL, because both
+    // carry rig:"cart" in 00-data.js and the cart rig has no class branch in it. §H A4 scored the
+    // pair at ΔE00 0.0 / IoU 1.000 in both views — the only exact 1.000 in the game — while this
+    // assertion, the one place any test looks at either class, reported that collision as a PASS
+    // by building the wrong half of it. The market mule is `tradecart`. §E's Trader is a walking
+    // merchant nutcracker and is asserted on its own terms below.
+    const mule=G.makeUnit(0,"tradecart",-150,-14,{name:"Mule",bot:null});
     const oL=ox.rig&&ox.rig.horseLegs, mL=mule.rig&&mule.rig.horseLegs;
     const oxSG=ox.body.children.find(c=>c.isGroup&&Math.abs(c.scale.x-G.OXSCALE)<1e-9);
     check("v113 ox cart: 4 jointed TROT legs, 8 logs, 4 wheels, one group at OXSCALE "+G.OXSCALE,
@@ -3016,6 +3128,34 @@ global.__G.setGameOver(false);
     check("v113 market mule: jointed TROT legs, a neck pivot and cargo that hides when empty",
       !!mL&&mL.length===4&&mL.every(l=>l.userData.knee&&l.userData.trot)&&
       !!mule.rig.horseNeck&&!!mule.rig.goods&&mule.rig.goods.visible===false&&mule.rig.wheels.length===4);
+    // v131.7 §E THE TRADER IS A WALKING MERCHANT AND NOT THE CART HE BUYS FROM.
+    // Asserted structurally rather than by pixel: he is on the NUTCRACKER rig (two legs, two arms,
+    // a head — none of which the cart rig builds), he has NO mule and NO wheels, and he carries the
+    // strongbox §E names as his read on his BACK, above the shoulder line (world 1.95) and behind
+    // the skull's own back facet at z −0.54. The mesh count is the §H A10 ceiling test: everything
+    // §E adds parents into a cluster the rig already merges, so a merchant costs the same eleven
+    // draw calls as a spearman. If someone re-points this class at the cart rig, all five fail.
+    // The strongbox is looked for in VERTICES and not in a child mesh, because by the time anyone
+    // can see this unit the torso cluster is ONE welded mesh (that is the point of v128.6) and
+    // Box3.setFromObject on it returns the whole barrel. Counting positions in the region instead
+    // survives the merge and is what actually has to be true: geometry behind the head, above the
+    // shoulder. Region: torso-local y > 1.15 (world 2.10, the shoulder ball tops out at 2.07) and
+    // z < -0.60 (the skull's back facet is -0.54). Nothing else on any nutcracker is back there.
+    const trd=G.makeUnit(0,"trader",-150,-20,{name:"Merchant",bot:null});
+    const tr=trd.rig||{}; let sbn=0,sbY=9,sbZ=9;
+    if(tr.torso)for(const c of tr.torso.children){
+      const p=c.isMesh&&c.geometry&&c.geometry.attributes&&c.geometry.attributes.position; if(!p)continue;
+      for(let i=0;i<p.count;i++){const y=p.getY(i),z=p.getZ(i);
+        if(y>1.15&&z<-0.60){sbn++; if(y<sbY)sbY=y; if(z<sbZ)sbZ=z;}}
+    }
+    check("v131.7 trader: the nutcracker rig, not the mule — legs, arms, head, no wheels, no beast",
+      !!tr.legL&&!!tr.shinL&&!!tr.armR&&!!tr.faR&&!!tr.head&&!!tr.torso&&!tr.wheels&&!tr.horseG);
+    check("v131.7 trader: §E's strongbox rides above the shoulder line BEHIND the head ("+sbn+
+      " verts, lowest world y "+(sbn?(sbY+0.95).toFixed(2):"-")+", deepest z "+(sbn?sbZ.toFixed(2):"-")+")",
+      sbn>=8&&sbY+0.95>2.05&&sbZ<-0.70);
+    check("v131.7 trader: zero new draw calls — merged into the same 11 clusters as a foot unit ("+
+      trd._merged+" parts welded)",trd._merged>0&&trd.body.children.filter(c=>c.isMesh).length<=4);
+    trd.alive=false; trd.root.visible=false;
     ox.carry.wood=300; G.updateCargoVisual(ox);
     const full=ox.rig.logs.children.filter(l=>l.visible).length;
     ox.carry.wood=75; G.updateCargoVisual(ox);

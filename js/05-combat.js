@@ -121,9 +121,17 @@ function updateProjectiles(dt){
           dealDamage(p.att,v,p.dmg*rps(p.attCls,v.cls));done=true;break;
         }
       }
+      // v131.6 rBlock, MEASURED. This 0.8 inset was sized against the pre-v131 models and the
+      // arrow was dying deep inside the new ones: `node tools/_blockprobe.js --proj` puts the
+      // median bearing 9.02 units inside a castle wall at r*0.8, 3.60 inside a forge and 2.10
+      // inside a guard tower — the shot vanishes in the masonry instead of striking the face. At
+      // rBlock*0.8 the same medians are 2.54 / 1.20 / 0.58. The one type that gets worse is the
+      // house, whose rBlock is SMALLER than its r (3.8 against 4.6): its arrows now land 0.71
+      // inside the wall instead of 0.07. Twelve types better, one 0.64 worse, and the shot now
+      // agrees with the body — you cannot walk somewhere your own arrows fly through.
       if(!done)for(const b of buildings){
         if(!b.alive||b.def.flat)continue;
-        if(b!==p.ignoreB&&segDist2(_px,_pz,p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.r*0.8,2)){
+        if(b!==p.ignoreB&&segDist2(_px,_pz,p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.rBlock*0.8,2)){
           if(b.team!==p.att.team)damageBuilding(b,p.dmg,p.att);
           done=true;break;
         }
@@ -164,7 +172,7 @@ function updateProjectiles(dt){
       let blk=null;
       for(const b of buildings){
         if(!b.alive||b===p.target||b.def.flat)continue;
-        if(b!==p.ignoreB&&dist2(p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.r*0.8,2)){blk=b;break;}
+        if(b!==p.ignoreB&&dist2(p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.rBlock*0.8,2)){blk=b;break;} // v131.6 rBlock — see :126
       }
       if(blk){
         if(blk.team!==p.att.team)damageBuilding(blk,p.dmg*0.5,p.att);
@@ -192,7 +200,11 @@ function hasLOS(x1,z1,x2,z2,ignore){
     if(L2<0.001)continue;
     let t=((b.x-x1)*dx+(b.z-z1)*dz)/L2;
     t=Math.max(0,Math.min(1,t));
-    const px=x1+dx*t,pz=z1+dz*t,rr=b.def.r*0.85;
+    // v131.6 rBlock. SIGHT MUST AGREE WITH THE SHOT: this is what picks the target, and the arrow
+    // is stopped by rBlock*0.8 twenty lines up. On r*0.85 an archer would happily choose a target
+    // through 8.47 units of castle (measured, median bearing) and then watch every arrow burst on
+    // the curtain wall. Same circle, same answer.
+    const px=x1+dx*t,pz=z1+dz*t,rr=b.def.rBlock*0.85;
     if(dist2(px,pz,b.x,b.z)<rr*rr)return false;
   }
   return true;
@@ -455,7 +467,9 @@ function nearestEnemyBuilding(u,maxReach){
   let bb=null,bd=1e9;
   for(const b of buildings){
     if(b.team===u.team||!b.alive)continue;
-    const d=Math.sqrt(dist2(u.root.position.x,u.root.position.z,b.x,b.z))-b.def.r;
+    // v131.6 bSurf: reach is measured from the WALL. On plain `r` a swordsman shoved out to
+    // rBlock+0.7 by a barracks reads 4.4 units of gap and never swings. See 00-data.js.
+    const d=Math.sqrt(dist2(u.root.position.x,u.root.position.z,b.x,b.z))-bSurf(b.def);
     if(d<maxReach&&d<bd){bd=d;bb=b;}
   }
   return bb;
@@ -487,7 +501,7 @@ function tryMeleeAttack(u){
   let bb=null;bd=1e9;
   for(const b of buildings){
     if(b.team===u.team||!b.alive)continue;
-    const d=Math.sqrt(dist2(u.root.position.x,u.root.position.z,b.x,b.z))-b.def.r;
+    const d=Math.sqrt(dist2(u.root.position.x,u.root.position.z,b.x,b.z))-bSurf(b.def); // v131.6 from the wall — see :470
     if(d<u.rng+0.6&&d<bd){bd=d;bb=b;}
   }
   if(bb){
@@ -660,7 +674,13 @@ function moveUnit(u,dx,dz,dt){
       }
       continue;
     }
-    const dd=dist2(nx,nz,b.x,b.z), r=b.def.r+0.7;
+    // v131.6 THE PUSH READS rBlock, NOT r. `r` is the SPACING radius as well as the physical one
+    // (03-buildings.js:2985 has said so all along), so when the v131 models outgrew their blockers
+    // and the fix was to grow `r`, the exclusion disc `r+r'+2.2` in validFor grew with it and the
+    // AI stopped being able to place a stable, a market or a forge at all. One number cannot be
+    // both the wall you cannot walk through and the elbow room between two plots. rBlock is the
+    // wall; it defaults to r for anything without one (00-data.js, under the table).
+    const dd=dist2(nx,nz,b.x,b.z), r=b.def.rBlock+0.7;
     if(dd<r*r){
       const d=Math.sqrt(dd)||0.001;
       nx=b.x+(nx-b.x)/d*r; nz=b.z+(nz-b.z)/d*r;
@@ -691,7 +711,7 @@ function steerAroundBuildings(u,hx,hz,distT,tx2,tz2){
   else for(const b of buildings){
     if(!b.alive||b.def.flat||b.def.wall)continue; // walls slide endward in moveUnit already
     if(b.def.gate&&b.team===u.team)continue;      // own gates stand open
-    const rr=b.def.r+1.4;
+    const rr=b.def.rBlock+1.4;      // v131.6 the EDGE we round is the physical one — see :663
     if(dist2(tx2,tz2,b.x,b.z)<(rr+0.8)*(rr+0.8))continue; // that's our destination's building — walk up to it
     const ox=b.x-px, oz=b.z-pz;
     const proj=ox*hx+oz*hz;             // how far ahead along our heading
@@ -706,7 +726,7 @@ function steerAroundBuildings(u,hx,hz,distT,tx2,tz2){
   let s=u._avS||0;
   if(!s){s=((-rz/RL)*hx+(rx/RL)*hz>=0)?1:-1;u._avS=s;} // choose a side ONCE, stick with it
   let sx=-rz/RL*s, sz=rx/RL*s;
-  const rr=blk.def.r+1.4;
+  const rr=blk.def.rBlock+1.4;                   // v131.6 same circle the push uses — see :663
   if(RL<rr+0.6){sx+=rx/RL*0.7;sz+=rz/RL*0.7;}    // pressed against the edge: ease outward too
   const SL=Math.hypot(sx,sz)||1;
   return [sx/SL,sz/SL];
@@ -948,7 +968,7 @@ function catchUpArrow(p,fromT,now){
     }
     for(const b of buildings){ // a wall in the way stops it in the past too
       if(!b.alive||b.def.flat)continue;
-      if(b!==p.ignoreB&&segDist2(x0,z0,p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.r*0.8,2)){
+      if(b!==p.ignoreB&&segDist2(x0,z0,p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.rBlock*0.8,2)){ // v131.6 rBlock — the rewind must use the SAME circle as :126 or a guest's shot and the host's disagree
         if(b.team!==p.att.team)damageBuilding(b,p.dmg,p.att);
         return true;
       }

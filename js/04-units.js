@@ -554,16 +554,35 @@ function helmHideDome(R,tc,A,o){
   // scalp under the rim. 0.575 is the skull plus the thickness of a pelt and it is a floor, not a
   // value: on the clubman rw*0.70 is 0.588 and the clamp never fires, and on the slinger it fires
   // and fixes a rim that was already 0.010 inside the head before this round touched it.
-  const rf=Math.max(rw*0.70,0.575), rff=Math.max(rw*0.78,0.575);
-  const prof=o.flat?[[rff,0],[rw*0.94,hh*0.16],[rw,hh*0.62],[rw*0.96,hh],[0,hh]]
+  const rf=Math.max(rw*0.70,0.575);
+  // >>> v131.7 THE FLAT BRANCH IS A PILLBOX NOW, NOT A FLATTER DOME. <<<
+  // It used to run [rff,0] [rw*0.94,0.16h] [rw,0.62h] [rw*0.96,h] [0,h] — a profile that still
+  // swells and still rolls over at the crown, i.e. a dome with the top pressed in. §B.2's word for
+  // this cap is "deliberately a FLAT CYLINDER against clubman's dome so the two Stone Age melee
+  // units separate at zoom", and cyl(0.20,0.21,0.20,10) is a straight-sided drum with a square
+  // shoulder. Straight sides, a 0.06 flare from foot to rim exactly as §B writes it, and the top
+  // closes across a FLAT disc: the outline is two vertical lines and a horizontal one.
+  // AND IT IS TALLER THAN THE DOME (0.38 against 0.30), WHICH THE DOME'S OWN NOTES FORBID FOR THE
+  // DOME AND SAY NOTHING ABOUT HERE. §6.5a's absolute h/w 0.55 target and §H A1b's six-hat ladder
+  // are both measured on the class that carries the age — the clubman, the melee rung — and the
+  // spearman is on neither. Nothing above this line moves; the anti-cavalry unit gets 0.08 of
+  // height that the ladder has no opinion about, and 0.08 is 1px at 40, which is what a flat top
+  // needs to be a flat top instead of a rounding artefact.
+  // …AND ITS FOOT TUCKS TO THE SKULL EXACTLY AS THE DOME'S DOES. A drum whose widest ring is its
+  // bottom edge hangs a lit horizontal annulus of cap-underside all the way round the head — the
+  // "derby" the dome was rebuilt twice to stop being, and §6.5a spends the flat horizontal disc on
+  // Enlightenment alone. The foot starts at rf (skull + a pelt) and reaches full width in the
+  // bottom 18%, so the sides are vertical for 74% of the cap and nothing overhangs the temple.
+  const hhF=o.flat?hh*1.27:hh;
+  const prof=o.flat?[[rf,0],[rw*0.99,hhF*0.18],[rw,hhF*0.92],[rw,hhF],[rw*0.62,hhF],[0,hhF]]
     :[[rf,0],[rw*0.88,hh*0.26],[rw,hh*0.55],[rw*0.90,hh*0.78],[rw*0.58,hh*0.93],[0,hh]];
   const dome=_lm(prof,10,ageLit(A.crown)); dome.position.y=y0; R.head.add(dome);
   for(let i=0;i<3;i++){                         // stitched panel seams — the age has no metal to trim with
     // rw*1.70 and not rw*2.02: a box as long as the dome is wide pushes its CORNERS through the
     // silhouette when it is yawed, and the first cut of this shipped a bear-hide cap with two
     // little black horns on it. Seams live inside the outline or they are not seams.
-    const seam=_noSh(box(0.040,hh*0.80,rw*1.50,A.dark));
-    seam.position.y=y0+hh*0.40; seam.rotation.y=i*Math.PI/3; R.head.add(seam);
+    const seam=_noSh(box(0.040,hhF*0.80,rw*1.50,A.dark));   // hhF, or the flat cap's seams stop
+    seam.position.y=y0+hhF*0.40; seam.rotation.y=i*Math.PI/3; R.head.add(seam); // three quarters up it
   }
   // v131.2 THE TEAM BAND CAME OFF THIS HAT ALTOGETHER, AND IT IS THE §H A1 FIX.
   // Moving it to the dome's base was the right direction and not far enough — the base of a hat
@@ -1407,8 +1426,25 @@ function ageTorso(R,u,tc,o){
       const l=_noSh(box(0.047,0.86,0.047,A.leather)); l.position.set(s*0.50,0.60,0.20); R.torso.add(l);
     }
     if(o.strap){                                  // §B.2: ONE hide strap at 28°, the spearman's separator
-      const st=_noSh(box(0.176,0.94,0.062,A.light));
-      st.rotation.z=0.49; st.position.set(0,0.62,0.44); R.torso.add(st);
+      // >>> IT WAS BUILT, AND IT WAS BEHIND THE BEARD. <<<
+      // box(0.176,0.94,0.062) at (0,0.62,0.44) is §B.2's row scaled exactly right, and probed it
+      // occupied x ±0.30, y 1.11–2.03, z 0.41–0.47 — inside a beard that is 1.14 across, runs
+      // 1.53–2.35 and is sheared forward to z 0.62, and behind a plastron that sits at z 0.44–0.50.
+      // Wider than it, in front of it, above it: three surfaces, none of which it cleared. A pixel
+      // diff of clubman against spearman showed the club, the spear and nothing else.
+      // The angle is §B.2's and does not move (0.49 rad = 28.1°). What moves is WHERE the 28° line
+      // is drawn: a shoulder strap starts on the SHOULDER, so it is offset to +0.26 and lengthened
+      // to 1.26 so its top corner reaches x 0.67 at the deltoid — 0.07 outboard of the beard's
+      // widest row — and its bottom half crosses the belt at world 1.30, which is below the beard
+      // tip at 1.53 and therefore the first part of it anyone has ever been able to see. z 0.545
+      // puts it in FRONT of the plastron rather than under it.
+      // It is still not a SILHOUETTE event and this comment will not pretend it is: a 0.176 bar on
+      // the front of a barrel cannot be, and §H A4 measures outlines. The outline separator for
+      // this class is the slung javelin (see the spearman block) and the flaps that came OFF the
+      // cap; this is the paint that makes the two units differ in ΔE00 as well.
+      const st=_noSh(box(0.176,1.26,0.062,A.light));
+      st.rotation.z=0.49; st.position.set(0.26,0.52,0.545); R.torso.add(st);
+      const bkl=_noSh(box(0.13,0.13,0.05,A.accent)); bkl.position.set(0.15,0.78,0.57); R.torso.add(bkl);
     }
     const pouch=_noSh(box(0.195,0.235,0.156,A.leather)); pouch.position.set(-0.36,0.22,0.40); R.torso.add(pouch);
   }else if(a===1){
@@ -1423,7 +1459,10 @@ function ageTorso(R,u,tc,o){
     // THE THREE THIGH BANDS GO ON THE THIGH. §B.1 calls them thigh bands and the shipped cut had
     // them at torso y 0.20-0.42, i.e. inside §H A2's crop, where beaten bronze at V 0.499 × 0.849
     // = 0.42 held this age's rung 0.13 below the linen it is supposed to be measuring.
-    for(let i=0;i<3;i++)_tRing(R,-0.02-i*0.109,0.086,A.metal,0.60,0.615,12);
+    // THREE bands on the swordsman, TWO on the spearfighter — §B.2 again, and the same reason as
+    // the shoulder guard above: the row is written per CLASS and this builder is per AGE, so both
+    // halves of the count had been collapsed onto whichever one got written first.
+    for(let i=0;i<(u.cls==="spearfighter"?2:3);i++)_tRing(R,-0.02-i*0.109,0.086,A.metal,0.60,0.615,12);
     // v131.3 THE COLLAR AND THE SPINE GO PALE, AND BOTH OF THEM SIT IN §H A2's CROP.
     // Measured, this age's dominant band came back at V 0.544 against a ladder that names Bronze
     // THE PALE RUNG at 0.789 — the crop is the collar, the shoulder line and the cone's foot, and
@@ -1647,7 +1686,34 @@ function ageShoulders(R,u,tc){
     }else if(a===1){                               // STACKED boxy guards, two per side, stepped out
       // the LOWER course is the linen pteryge the bronze guard is laced over — §H A2 reads this
       // exact row and two bronze boxes per shoulder held the pale rung 0.24 below its own ladder.
-      for(let i=0;i<2;i++){
+      // >>> v131.7 …AND THE SPEARFIGHTER GETS THE SINGLE-PIECE GUARD, WHICH IS THE HALF OF §B.2's
+      //     BRONZE SEPARATOR THAT HAD NEVER BEEN BUILT AT ALL. <<<
+      // §B.2 separates the two Bronze foot units by TWO things: "a plain leather neck flap and NO
+      // cheek pieces", and "SINGLE-PIECE shoulder guards box(0.085,0.038,0.080) (NOT STACKED)".
+      // The cheek pieces were built and do work — probed, shortsword carries two 0.33x0.62 boxes
+      // out to x ±0.71 and spearfighter carries none. They are simply too small to matter at the
+      // resolution the gate judges: 0.17 of protrusion past a 0.54 skull is 1.7px on a 40px
+      // figure, and A4 still scored the pair at 0.926 head-on, the highest non-identical outline in
+      // the game. The shoulder guard is the other separator §B names and it was never written,
+      // because ageShoulders keys on the AGE and has no class branch in it — every Bronze unit got
+      // the swordsman's stack.
+      // Single-piece means ONE box and a bigger one, not the top of the stack: §B's numbers are
+      // 0.085 x 0.038 x 0.080 against the stacked pair's 0.075 x 0.045 x 0.075, i.e. wider, flatter
+      // and seated lower. It is 0.33 across on 0.15 of height where the stack is 0.29 on 0.31.
+      // >>> AND IT IS WORTH KNOWING WHAT THIS DOES NOT BUY, BECAUSE THE NUMBER IS IN. <<<
+      // Built, it moved §H A4's head-on IoU for the pair from 0.926 to 0.916 and the gameplay
+      // angle not at all. It cannot do more, and the reason is measurable rather than arguable:
+      // EVERY box ageShoulders builds, on every age, sits inboard of the arm. The stack's outer
+      // face is 0.731, the single guard's is 0.735, age 3's humeralia reach 0.828 — and the upper
+      // arm's own shoulder ball is at 0.83 with the sleeve at 0.88. A shoulder piece on this rig is
+      // a colour and a close-up detail; it is not in the outline at all, and any future round that
+      // proposes to fix a silhouette pair by changing one is proposing to change nothing.
+      // §B's other Bronze separator, the cheek pieces, IS in the outline (±0.71 against a 0.54
+      // skull) and it is what holds this pair at 0.818 in the view a player actually uses.
+      if(u.cls==="spearfighter"){
+        const g=_noSh(box(0.327,0.146,0.308,A.metalLit));
+        g.position.set(sx*1.02,0.965,0); R.torso.add(g);
+      }else for(let i=0;i<2;i++){
         const g=_noSh(box(0.293,0.176,0.293,i?A.metalLit:ageLit(A.dominant)));
         g.position.set(sx*(1.0+i*0.043),0.95+i*0.135,0); R.torso.add(g);
       }
@@ -1689,13 +1755,24 @@ function ageShoulders(R,u,tc){
   }
 }
 function kitStoneAge(R,u,tc,o){ // STONE: stitched hide, greenstone, the bear-hide dome
+  // >>> v131.7 `strap` WAS DOING TWO JOBS AND THAT IS WHY §H A4 FAILED THIS AGE. <<<
+  // ONE options object was forwarded to BOTH ageTorso — where `o.strap` builds §B.2's diagonal
+  // CHEST strap, the spearman's separator — AND helmHideDome, where `o.strap!==false` builds the
+  // bear-hide EAR FLAPS. So `kitStoneAge(R,u,tc,{flat:true,strap:true})`, which reads as "flat cap
+  // plus the diagonal", also handed the spearman the clubman's ear flaps. Probed pre-merge, the
+  // two heads came out with byte-identical part lists and byte-identical AABBs (tools/_sepprobe.js),
+  // and §B.2's own line for this class is "**no chin strap** — deliberately a flat cylinder against
+  // clubman's dome". A4 scored the pair at IoU 0.872 head-on with the separator "built".
+  // Two keys now: `strap` is the torso's and `flaps` is the head's, and the head no longer reads a
+  // key it does not own. The dome keeps its flaps by default so nothing else on the age moves.
+  o=o||{};
   const A=AGEPAL[0];
-  ageTorso(R,u,tc,o||{});
+  ageTorso(R,u,tc,o);
   const clothF=_noSh(box(0.36,0.46,0.07,tc)); clothF.position.set(0,0.0,0.3); R.torso.add(clothF);
   const clothB=_noSh(box(0.36,0.42,0.07,tc)); clothB.position.set(0,0.02,-0.3); R.torso.add(clothB);
   for(let i=0;i<3;i++){const bone=_noSh(box(0.07,0.16,0.05,A.accent));
     bone.position.set(-0.16+i*0.16,1.02,0.42); R.torso.add(bone);}
-  helmHideDome(R,tc,A,o);
+  helmHideDome(R,tc,A,{flat:o.flat,rw:o.rw,hh:o.hh,strap:o.flaps!==false});
   const tailH=_noSh(box(0.13,0.42,0.1,A.dark));
   tailH.position.set(0,NC_HATY-0.06,-NC_HEADR*1.03); tailH.rotation.x=0.5; R.head.add(tailH);
 }
@@ -1939,7 +2016,21 @@ function _buildBodyRaw(u){
 
   const d=CLS[u.cls], tc=TEAMCOL[u.team];
   const R=u.rig={};
-  if(d.rig==="cart"){ // v113 THE MARKET MULE: a real mule in harness, hauling a merchant's wagon
+  // >>> §H A4 / §E: `trader` AND `tradecart` WERE THE SAME MODEL — ΔE00 0.0, IoU 1.000. <<<
+  // Not a contrast problem, a MISSING MODEL. Both classes are `rig:"cart"` in 00-data.js and the
+  // cart rig has no class branch anywhere in it, so the Trader — a unit the player BUYS for 25
+  // food and 100 gold — rendered as the mule-and-wagon the AI spawns for free. A4 scored the pair
+  // at IoU 1.000 in both views, which is the only 1.000 in the game and the only way a silhouette
+  // gate can say "these are literally the same object".
+  // §E has specified the real one since the ages document was written and it had never been
+  // built: "a walking merchant nutcracker… strongbox on the back… the only unit with a load above
+  // the shoulders behind the head." A walking humanoid is the NUTCRACKER rig, not this one, so the
+  // fix is a class test in front of the rig dispatch and a flair block down with the villager's.
+  // The class row in 00-data.js still says rig:"cart" and that is deliberate — 05-combat, 07-ai
+  // and 10-net all read `bot.role==="cart"` and `CLS[].rig==="cart"` for trade routing, plunder
+  // and the host-migration scan, and none of that is about geometry. Changing the data row to
+  // separate the model would have moved the sim; a test in the builder does not.
+  if(d.rig==="cart"&&u.cls!=="trader"){ // v113 THE MARKET MULE: a real mule in harness, hauling a merchant's wagon
     // Was a grey box on four sticks — John's placeholder call. Rebuilt on the DESTRIER anatomy
     // (barrel + chest + rump, neck-and-head on a pivot, jointed legs with knees and hooves) so it
     // reads as an animal, then muled: shorter, stockier, long ears, dun coat, mealy muzzle.
@@ -3243,16 +3334,166 @@ function _buildBodyRaw(u){
       dgrip.position.y=-0.36; TS.add(dgrip);
     }
   }
+  // ============================================================================================
+  //  §E THE TRADER — A WALKING MERCHANT NUTCRACKER (v131.7, and it had never been built)
+  // ============================================================================================
+  // See the note at the head of _buildBodyRaw for what this replaces. §E's row, verbatim, is the
+  // build order below: "Tall brimmed felt hat… long travelling coat with gold frogging and a
+  // fur-trimmed collar. Strongbox on the back with gold corner bands… coin scale in one hand.
+  // Gold chain of office." Its stated 40px read is THE STRONGBOX HUMP, and that is the part sized
+  // against a gate rather than against the eye: at 40px a merchant's hat and a merchant's coat are
+  // a hat and a coat, and the only thing on this figure no other unit in the game has is a load
+  // carried ABOVE THE SHOULDER LINE BEHIND THE HEAD.
+  //
+  // EVERY PART HERE PARENTS INTO R.head, R.torso, R.faL or u.body — the clusters the nutcracker
+  // rig already merges — so this is 17 meshes at ZERO new draw calls (§H A10 ceiling 12; measured
+  // 11, the same as any foot unit). Nothing casts: _mergeCluster ORs the flag over the cluster, so
+  // one castShadow under R.head makes a caster of all 136 bodies.
+  //
+  // NO NEW (kind,hex) TEXTURE PAIR IS MINTED. §G.4 / trap A9: texturedMat mints a CanvasTexture on
+  // a miss and `new THREE.CanvasTexture` burns four Math.random() calls, so a first-request inside
+  // 02-world's seeded window walks every resource node on the wire and forces PROTO off 26. The
+  // coat re-uses the shared `coatM` the body already built; everything added here is plainMat,
+  // which routes through UATLAS.whiteSlot() and costs neither a random nor an atlas cell.
+  if(u.cls==="trader"){
+    // ---- THE HAT: tall brimmed felt (§E), and it is built here rather than through kitShako ----
+    // kitShako's own header says it "MAY BE CALLED FOR AGE 5 AND FOR NOTHING ELSE", because six
+    // ages routed through it is how the set ended up as six shakos in six colours. That rule is
+    // about the six-rung AGE ladder §H A1b scores; a civilian merchant is not on it. Building the
+    // three parts explicitly keeps it that way and costs nine lines.
+    // THE SUPERLATIVE §E CLAIMS IS HEIGHT, NOT WIDTH — "the tallest civilian hat in the game" —
+    // so the crown is 0.86 against the villager caps' 0.47 and the brim stays at 1.56 across,
+    // INSIDE the Enlightenment shako's 1.68. §6.5a spends the widest brim in the set on age 5 and
+    // this does not take it back.
+    const felt=0x4A3E30;
+    // …and it is SUNK 0.15 into the skull, not perched on it. Seated level with the crown of the
+    // head the two solids only touch, and the walk clip bobs R.torso under a head that does not
+    // move with it — the first cut of this opened a hairline of magenta between hat and scalp on
+    // alternate frames, which is the same defect every legacy hat in the file was re-seated to fix.
+    const brimT=noShadow(cyl(0.78,0.78,0.075,0x3A3126,16)); brimT.position.y=NC_HATY-0.02; R.head.add(brimT);
+    const crownT=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.615,0.60,0.86,12),plainMat(felt)));
+    crownT.position.y=NC_HATY+0.37; R.head.add(crownT);
+    // The band is 0.12 and not 0.16, and §E does not ask for a team band on this hat at all — the
+    // row is crown, brim, and nothing else. It stays because §0 wants a team read on every head,
+    // and it stays THIN because this class is already over §2.5's ceiling on the coat below.
+    const hbandT=noShadow(cyl(0.625,0.635,0.12,tc,12)); hbandT.position.y=NC_HATY+0.05; R.head.add(hbandT);
+    const buckT=noShadow(box(0.17,0.17,0.05,NC.gold)); buckT.position.set(0,NC_HATY+0.06,0.60); R.head.add(buckT);
+    // ---- THE FUR-TRIMMED COLLAR (#7A5A38) and the GOLD CHAIN OF OFFICE ----
+    // The collar stands PROUD of the shoulder line (0.60 against the torso's 0.52) because it is
+    // the one place a merchant's silhouette is allowed to be soft, and because it is what stops
+    // the strongbox behind it reading as a growth out of the neck.
+    // 0.34 deep, which is what a fur collar on a travelling coat is, and it is also §2.5 doing
+    // arithmetic: measured over the figure mask this class came out 34.2% team colour against a
+    // 20-30% want, because §E's floor-length coat roughly doubles the TC cloth area of a foot unit.
+    // A deeper collar is the one surface §E already nominates in a non-team hex that sits in the
+    // middle of the blue. Re-measured after: see the note at the trader's head.
+    const fur=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.62,0.53,0.34,12),plainMat(0x7A5A38)));
+    fur.scale.z=0.9; fur.position.y=1.00; fur.castShadow=false; R.torso.add(fur);
+    const chain=noShadow(new THREE.Mesh(new THREE.TorusGeometry(0.26,0.045,4,10,Math.PI),plainMat(NC.gold)));
+    chain.rotation.x=Math.PI/2+0.28; chain.position.set(0,0.90,0.30); R.torso.add(chain);
+    const seal=noShadow(box(0.16,0.16,0.06,NC.goldH)); seal.position.set(0,0.66,0.44); R.torso.add(seal);
+    // ---- THE LONG TRAVELLING COAT, hemmed at 0.14 H above ground (§E) ----
+    // 0.14 H is 0.54 world on this rig, so the coat runs the belt (1.27) to the ankle and the
+    // trader is a COLUMN from the waist down where every other age-3 humanoid is two legs. That is
+    // the separator that survives a 40px downsample, and it is also §2.5's team budget: the coat
+    // is the shared `coatM` — team cloth — and this roughly doubles its area on the figure.
+    // It hangs off u.body and not R.torso for the same reason the other coat skirts do: the walk
+    // clip bobs R.torso, and a skirt that bobbed with it would crack open a gap at the waist.
+    // >>> texturedMat("cloth") AND NOT coatM, AND THAT IS A RENDER I LOOKED AT. <<<
+    // coatM is texturedMat("uniform"), whose 16px swatch has PARADE BRAID BAKED INTO IT — two gold
+    // button columns spanning half the wrap, a gold frogging bar every four texels and a doubled
+    // gold collar across the whole top row (01-engine.js:1218). On a 1.04 barrel that is the
+    // nutcracker's chest ladder and it is exactly right. Stretched over a skirt 0.76 tall and 1.48
+    // across it became four gold hoops running all the way round the coat plus a gold band at the
+    // waist — from behind the trader was a wasp. The frogging on this class is GEOMETRY, four bars
+    // below, where §E puts it and where it can be aimed at the front.
+    const coatT=new THREE.Mesh(new THREE.CylinderGeometry(0.55,0.74,0.76,12),texturedMat("cloth",tc));
+    coatT.scale.z=0.86; coatT.position.y=0.92; coatT.castShadow=false; u.body.add(coatT);
+    const hemT=noShadow(cyl(0.755,0.755,0.09,0x3A3126,12)); hemT.scale.z=0.86; hemT.position.y=0.58; u.body.add(hemT);
+    // the GOLD FROGGING — four frogs down the coat front, §E's #CFB53B. They sit BELOW the beard's
+    // tip (world 1.53) on purpose: the beard is 1.14 across and sheared forward to z 0.62, so a
+    // gold bar on the chest is a bar nobody will ever see (that is exactly how the spearman's
+    // §B.2 chest strap came to be built, invisible, and passed as done — see kitStoneAge).
+    // The z walks OUT as the row walks DOWN because the coat is a flared cone scaled 0.86 in z:
+    // its front face is 0.49 at the top frog and 0.61 at the bottom one, so a constant z would
+    // have buried the bottom two inside the cloth. Measured off the cone, not guessed.
+    for(let i=0;i<4;i++){
+      const frog=noShadow(box(0.34,0.055,0.05,NC.gold));
+      frog.position.set(0,1.22-i*0.19,0.505+i*0.038); u.body.add(frog);
+    }
+    // ---- THE STRONGBOX: §E's 40px read, and the only load above the shoulders in the game ----
+    // "box(0.15,0.13,0.09)" in §E's H-normalised units is 0.58 x 0.50 x 0.35 world. Seated at
+    // torso-local 1.28 its underside is world 2.10 — 0.15 clear of the shoulder line at 1.95 and
+    // level with the head's lower third — and at z -0.62 it stands behind the skull's -0.54 back
+    // facet. From head-on the head hides it; from the three-quarter the game actually uses it is a
+    // hard-edged box growing out of the figure's back where no other unit has anything at all.
+    const sbox=noShadow(box(0.58,0.50,0.35,0x6E5230)); sbox.position.set(0,1.42,-0.62); R.torso.add(sbox);
+    for(const sy of [1.19,1.65]){ // the gold corner bands, top and bottom
+      const bandS=noShadow(box(0.62,0.07,0.39,NC.gold)); bandS.position.set(0,sy,-0.62); R.torso.add(bandS);
+    }
+    const hasp=noShadow(box(0.13,0.22,0.07,0x4A4640)); hasp.position.set(0,1.42,-0.81); R.torso.add(hasp);
+    const strapS=noShadow(box(0.15,0.62,0.06,0x4A3A2A)); // the shoulder strap it hangs from
+    strapS.rotation.z=0.30; strapS.position.set(0.20,1.14,0.44); R.torso.add(strapS);
+    // ---- THE COIN SCALE, in the LEFT hand (§E: "coin scale in one hand") ----
+    // Left, because the strongbox already owns the back and the right fist is where every other
+    // unit in the game carries something: a merchant with nothing in his right hand and a balance
+    // in his left is a shape no soldier makes.
+    // NC_PIKE_CARRY and not the priest's -0.9: weaponGrip adds PI to whatever it is handed, so
+    // -0.9 lays the stack out FORWARD (which is right for a staff) and NC_PIKE_CARRY stands it
+    // UP (which is right for a balance a man is reading). The beam lands at world 1.95 — the
+    // shoulder line — and the outboard pan at x -0.95, which is 0.21 past the coat's own 0.74 and
+    // therefore the one thing on this figure that breaks the outline on the LEFT.
+    const SC=weaponGrip(R.faL,NC_PIKE_CARRY,0.30);
+    const stemS=noShadow(cyl(0.05,0.05,1.0,0x6E5230,6)); stemS.position.y=0.50; SC.add(stemS);
+    const beamS=noShadow(box(0.62,0.055,0.055,NC.gold)); beamS.position.y=1.05; SC.add(beamS);
+    for(const px of [-0.27,0.27]){
+      const cord=noShadow(box(0.03,0.20,0.03,0x4A3A2A)); cord.position.set(px,0.95,0); SC.add(cord);
+      const pan=noShadow(cyl(0.155,0.155,0.035,NC.goldH,10)); pan.position.set(px,0.85,0); SC.add(pan);
+    }
+  }
   if(rig==="sword"){ // THE MELEE LINE — six ages you can read at a glance
     if(u.cls==="clubman"){ // STONE: stitched hide, the bear-hide DOME, a REAL club
       kitStoneAge(R,u,tc);
-      // the CLUB: one line from grip to head — nothing floats
-      const CG=weaponGrip(R.faR,NC_PIKE_CARRY,0.3); // shouldered vertical (§6.5) — see the const
-      const haft=noShadow(cyl(0.06,0.09,0.9,0x7a5230,7)); haft.position.y=0.3; CG.add(haft);
-      const headC=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.27,0.16,0.62,8),texturedMat("wood",0x6b4a2b)));
-      headC.position.y=0.95; CG.add(headC);
-      for(const a of [0.6,2.2,4.0]){const stud=noShadow(box(0.1,0.1,0.1,0x4a3320));
-        stud.position.set(Math.cos(a)*0.24,1.05,Math.sin(a)*0.24); CG.add(stud);}
+      // ---- THE CLUB: one line from grip to head — nothing floats ----
+      // >>> v131.7 IT WAS A BROWN STICK AT CHEST HEIGHT AND §B.1 ASKS FOR A GREENSTONE LUMP. <<<
+      // Three things were wrong with it and all three are in §B.1's own row.
+      //  1. COLOUR. The head was texturedMat("wood") over #6B4A2B — the same brown as its own haft
+      //     and as the spearman's shaft. §B.1: "pierced greenstone head… #5F7355 — THE ONLY
+      //     GREY-GREEN PROP IN THE GAME", and the row's stated 40px read is "the greenstone lump".
+      //  2. SIZE. cyl(0.27,0.16,0.62) tapers to a point and measured 0.54 across at its widest;
+      //     §B.1 says "3× the current stick tip", and the stick tip on this age is the spearman's
+      //     cone(0.11,·) — so 0.33 of radius, straight-sided, 0.66 across. It is a macehead.
+      //  3. HEIGHT AND CANT. §B.1: "it MUST ride ABOVE THE SHOULDER LINE in idle so it silhouettes
+      //     against SKY, not against grass." Probed, the old head sat at world 1.46–2.18 against a
+      //     shoulder line at 2.04 and reached x 0.95 — i.e. a third of it was above the shoulder
+      //     and all of it was inside the arm's own outline. Lengthening the haft to 1.20 and
+      //     canting the stack 0.22 outboard (weaponGrip negates `out`, so positive throws the head
+      //     AWAY from the body) puts the mass at world 2.03–2.55 and x 0.63–1.29, which is 0.57
+      //     clear of the coat and level with the head. THAT is what a 40px mask can see, and it is
+      //     the whole reason clubman/spearman was the worst outline pair in the game.
+      // It clears the ear flap without a collision test at build time because the cant carries the
+      // stack FORWARD as well as out: at grip-y 1.20 the head is at z 0.62 and the flap ends at
+      // 0.23. Do not straighten `out` without re-checking that.
+      // >>> WHAT THIS COSTS, MEASURED, SO THE NEXT LANE DOES NOT HAVE TO REDISCOVER IT. <<<
+      // agecheck crops the age's torso to the TORSO's own width (±0.72 world, agecheck.js:234),
+      // and this club used to hang inside that window — the tool's comment even names it, "on a
+      // clubman a war club that is a sixth of the crop in raw wood". Canted out, the dark wood
+      // leaves the crop and the Stone rung measures LIGHTER: §H A2 0.382 -> 0.417 and A2b
+      // 0.395 -> 0.436. Verified by rebuilding with out=0 and re-running (0.403), not inferred.
+      // The trade in full: A1 13.0 -> 12.9 (still PASS at a floor of 12), A2's worst pair 5.7 ->
+      // 7.6 (BETTER), A2b's 0-1 adjacent ΔV 0.251 -> 0.210 against a 0.25 floor — a rung that was
+      // sitting one thousandth over the line and now fails with the other four. Against that, §H
+      // A4's worst pair in the game goes 0.872 (FAIL) -> 0.686. The ladder gates are failing on
+      // four of five rungs either way and their fix is in the PALETTE, not in whether one class's
+      // prop happens to shade one crop; a club parked over the ribs to keep a torso mean down is
+      // the tool measuring the prop, which is the thing agecheck.js:230 is already complaining about.
+      const CG=weaponGrip(R.faR,NC_PIKE_CARRY,0.3,0.22); // shouldered vertical (§6.5) — see the const
+      const haft=noShadow(cyl(0.06,0.09,1.20,0x7a5230,7)); haft.position.y=0.42; CG.add(haft);
+      const headC=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.33,0.33,0.52,8),plainMat(0x5F7355)));
+      headC.scale.z=0.80; headC.position.y=1.20; CG.add(headC);   // §B.1's pierced greenstone, z 0.80
+      const collarC=noShadow(cyl(0.135,0.135,0.16,0x4a3320,6)); collarC.position.y=0.90; CG.add(collarC); // the lashing under it
+      for(const a of [0.9,3.5]){const stud=noShadow(box(0.11,0.11,0.11,0x4a3320));
+        stud.position.set(Math.cos(a)*0.30,1.20,Math.sin(a)*0.24); CG.add(stud);}
     }
     if(u.cls==="shortsword"){ // BRONZE: linen under bronze + the boar's-tusk CONE — no shield
       kitDendra(R,u,tc);
@@ -3336,11 +3577,42 @@ function _buildBodyRaw(u){
       // §B.2 separates the two Stone Age foot units by SHAPE and not by colour: a flat cylinder
       // against clubman's dome, plus the only diagonal on any Stone Age unit. §H A4 tests exactly
       // this pair, and it is the cheapest separation in the game — two flags on one builder.
-      kitStoneAge(R,u,tc,{flat:true,strap:true});
+      // >>> AND FOR THREE ROUNDS IT WAS TWO FLAGS THAT CANCELLED EACH OTHER. `strap:true` reached
+      // helmHideDome as well as ageTorso and put clubman's EAR FLAPS back on this head, so the two
+      // caps rendered identically and A4 measured IoU 0.872 head-on with the separator "built".
+      // §B.2's row says "**no chin strap**" in bold and that is what `flaps:false` is. See
+      // kitStoneAge, which now maps the two keys apart.
+      kitStoneAge(R,u,tc,{flat:true,strap:true,flaps:false});
       const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.3);
       const shaft=noShadow(cyl(0.05,0.06,2.4,0x7a5230,6)); shaft.position.y=0.7; SP.add(shaft);
       const lash=noShadow(cyl(0.075,0.075,0.14,0x4a3320,5)); lash.position.y=1.82; SP.add(lash);
-      const flint=noShadow(cone(0.11,0.4,0x8d949c,4)); flint.position.y=2.05; SP.add(flint);
+      // §B.2 ends that row with "**NO METAL ANYWHERE ON THIS UNIT**" and this point was
+      // #8D949C — the same cool grey the Iron spearhead and the broadsword blade are made of, on
+      // the one class in the game whose material rule is absolute. §B.2's own hexes for it are
+      // "tip charred #3A2E22 over #4A463E": a fire-hardened stone point, dark, and 0.14 of radius
+      // rather than 0.11 so the head is visibly wider than its own shaft at 40px.
+      const flint=noShadow(cone(0.14,0.44,0x4A463E,4)); flint.position.y=2.07; SP.add(flint);
+      const char=noShadow(cone(0.105,0.22,0x3A2E22,4)); char.position.y=2.30; SP.add(char);
+      // §B.2: "SPARE JAVELIN SLUNG ON THE BACK", and it is here because it is the only line on the
+      // page that puts something OUTSIDE this figure's outline. Everything else §B.2 gives the
+      // spearman — flat cap, chest strap, charred tip — lands inside a silhouette the clubman
+      // already fills: measured, the flat cap is 3px of a 40px figure and the chest strap is 100%
+      // occluded (the beard is 1.14 across and sheared forward to z 0.62; the strap was 0.60 across
+      // at z 0.47, i.e. behind it, under it and narrower than it — built, invisible, and passed as
+      // done). A shaft slung corner to corner crosses the shoulder line at +0.78 and the hip at
+      // -0.62, both outboard of a 0.66 coat, so it is a real diagonal in the MASK and not just in
+      // the paint. 0.09 of radius is 0.18 across = 2.3px at 40 — over the box filter's half-pixel
+      // coverage rule with margin, which the 0.05 spear shaft in the fist is not.
+      // It leans the OTHER way from the spear in the fist. The carried spear stands at x +0.68;
+      // a slung one raked the same way would have put both diagonals on the right and left the
+      // left half of the mask exactly as blank as the clubman's. Tip over the LEFT shoulder at
+      // x −0.66 (0.12 outboard of a 0.54 head), butt tucked at the right hip inside the coat.
+      // z −0.62 is BEHIND the coat's own back facet at −0.53, so it reads as slung rather than
+      // as a stripe painted down the tunic — checked on the probe, not assumed.
+      const JV=new THREE.Group(); JV.rotation.z=0.52; JV.position.set(-0.10,0.62,-0.62); R.torso.add(JV);
+      const jsh=noShadow(cyl(0.085,0.095,1.95,0x6b4a2b,6)); JV.add(jsh);
+      const jtip=noShadow(cone(0.15,0.34,0x3A2E22,4)); jtip.position.y=1.12; JV.add(jtip);  // charred, §B.2
+      const jlash=noShadow(cyl(0.115,0.115,0.13,0x4a3320,5)); jlash.position.y=0.86; JV.add(jlash);
     }
     if(u.cls==="spearfighter"){ // BRONZE: the same panoply with NO cheek pieces — §B.2's separator
       kitDendra(R,u,tc,{cheeks:false});
@@ -3349,6 +3621,13 @@ function _buildBodyRaw(u){
       shaft.position.y=0.9; SP.add(shaft);
       const collar=noShadow(cyl(0.075,0.075,0.1,0x9a7532,6)); collar.position.y=2.28; SP.add(collar);
       const tipB=noShadow(cone(0.12,0.5,0xc9a44a,5)); tipB.position.y=2.55; SP.add(tipB);
+      // THE SAUROTER. §B.2's stated 40px read for this class is "metal glinting at BOTH ends of
+      // the shaft — period-correct and unique", and only one end had any metal on it. The butt
+      // spike hangs below the fist at world 0.36, next to the boot, where it is the one bright
+      // chip anywhere on the lower third of a Bronze figure. cone() points UP, so it is flipped.
+      const saur=noShadow(cone(0.085,0.30,0xc9a44a,5));
+      saur.rotation.x=Math.PI; saur.position.y=-0.62; SP.add(saur);
+      const ferr=noShadow(cyl(0.072,0.072,0.09,0x9a7532,6)); ferr.position.y=-0.44; SP.add(ferr);
     }
     if(u.cls==="impspear"){ // IRON: the same bell plus the anti-cav line's horsehair TUFT (§B.2)
       kitLamellar(R,u,tc,{tuft:true});
@@ -3499,17 +3778,74 @@ function _buildBodyRaw(u){
     if(u.cls==="slinger"){ // STONE: hides, a hip-bag of stones, the whirling sling
       // §B.3 holds this cap to the 0.20 H floor and NO HIGHER so the sling's arc owns the
       // silhouette — the lowest hat in the game, and that is the unit's read.
-      kitStoneAge(R,u,tc,{rw:0.66,hh:0.50});
-      const SL=new THREE.Group(); SL.position.set(0,-0.54,0.12); R.faR.add(SL);
-      for(const sx of [-0.035,0.035]){const strap=noShadow(box(0.03,0.72,0.02,0x5a3c22));
-        strap.position.set(sx,-0.36,0); SL.add(strap);}
-      const pouch=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.13,6,5),texturedMat("hide",0x6b4a2b)));
-      pouch.scale.y=0.7; pouch.position.y=-0.74; SL.add(pouch);
-      const stone=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.09,5,4),plainMat(0x8d949c))); stone.position.y=-0.68; SL.add(stone);
-      const bag=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.2,6,5),texturedMat("hide",0x7a5230)));
-      bag.scale.set(1,0.8,0.7); bag.position.set(0.42,0.12,0.28); R.torso.add(bag);
-      for(const [ox,oz] of [[0.38,0.36],[0.48,0.28]]){const st=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.06,4,4),plainMat(0x9aa2ad)));
-        st.position.set(ox,0.32,oz); R.torso.add(st);}
+      // >>> …AND IT WAS THE TALLEST CAP IN THE AGE. <<< hh was 0.50 against the clubman's dome at
+      // 0.30, i.e. §B.3's "LOW hide skullcap… the lowest hat in the game — THAT IS THE CUE" built
+      // two thirds taller than the hat it is supposed to be lower than. 0.24 on rw 0.66 is 1.32
+      // across on 0.24 of cap, the flattest head in the game by a wide margin, and next to the
+      // spearman's 0.38 drum and the clubman's 0.30 dome-with-flaps that is three different heads
+      // at 40px instead of three hats you have to read the colour of.
+      kitStoneAge(R,u,tc,{rw:0.66,hh:0.24});
+      // §B.3's "coiled sling cord wrapped round the crown to make up mass" — never built, and it
+      // is what stops a 0.24 cap reading as no hat at all (§0's floor). 0.70 against a 0.66 cap is
+      // 0.04 proud: a thick cord BAND, not a disc. §6.5a's one flat brim stays Enlightenment's.
+      const coil=noShadow(cyl(0.70,0.70,0.155,0x8C6B45,12)); coil.position.y=NC_HATY-0.05; R.head.add(coil);
+      const coilD=noShadow(cyl(0.705,0.705,0.045,0x5a3c22,12)); coilD.position.y=NC_HATY+0.02; R.head.add(coilD);
+      // ---- THE SLING ITSELF, AND §B.3 WANTS ITS ARC TO OWN THE SILHOUETTE ----
+      // It hung dead vertical out of the fist — the same line, in the same place, as the spearman's
+      // spear shaft and the clubman's haft, which is why three units built round three different
+      // props read as one prop at 40px. §B.3's whole reason for pinning the cap to the floor is
+      // "so the SLING'S ARC owns the silhouette", and an arc has to go somewhere.
+      // >>> THE SIGN OF rotation.z IS THE WHOLE THING, AND I GOT IT BACKWARDS TWICE. <<<
+      // R.faR hangs at x +0.68 and weaponGrip has already flipped its stack with a +PI on x, so a
+      // NEGATIVE z here rakes the cords back ACROSS the body — over the coat, where the spearman's
+      // spear shaft and the clubman's haft already are. Built that way the head-on pair went the
+      // wrong direction, 0.871 -> 0.900, which is the gate correctly reporting that a third prop
+      // had been added to the same column of pixels as the other two. POSITIVE throws it out. The
+      // rake is (−0.45, 0, +0.75): probed, the diamond lands at x 0.94–1.27 and world y 0.30–0.62,
+      // i.e. 0.28 outboard of a 0.66 coat and BELOW the hem, which is a patch of frame no other
+      // Stone figure puts anything in. The class's rendered width goes 54px -> 72px.
+      // TWO cords and not one bar, both braided pale, meeting at a DIAMOND leather pouch (a box
+      // turned 45° on z): §B.3 spends a sentence on the fact that this is not a Y-frame slingshot,
+      // and a single strap ending in a ball is the silhouette of exactly that. §B.3's WRIST LOOP
+      // and RELEASE TAB are on the two cords, asymmetric on purpose.
+      const SL=new THREE.Group(); SL.position.set(0,-0.54,0.12); SL.rotation.set(-0.45,0,0.75); R.faR.add(SL);
+      // >>> AND THE POUCH STOPS AT THE TURF LINE. <<< At §B.3's full 0.30 of cord — 1.16 world —
+      // the diamond probed out at y −0.29, a quarter of a unit UNDER the ground, below boot soles
+      // that sit at −0.03, and dragged the class's rendered height from 98px to 112px on geometry
+      // buried in a hill. Cord length follows the pouch here, not the other way round: 0.98 of cord
+      // with the diamond at −0.62 lands its lowest corner at +0.30, clear of the contact disc.
+      // If you re-rake this group, RE-PROBE THE POUCH — the drop is 0.66 of the local run at this
+      // rake and 0.80 at the last one, so the same cord length lands in two different places.
+      for(const sx of [-0.075,0.075]){const strap=noShadow(box(0.055,0.98,0.04,0xC9BBA0));
+        strap.position.set(sx,-0.49,0); strap.rotation.z=sx*0.9; SL.add(strap);}
+      const wloop=noShadow(new THREE.Mesh(new THREE.TorusGeometry(0.10,0.032,4,8),plainMat(0xC9BBA0)));
+      wloop.rotation.y=Math.PI/2; wloop.position.set(-0.10,-0.06,0); SL.add(wloop);   // the wrist loop
+      const rtab=noShadow(box(0.11,0.20,0.04,0x8C6B45)); rtab.position.set(0.13,-0.04,0); SL.add(rtab); // the release tab
+      const pouch=noShadow(box(0.32,0.32,0.055,0x6b4a2b));
+      pouch.rotation.z=Math.PI/4; pouch.position.y=-0.62; SL.add(pouch);      // the diamond, §B.3
+      const stone=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.10,5,4),plainMat(0x8A8078))); stone.position.set(0,-0.60,0.06); SL.add(stone);
+      // ---- THE AMMO POUCH, AND §B.3 SAYS IT IS THIS UNIT'S READ ----
+      // "Leather ammo pouch slung across the body on a 0.030-wide strap — THE POUCH IS THE UNIT'S
+      // READ WHEN IDLE", and the row's 40px cue is "the low flat head plus the HANGING POUCH BULGE
+      // AT HIP HEIGHT". Probed, the shipped bag was a 0.20 sphere at x 0.42 — spanning 0.22–0.62
+      // against a coat that is 0.66 across at that height, i.e. entirely INSIDE the outline. A
+      // bulge that does not bulge past anything is not a bulge; it is a patch of colour on a
+      // barrel, and §H A4 measures outlines. Out to 0.74 and up in size, it clears the coat by
+      // 0.20 and puts a lump on ONE hip — the only asymmetric mass at belt height in the age.
+      // It hangs off R.torso and not u.body deliberately: the walk clip swings the torso, so the
+      // pouch swings with the man, which is what a bag of river stones on a thong does.
+      const bag=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.29,7,6),texturedMat("hide",0x7a5230)));
+      bag.scale.set(0.86,1.10,0.72); bag.position.set(0.74,0.10,0.20); R.torso.add(bag);
+      // The thong is 0.07 and it hangs near-VERTICAL from the belt, not across the chest at 28°:
+      // §B.2 reserves the diagonal — "the ONLY diagonal on any Stone Age unit" — for the spearman,
+      // and the first cut of this pouch slung it on a 0.115 bar at −0.42 rad, which is a diagonal
+      // chest strap by any other name. Measured, it took spearman/slinger from 0.770 to 0.855 and
+      // tripped a4check's own negative control, which is the gate telling you the separator you
+      // just built for one class you also built for the other.
+      const bstrap=noShadow(box(0.07,0.52,0.045,0x5a3c22));
+      bstrap.rotation.z=-0.10; bstrap.position.set(0.66,0.42,0.26); R.torso.add(bstrap);
+      for(const [ox,oy] of [[0.70,0.30],[0.80,0.24]]){const st=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.075,4,4),plainMat(0x9aa2ad)));
+        st.position.set(ox,oy,0.30); R.torso.add(st);}   // river stones showing over the lip
     }
     if(u.cls==="archer")kitSkinsArcher(R,u,tc,false);   // BRONZE: skins, wool, linen, team kilt
     if(u.cls==="imparcher")kitSkinsArcher(R,u,tc,true); // IRON: the same, gone fancy
@@ -4713,3 +5049,13 @@ function dist(a,b){return Math.sqrt(dist2(a.root.position.x,a.root.position.z,b.
 // happens to spawn first is a cell whose position depends on AI timing. Mint it here, at parse
 // time, which is already downstream of the handback (this file loads after 02-world.js).
 try{ ncHeadMat(); }catch(_){}
+// …and the trader's coat, for the same two reasons and one more. texturedMat("cloth",tc) is
+// already in the cache the moment any archer, comparcher or Bronze/Classical villager exists —
+// they all wear a cloth kilt in team colour — but the Trader is a MARKET PURCHASE and can be the
+// first unit of its team on the field, so "somebody else will have minted it" is a guess about
+// build order, which is the class of guess §G.4 exists to stop being made. Minting a CanvasTexture
+// costs four Math.random() calls (THREE burns them on a uuid, and _tex restores the ambient stream
+// before it constructs), so a first request that lands inside 02-world's seeded window walks every
+// resource-node index on the wire and forces PROTO off 26. One line, at parse time, and the
+// question never has to be asked again. Both live teams; the neutral grey never trades.
+try{ for(const t of [0,1])texturedMat("cloth",TEAMCOL[t]); }catch(_){}
