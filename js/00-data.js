@@ -468,12 +468,30 @@ BLD.storage_pit={name:"Storage Pit",hp:250,r:6.6,rBlock:6.9,cost:{wood:75},hits:
 BLD.archery_range={name:"Archery Range",hp:420,r:6.4,rBlock:7.0,cost:{wood:125},hits:12};
 BLD.stable={name:"Stable",hp:450,r:6.8,rBlock:7.6,cost:{wood:125},hits:12};   // 12.8 x 14.6, corners 8.89
 BLD.temple={name:"Temple",hp:380,r:5.6,rBlock:6.5,cost:{wood:150},hits:12,heal:{rng:10,rate:2}}; // 12.8 x 13.6, corners 7.43
-// FARM IS `flat:true` — 05-combat.js:643 skips it before the circle is ever tested, so it has never
-// collided and needs no rBlock at all. Its `r` is placement spacing (farms pack at gap 0.5), the
-// ripe-corn prompt (`r+2.5`) and the plaza disc, and none of those is a wall. Measured 12.2 x 13.7
-// against a spacing radius of 6.6, so the fences do overlap slightly at maximum packing — that is
-// cosmetic, it fixes no walk-in, and changing it only churns where the AI lays fields.
-BLD.farm={name:"Farm",hp:150,r:6.6,cost:{wood:75},hits:8,flat:true};
+// FARM IS `flat:true` — 05-combat.js skips it before the circle is ever tested. That was right when
+// a farm WAS a flat plot: crop rows you walk over and a fence. It stopped being right the moment
+// §F gave every age past Stone a BARN (03-buildings.js:1622) — a solid 8.6 x 4.6 shed with a roof,
+// opposed wagon doors, and at Medieval a dovecote, at Enlightenment a horse-gin roundhouse. John
+// walked through all of it. Its `r` is still placement spacing (farms pack at gap 0.5), the
+// ripe-corn prompt (`r+2.5`) and the plaza disc, and none of those is a wall.
+//
+// SO THE FARM BLOCKS IN PARTS, NOT AS A DISC. The crop MUST stay walkable — villagers harvest by
+// standing on it and 07-ai.js's farm logic reaches for the rows — so `flat` stays and the barn gets
+// its own colliders. Coordinates are MODEL-LOCAL, exactly as 03-buildings.js writes them, and the
+// consumer applies BSCALE.farm (0.6375) and the plot's rotation; keeping them in model space means
+// they can be checked against the source line that draws the mass instead of against a conversion.
+//
+// TWO CIRCLES FOR THE BARN, NOT ONE. One circumscribing disc round an 8.6 x 4.6 box needs r 4.876
+// and over-blocks the long flanks by 2.58 — which is precisely the mistake that made a castle
+// unapproachable at rBlock 19.1 and cost a release. Two circles on the long axis need r 3.15 and
+// over-cover by 0.85 at worst. The barn spans local x -6.9..1.7, z -9.7..-5.1; the pair covers
+// x -7.9..2.7 and z -10.55..-4.25, so the box is inside the union with room and nothing else is.
+BLD.farm={name:"Farm",hp:150,r:6.6,cost:{wood:75},hits:8,flat:true,blockParts:[
+  {x:-4.75,z:-7.4,r:3.30,minAge:1},   // barn, west half   (03-buildings.js:1628)
+  {x:-0.45,z:-7.4,r:3.30,minAge:1},   // barn, east half
+  {x:-9.30,z:-6.2,r:1.90,minAge:4,maxAge:4}, // §F.5 dovecote (:1654) — r covers its CONE cap (1.8), not just the 2.0 box
+  {x: 3.70,z:-7.4,r:2.50,minAge:5}    // §F.6 horse-gin roundhouse (:1648)
+]};
 BLD.market={name:"Market",hp:520,r:7.2,rBlock:7.8,cost:{gold:25,stone:25,wood:125},hits:14}; // 14.6 x 13.6, corners 9.97 (the age-3 canopy corner still clips by 1.5)
 BLD.siege_workshop={name:"Siege Workshop",hp:480,r:7.2,rBlock:8.0,cost:{wood:200},hits:14};  // 15.5 x 14, corners 9.29
 // rBlock 4.0 against a spacing r of 2.4. BSCALE shrinks this one to 0.75 and even so the

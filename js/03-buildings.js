@@ -1343,7 +1343,11 @@ function buildingMesh(type,team,age,hx,hz){
       for(const [rx,rz,rw,rd] of [[0,-2.3,6.8,2.2],[-2.3,0.9,2.2,4.4],[2.3,0.9,2.2,4.4]]){
         const rm=new THREE.Mesh(new THREE.BoxGeometry(rw,3.4,rd),aWall(2));
         rm.position.set(rx,2.3,rz); rm.castShadow=true; rm.receiveShadow=true; g.add(rm);
-        ageRoof(g,2,rw,rd,4.0,type,{tc:(rz<0?tc:undefined),long:rw>rd?"x":"z",eave:0.10});
+        // THREE rooms, THREE roofs, and all three were drawn at (0,0) — stacked on each other
+        // in the middle of the courtyard while the rooms stood at +/-2.3. That is why the door
+        // and the disc read as floating outside the house: they are on a room the roof left.
+        const rsub=new THREE.Group(); rsub.position.set(rx,0,rz); g.add(rsub);
+        ageRoof(rsub,2,rw,rd,4.0,type,{tc:(rz<0?tc:undefined),long:rw>rd?"x":"z",eave:0.10});
       }
       const yard=box(4.4,0.24,4.4,_dk(P.stone,0.14)); yard.castShadow=false; yard.position.set(0,0.72,0.9); g.add(yard);
       for(const sx of [-1,1]){                          // the exposed frame on the blank street wall
@@ -1467,7 +1471,9 @@ function buildingMesh(type,team,age,hx,hz){
       }
       const cent=new THREE.Mesh(new THREE.BoxGeometry(4.0,6.6,4.4),aWall(3));  // the centurion's end
       cent.position.set(-8.0,4.3,2.6); cent.castShadow=true; cent.receiveShadow=true; g.add(cent);
-      ageRoof(g,3,4.0,4.4,7.6,type,{});
+      // the centurion's end block sits at (-8.0,2.6) — the largest displacement of the four.
+      const csub=new THREE.Group(); csub.position.set(-8.0,0,2.6); g.add(csub);
+      ageRoof(csub,3,4.0,4.4,7.6,type,{});
     }else if(age===5){
       // the parade square: two flanking ranges and a formal gate, all rectilinear
       for(const s of [-1,1]){
@@ -1717,7 +1723,10 @@ function buildingMesh(type,team,age,hx,hz){
       const flr=box(3.6,0.4,3.4,P.timber); flr.castShadow=true; flr.position.set(-2.2,2.5,-1.4); g.add(flr);
       const hut=new THREE.Mesh(new THREE.BoxGeometry(3.0,1.9,2.8),aWall(0));
       hut.position.set(-2.2,3.65,-1.4); hut.castShadow=true; hut.receiveShadow=true; g.add(hut);
-      ageRoof(g,0,3.0,2.8,4.6,type,{});
+      // the hut stands at (-2.2,-1.4); ageRoof draws at the group ORIGIN, so this roof spent
+      // its life 2.61 units off the shed. Same idiom as :1748 — translate, then roof.
+      const hsub=new THREE.Group(); hsub.position.set(-2.2,0,-1.4); g.add(hsub);
+      ageRoof(hsub,0,3.0,2.8,4.6,type,{});
       const lad=box(0.7,3.0,0.14,P.timber); lad.castShadow=false; lad.rotation.x=-0.34;
       lad.position.set(-2.2,1.5,0.9); g.add(lad);                       // the leaning ladder
       for(const [px,pz] of [[1.2,-3.4],[2.6,-0.6],[0.2,-1.0]]){         // BELL-SHAPED pits, clay-lidded
@@ -2466,19 +2475,27 @@ function buildingMesh(type,team,age,hx,hz){
       for(const [sx,sz,sw,sd] of [[0,-5.6,14.4,2.6],[-6.0,0.6,2.6,9.0],[6.0,0.6,2.6,9.0]]){
         const bay=new THREE.Mesh(new THREE.BoxGeometry(sw,4.4,sd),aWall(3));
         bay.position.set(sx,3.2,sz); bay.castShadow=true; bay.receiveShadow=true; g.add(bay);
-        ageRoof(g,3,sw,sd,5.4,type,{long:sw>sd?"x":"z",eave:0.12});
+        // the worst one in the whole sweep: three bays at (0,-5.6) and (+/-6.0,0.6), and three
+        // IDENTICAL soffits welded on top of one another in the middle of the court, 6.03 from
+        // the nearest wall they were meant to cover.
+        const bsub=new THREE.Group(); bsub.position.set(sx,0,sz); g.add(bsub);
+        ageRoof(bsub,3,sw,sd,5.4,type,{long:sw>sd?"x":"z",eave:0.12});
       }
       for(const px of [-5.2,-1.75,1.75,5.2])colAt(g,px,5.4,4.4,0.44,3);   // the court's own colonnade
-      const arch=box(12.4,0.6,1.6,P.stone); arch.castShadow=false; arch.position.set(0,6.2,5.4); g.add(arch);
-      const frieze=box(12.6,0.3,1.8,tc); frieze.castShadow=false; frieze.position.set(0,6.7,5.4); g.add(frieze);
+      // colAt tops its capital at h+0.45, so this colonnade (h 4.4) ends at 4.85 and a 0.6-thick
+      // lintel centres at 5.15 — not 6.2. It read as seated only because three misplaced bay roofs
+      // were stacked in the court underneath it; moving them onto their bays exposed the 1.05 gap.
+      const arch=box(12.4,0.6,1.6,P.stone); arch.castShadow=false; arch.position.set(0,5.15,5.4); g.add(arch);
+      const frieze=box(12.6,0.3,1.8,tc); frieze.castShadow=false; frieze.position.set(0,5.60,5.4); g.add(frieze);
       // THE THOLOS: round, columned, conical tile roof, dead centre of a square court
       const step=cyl(3.6,3.9,0.5,P.stone,12); step.castShadow=false; step.position.set(0,1.25,0.4); g.add(step);
       for(let i=0;i<8;i++){const a=i*Math.PI/4;
         colAt(g,Math.sin(a)*2.7,0.4+Math.cos(a)*2.7,3.6,0.34,3);}
-      const tent=cyl(3.3,3.3,0.6,P.stone,12); tent.castShadow=false; tent.position.set(0,5.6,0.4); g.add(tent);
+      // the tholos: eight columns at h 3.6 cap out at 4.05, so its entablature centres at 4.35.
+      const tent=cyl(3.3,3.3,0.6,P.stone,12); tent.castShadow=false; tent.position.set(0,4.35,0.4); g.add(tent);
       const tcap=new THREE.Mesh(new THREE.ConeGeometry(3.9,2.6,12),texturedMat(P.roofPat,P.roof));
-      tcap.castShadow=true; tcap.receiveShadow=true; tcap.position.set(0,7.2,0.4); g.add(tcap);
-      const fin=cyl(0.14,0.14,1.0,GOLD,5); fin.castShadow=false; fin.position.set(0,9.0,0.4); g.add(fin);
+      tcap.castShadow=true; tcap.receiveShadow=true; tcap.position.set(0,5.95,0.4); g.add(tcap);
+      const fin=cyl(0.14,0.14,1.0,GOLD,5); fin.castShadow=false; fin.position.set(0,7.75,0.4); g.add(fin);
       const basin=cyl(1.3,1.5,0.6,P.stone,10); basin.castShadow=false; basin.position.set(0,1.8,0.4); g.add(basin);
       for(let i=0;i<3;i++){const amp=cyl(0.5,0.34,1.3,0xb8603a,8); amp.castShadow=false;
         amp.position.set(-3.6+i*1.6,1.65,5.0); g.add(amp);}

@@ -652,9 +652,36 @@ function moveUnit(u,dx,dz,dt){
     nx=Math.max(-(MAP.x+BORDER_FRINGE),Math.min(MAP.x+BORDER_FRINGE,nx));
     nz=Math.max(-(MAP.z+BORDER_FRINGE),Math.min(MAP.z+BORDER_FRINGE,nz));
   }
-  // push out of buildings (farms are walkable)
+  // push out of buildings (farm FIELDS are walkable; the barn standing on one is not)
   for(const b of buildings){
-    if(!b.alive||b.def.flat)continue;
+    if(!b.alive)continue;
+    if(b.def.flat){
+      // `flat` means the FIELD, and it has to keep meaning that: the crop rows are walked on by
+      // every villager who harvests them and by 07-ai.js's farm logic. So the plot stays open and
+      // the masses standing on it block individually — see BLD.farm.blockParts. Model-local
+      // coordinates, so BSCALE and the plot's own rotation are applied here, once, in one place.
+      const P=b.def.blockParts; if(!P)continue;
+      const bs=(typeof BSCALE!=="undefined"&&BSCALE[b.type])||1;
+      const rot=b.rot||0, c=Math.cos(rot), sn=Math.sin(rot);
+      // THE SAME AGE THE MODEL USED, derived the same way. buildingMesh (03-buildings.js:1057)
+      // does `age=max(BLD[type].age||0, min(5,age))`, and BLD.farm.age is 1 — a farm unlocks at
+      // Bronze and is NEVER drawn at Stone. A collider that read teamAge raw would think a Stone
+      // farm had no barn while the model drew one. Two derivations of the same number is how a
+      // wall ends up standing somewhere the building isn't.
+      const A=Math.max((b.def.age||0),
+        Math.min(5,(typeof teamAge!=="undefined"&&teamAge[b.team])||0));
+      for(const q of P){
+        if(q.minAge!==undefined&&A<q.minAge)continue;   // the barn arrives at Bronze
+        if(q.maxAge!==undefined&&A>q.maxAge)continue;   // the dovecote is Medieval only
+        const qx=q.x*bs, qz=q.z*bs, qr=q.r*bs+0.7;
+        // local -> world, the same convention the wall OBB below inverts (x' = x*cos + z*sin)
+        const wx=b.x+qx*c+qz*sn, wz=b.z-qx*sn+qz*c;
+        const dd=dist2(nx,nz,wx,wz);
+        if(dd<qr*qr){const d=Math.sqrt(dd)||0.001;
+          nx=wx+(nx-wx)/d*qr; nz=wz+(nz-wz)/d*qr;}
+      }
+      continue;
+    }
     if(b.def.gate&&b.team===u.team)continue; // your own gates stand open for you
     if(b.def.wall){ // walls are LONG: oriented-box collision, not a circle
       const rot=b.rot||0,c=Math.cos(rot),sn=Math.sin(rot);
