@@ -133,6 +133,27 @@ const MOUSTACHE_TONES=[
   0x352E28,0x2F2A25,0x3B322A,
   0x191B1E,0x151719,0x1E2023
 ];
+// §2.6b THE ELDERS. One nutcracker in five is an old man, chosen by `u.id % 5 === 2` — the same
+// kind of rule SKIN_TONES uses, deterministic, never Math.random(), and coprime with both the
+// beard slot (%3) and the skin slot (%4) so greyness does not track either.
+// ONE TONE PER AGE, AND TWO OF THEM ARE DELIBERATELY DARK. §6.3c is a VALUE edge, not a hue: the
+// beard has to read as a triangle at 40px greyscale against whatever is behind it. Bronze hangs
+// on a cream tunic and Classical under the brightest armour in the game, so a white beard on
+// either would dissolve into its own chest — the table above already records those two failing at
+// 0.163 and 0.004 for exactly that reason. Grey in CHROMA on all six; light or dark in VALUE
+// according to what it hangs on. Never #FFFFFF, for the same reason §2.6 bars #000000.
+const ELDER_TONES=[
+  0xBFB9AE,   // 0 STONE          light ash, against dark hide and timber
+  0x6E6B65,   // 1 BRONZE         mid-DARK grey: the age is pale and the beard must not be
+  0xB0AAA1,   // 2 IRON           light warm grey over the rust ladder
+  0x585249,   // 3 CLASSICAL      DARK grey: polished steel is behind it
+  0xB2ACA2,   // 4 MEDIEVAL       light grey on matte cloth
+  0xBCBEC2    // 5 ENLIGHTENMENT  cool silver — the one cool age keeps its chroma direction
+];
+// §2.6a: 'pair the moustache one step darker than the beard, as a separate bar.' Same rule here,
+// authored as literals rather than derived, for the reason MOUSTACHE_TONES gives above: an HSL
+// round-trip hands back hexes a byte apart and every distinct hex is another cached material.
+const ELDER_MOUSTACHE=[0xA79F94,0x5B5852,0x97918A,0x46413A,0x99938B,0xA2A4A8];
 // The age a beard belongs to, given a unit. Kept beside the table so the one indexing rule lives
 // with the data it indexes; 04-units.js calls this and never does the arithmetic itself.
 const BEARD_PER_AGE=3;
@@ -572,7 +593,38 @@ for(const _k in BLD)if(BLD[_k].rBlock===undefined)BLD[_k].rBlock=BLD[_k].r;
 // the only type whose rBlock is smaller than its r, and its prompt and gather radii stay at 4.6
 // exactly as before — and it never touches SPACING (validFor, findSpot), the apron, the plaza, the
 // road plan, the tree fell or the splash disc, all of which are still plain `r`.
-function bSurf(def){return def.rBlock>def.r?def.rBlock:def.r;}
+// v131.9 THE FOUNDATION BOX. Half-extents in model space, measured off the UNMERGED geometry by
+// tools/footprint.js as the connected main mass — the shell and anything touching it, but not the
+// yard furniture. The barracks' fire pit at (6.6,7.4) and its weapon rack at x=-7.2 are grounded
+// and have plan area and are NOT walls; taking every grounded part made the barracks read 11.6
+// deep when its shell is 8.55. Re-measure with `node tools/footprint.js` after any model change.
+// Roof eaves are excluded on purpose: you walk under an eave, not into it.
+BLD.towncenter.fx=11.88; BLD.towncenter.fz=11.90;
+BLD.house.fx=4.47;       BLD.house.fz=4.70;
+BLD.barracks.fx=10.00;   BLD.barracks.fz=8.55;
+BLD.tower.fx=8.96;       BLD.tower.fz=9.03;    // blocker was INSIDE the walls: 2.36 of walk-through
+BLD.storage_pit.fx=6.22; BLD.storage_pit.fz=5.70;
+BLD.archery_range.fx=7.83; BLD.archery_range.fz=11.91; // the age 4-5 gallery
+BLD.stable.fx=7.00;      BLD.stable.fz=8.10;
+BLD.temple.fx=6.75;      BLD.temple.fz=6.80;
+BLD.market.fx=10.60;     BLD.market.fz=7.00;   // the age-4 hall is wide
+BLD.siege_workshop.fx=7.76; BLD.siege_workshop.fz=9.35;
+BLD.watch_tower.fx=4.24; BLD.watch_tower.fz=4.84;
+BLD.blacksmith.fx=8.05;  BLD.blacksmith.fz=7.00;
+// castle: NO BOX ON PURPOSE. Its curtain, gatehouse and towers are one connected mass 48 units
+// across; a single box would fill the courtyard solid. It wants several boxes and keeps rBlock
+// until they exist. farm keeps blockParts (v131.4) — its field must stay walkable.
+
+// bSurf answers ONE question — how far from the centre is the wall — and it is used only by
+// REACH. With a box the honest answer varies by bearing, so it returns the CORNER: the furthest
+// the wall can be. That makes every reach test in the game satisfiable by construction, because a
+// body stopped by the box can never sit further from the centre than the corner it was measured
+// against. Erring generous here is free; erring tight is what made age-up, the class menu, the
+// forge and four buildable types unreachable in v131.1.
+function bSurf(def){
+  if(def.fx!==undefined)return Math.sqrt(def.fx*def.fx+def.fz*def.fz);
+  return def.rBlock>def.r?def.rBlock:def.r;
+}
 // ---- bStand: AND THE HARD-CODED STOP DISTANCES MOVE WITH THE WALL BY THE SAME AMOUNT ----
 // Not every approach in the file is written as `def.r + k`. Two of them aim at a point a few units
 // off a building's centre and declare arrival inside a bare literal, and both literals were tuned
@@ -593,6 +645,15 @@ function bSurf(def){return def.rBlock>def.r?def.rBlock:def.r;}
 // that worked before still works; anything that was already broken (a castle used as a drop-off
 // has been unreachable at 6.5 since long before this change) stays broken and stays reportable.
 function bStand(def,want){return want+bSurf(def)-def.r;}
+// bSteer answers a THIRD question, and it is not the same as either of the other two: how wide a
+// berth should a mover give this building while pathing round it. steerAroundBuildings is circle
+// based, so a boxed type hands it the box's LONGEST half-extent — never smaller than the box, or a
+// unit would steer straight into the wall it is trying to avoid, and never the corner, which would
+// re-introduce the wide swerve the box exists to remove.
+function bSteer(def){
+  if(def.fx!==undefined)return def.fx>def.fz?def.fx:def.fz;
+  return def.rBlock!==undefined?def.rBlock:def.r;
+}
 BLD.towncenter.age=0; BLD.house.age=0; BLD.storage_pit.age=0; BLD.barracks.age=0;
 BLD.archery_range.age=1; BLD.stable.age=1; BLD.farm.age=1; BLD.watch_tower.age=1;
 BLD.siege_workshop.age=2; BLD.wood_wall.age=2; BLD.wood_gate.age=2; BLD.blacksmith.age=2;

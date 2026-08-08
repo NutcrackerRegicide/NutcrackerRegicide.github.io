@@ -927,12 +927,29 @@ function agedShell(g,age,tc,w,h,d,type,opt){
     // caller hangs its own props off `d/2` — the barracks' two shields sit at z=5.15 against a
     // d=10 hall — and a round drum pulls the daub away from that plane everywhere except dead
     // centre, which floats them. A flat front face is the only thing every caller can hang on.
-    const berm=box(w+1.0,0.8,d+1.0,p.dark); berm.position.y=0.3; g.add(berm);
-    const wall=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),aWall(0));
+    let berm;
+    if(opt.oval){
+      berm=new THREE.Mesh(new THREE.CylinderGeometry(1,1,0.8,16),texturedMat(p.pat,p.dark));
+      berm.scale.set((w+1.0)/2,1,(d+1.0)/2);
+    }else berm=box(w+1.0,0.8,d+1.0,p.dark);
+    berm.position.y=0.3; g.add(berm);
+    // v131.7 opt.oval: a round daub drum instead of the box, for callers whose age-0 roof is a
+    // cone and whose body therefore reads square under a round hat. It is OPT-IN, and not the
+    // default, for precisely the reason the paragraph above gives: an oval pulls the wall off the
+    // z=d/2 plane everywhere except dead centre, so a caller that turns it on MUST move its own
+    // front props onto the ellipse. The barracks does. Nothing else has asked.
+    let wall;
+    if(opt.oval){
+      wall=new THREE.Mesh(new THREE.CylinderGeometry(1,1,h,16),aWall(0));
+      wall.scale.set(w/2,1,d/2);
+    }else wall=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),aWall(0));
     wall.position.y=h/2+0.5; wall.castShadow=true; wall.receiveShadow=true; g.add(wall);
     for(const sx of [-1,1])for(const sz of [-1,1]){   // the post ring, at the corners it frames
       const up=cyl(0.26,0.30,h,p.timber,5); up.castShadow=false;
-      up.position.set(sx*(w/2-0.06),h/2+0.5,sz*(d/2-0.06)); g.add(up);}
+      // on an oval there are no corners: a diagonal meets the ellipse at (a,b)/sqrt(2), so a post
+      // left in the box corner would stand 2.6 clear of the daub it is supposed to be framing.
+      const k=opt.oval?Math.SQRT1_2:1;
+      up.position.set(sx*(w/2-0.06)*k,h/2+0.5,sz*(d/2-0.06)*k); g.add(up);}
     ageRoof(g,0,w,d,h+0.5,type,{tc:undefined});
     const mouth=box(w*0.24,h*0.62,0.45,p.dark); mouth.castShadow=false; mouth.position.set(0,h*0.31+0.5,d/2+0.1); g.add(mouth);
     const flap=box(w*0.19,h*0.52,0.2,tc); flap.castShadow=false; flap.rotation.x=-0.12; flap.position.set(0,h*0.28+0.5,d/2+0.34); g.add(flap);
@@ -1025,8 +1042,8 @@ function agedShell(g,age,tc,w,h,d,type,opt){
   const top=ageRoof(g,5,w,d,h+p.base*2+0.5,type,{tc});
   for(const s of [-1,1]){                                                 // chimneys at BOTH ends
     const ch=new THREE.Mesh(new THREE.BoxGeometry(0.9,2.4,0.9),texturedMat("metal",BRICK));
-    ch.position.set(s*(w*0.40),top-0.6,0); ch.castShadow=true; g.add(ch);
-    const cp=box(1.15,0.28,1.15,p.dark); cp.castShadow=false; cp.position.set(s*(w*0.40),top+0.72,0); g.add(cp);
+    ch.position.set(s*(w*0.40),top-1.0,0); ch.castShadow=true; g.add(ch);
+    const cp=box(1.15,0.28,1.15,p.dark); cp.castShadow=false; cp.position.set(s*(w*0.40),top+0.32,0); g.add(cp);
   }
   winGrid(g,Math.max(2,Math.round(w/4.2)),1,h*0.62,0,d/2+0.07,p.dark,p.stone);
   const door=box(1.8,2.7,0.2,p.dark); door.castShadow=false; door.position.set(0,1.65,d/2+0.06); g.add(door);
@@ -1110,10 +1127,10 @@ function buildingMesh(type,team,age,hx,hz){
       // "linked to smaller cells by covered stone passages" — the detail that separates this from
       // any other round building in the set, and the reason the plan is a hummock and not a hut
       for(const [cx,cz,ca] of [[-8.6,-5.0,0.9],[8.2,-5.6,-0.9]]){
-        const pas=box(2.2,2.0,5.2,P.stone); pas.rotation.y=ca; pas.position.set(cx*0.62,1.9,cz*0.62); g.add(pas);
-        const cell=cyl(2.5,2.8,2.4,P.stone,10); cell.position.set(cx,2.0,cz); cell.castShadow=true; g.add(cell);
+        const pas=box(2.2,2.0,5.2,P.stone); pas.rotation.y=ca; pas.position.set(cx*0.62,1.1,cz*0.62); g.add(pas);
+        const cell=cyl(2.5,2.8,2.4,P.stone,10); cell.position.set(cx,1.2,cz); cell.castShadow=true; g.add(cell);
         const lid=new THREE.Mesh(new THREE.ConeGeometry(3.3,2.0,10),texturedMat(P.roofPat,P.roof));
-        lid.castShadow=true; lid.position.set(cx,4.2,cz); g.add(lid);
+        lid.castShadow=true; lid.position.set(cx,3.4,cz); g.add(lid);
       }
       firePit(g,0,10.4);
       flagPole(g,9.6,1.4,5.2,12,tc,2.8,1.5);
@@ -1288,8 +1305,8 @@ function buildingMesh(type,team,age,hx,hz){
       // a single one reads as a cottage
       for(const s of [-1,1])for(const o of [-1.7,1.7]){
         const ch=new THREE.Mesh(new THREE.BoxGeometry(1.0,3.0,1.0),texturedMat("metal",BRICK));
-        ch.position.set(s*7.2,apex-0.4,o); ch.castShadow=true; g.add(ch);
-        const cp=box(1.3,0.3,1.3,P.dark); cp.castShadow=false; cp.position.set(s*7.2,apex+1.25,o); g.add(cp);
+        ch.position.set(s*7.2,apex-1.2,o); ch.castShadow=true; g.add(ch);
+        const cp=box(1.3,0.3,1.3,P.dark); cp.castShadow=false; cp.position.set(s*7.2,apex+0.45,o); g.add(cp);
       }
       flagPole(g,-9.0,1.4,7.0,7.4,tc,2.6,1.4);
     }
@@ -1354,9 +1371,9 @@ function buildingMesh(type,team,age,hx,hz){
         const post=new THREE.Mesh(new THREE.BoxGeometry(0.4,3.4,0.4),texturedMat("wood",P.timber));
         post.position.set(sx*3.2,2.3,-1.25); g.add(post);}
       const rail=box(6.9,0.3,0.2,P.timber); rail.castShadow=false; rail.position.set(0,3.4,-3.45); g.add(rail);
-      const door=box(1.5,2.2,0.2,P.dark); door.castShadow=false; door.position.set(0,1.7,3.7); g.add(door);
+      const door=box(1.5,2.2,0.2,P.dark); door.castShadow=false; door.position.set(2.3,1.7,3.16); g.add(door);
       const sh=cyl(0.55,0.55,0.13,tc,9); sh.rotation.x=Math.PI/2; sh.castShadow=false;
-      sh.position.set(((V>>2)&1)?1.4:-1.4,2.6,3.45); g.add(sh);
+      sh.position.set(((V>>2)&1)?2.3:-2.3,2.6,3.165); g.add(sh);
     }else if(age===3){
       // §F.4 THE DOMUS, and the detail it names is the ATRIUM: a COMPLUVIUM roof opening over an
       // IMPLUVIUM basin. That is a hole cut in the middle of a roof with a pool under it, which is
@@ -1463,7 +1480,13 @@ function buildingMesh(type,team,age,hx,hz){
     //   5   the first REAL barracks (Berwick, Hawksmoor, 1717-21): repeating company quarters
     //       round a CENTRAL PARADE SQUARE behind a formal pedimented gate. §F.6: "regular,
     //       institutional and rectilinear — the visual opposite of the medieval bailey hall."
-    const shellTop=agedShell(g,age,tc,12.8,5.6,10,type);
+    // §F.1 gives the Stone barracks a conical thatch, and a box under a cone reads as a mistake —
+    // which is what John saw. The oval drum matches the hat, and the shields move with it.
+    const shellTop=agedShell(g,age,tc,12.8,5.6,10,type,{oval:age===0});
+    // where the front wall actually IS at the shields. On the box it is a flat plane at d/2 = 5.0;
+    // on the ellipse (a 6.4, b 5.0) at x = 4.4 it is 5.0*sqrt(1-(4.4/6.4)^2) = 3.631, and a shield
+    // left at 5.15 would hang 1.52 clear of the daub.
+    const _fz=(age===0)?5.0*Math.sqrt(1-Math.pow(4.4/6.4,2)):5.0;
     if(age===3){ // the contubernium doors: eight men to a room, and you can count them
       for(let i=0;i<6;i++){
         const dr=box(1.0,2.4,0.2,P.dark); dr.castShadow=false; dr.position.set(-5.0+i*2.0,1.7,5.06); g.add(dr);
@@ -1480,7 +1503,7 @@ function buildingMesh(type,team,age,hx,hz){
         const wing=new THREE.Mesh(new THREE.BoxGeometry(3.6,5.0,8.0),aWall(5));
         wing.position.set(s*8.0,3.3,4.4); wing.castShadow=true; wing.receiveShadow=true; g.add(wing);
         const wb=new THREE.Mesh(new THREE.BoxGeometry(3.9,0.9,8.3),texturedMat("metal",BRICK));
-        wb.position.set(s*8.0,0.9,4.4); wb.castShadow=true; g.add(wb);
+        wb.position.set(s*8.0,0.45,4.4); wb.castShadow=true; g.add(wb);
         const sub=new THREE.Group(); sub.position.set(s*8.0,0,4.4); g.add(sub);
         ageRoof(sub,5,3.6,8.0,5.8,type,{tc});
         for(let f=0;f<2;f++)for(let i=0;i<3;i++){
@@ -1496,8 +1519,8 @@ function buildingMesh(type,team,age,hx,hz){
     }
     for(const wx of [-4.4,4.4]){ // round shields hung on the front wall
       const sh=cyl(1.1,1.1,0.16,wx<0?tc:0xdcdcdc,10); sh.rotation.x=Math.PI/2; sh.castShadow=false;
-      sh.position.set(wx,3.8,5.15); g.add(sh);
-      const boss=box(0.4,0.4,0.12,GOLD); boss.castShadow=false; boss.position.set(wx,3.8,5.28); g.add(boss);
+      sh.position.set(wx,3.8,_fz+0.15); g.add(sh);
+      const boss=box(0.4,0.4,0.12,GOLD); boss.castShadow=false; boss.position.set(wx,3.8,_fz+0.28); g.add(boss);
     }
     if(age<=2)firePit(g,6.6,7.4);          // the outdoor hearth §F.1 asks for, and the drill yard's
     const rackA=box(0.3,2.6,0.3,0x6b4a2b); rackA.position.set(-7.2,1.3,2.8); g.add(rackA);
@@ -2400,16 +2423,16 @@ function buildingMesh(type,team,age,hx,hz){
         const smk=cyl(0.7,1.1,1.8,0xa8a49a,7); smk.castShadow=false; smk.position.set(cx,11.5,-4.4); g.add(smk);
       }
       // THE CASTING PIT with a CRANE GANTRY over it — the thing that makes this a foundry
-      const pit=box(4.4,0.6,4.0,P.dark); pit.castShadow=false; pit.position.set(4.2,0.6,1.6); g.add(pit);
+      const pit=box(4.4,0.6,4.0,P.dark); pit.castShadow=false; pit.position.set(4.2,0.6,3.6); g.add(pit);
       for(const s of [-1,1]){const leg=new THREE.Mesh(new THREE.BoxGeometry(0.5,6.2,0.5),
-        texturedMat("wood",P.timber)); leg.position.set(4.2+s*2.6,3.4,1.6); leg.castShadow=true; g.add(leg);}
+        texturedMat("wood",P.timber)); leg.position.set(4.2+s*2.6,3.4,3.6); leg.castShadow=true; g.add(leg);}
       const gan=new THREE.Mesh(new THREE.BoxGeometry(6.6,0.55,0.55),texturedMat("wood",P.timber));
-      gan.position.set(4.2,6.7,1.6); gan.castShadow=true; g.add(gan);
-      const hoist=cyl(0.06,0.06,3.0,0x9a8a6a,4); hoist.castShadow=false; hoist.position.set(4.2,5.1,1.6); g.add(hoist);
-      const cruc=cyl(0.9,0.7,1.2,0x5a4a3a,8); cruc.castShadow=false; cruc.position.set(4.2,3.1,1.6); g.add(cruc);
+      gan.position.set(4.2,6.7,3.6); gan.castShadow=true; g.add(gan);
+      const hoist=cyl(0.06,0.06,3.0,0x9a8a6a,4); hoist.castShadow=false; hoist.position.set(4.2,5.1,3.6); g.add(hoist);
+      const cruc=cyl(0.9,0.7,1.2,0x5a4a3a,8); cruc.castShadow=false; cruc.position.set(4.2,3.1,3.6); g.add(cruc);
       const glow=new THREE.Mesh(new THREE.PlaneGeometry(1.5,1.0),
         new THREE.MeshBasicMaterial({color:0xff7a2f}));
-      glow.rotation.x=-Math.PI/2; glow.position.set(4.2,0.95,1.6); glow.castShadow=false; g.add(glow);
+      glow.rotation.x=-Math.PI/2; glow.position.set(4.2,0.95,3.6); glow.castShadow=false; g.add(glow);
       // FINISHED BARRELS RACKED IN ROWS in the yard — §F.6's own dressing, and the read that says
       // this place makes GUNS and not siege towers
       for(let i=0;i<4;i++){
@@ -2527,9 +2550,9 @@ function buildingMesh(type,team,age,hx,hz){
       const shaft=cyl(0.28,0.36,3.4,P.stone,8); shaft.castShadow=true; shaft.position.set(-8.4,3.5,4.4); g.add(shaft);
       const head=box(1.0,1.0,0.4,P.stone); head.castShadow=false; head.position.set(-8.4,5.5,4.4); g.add(head);
       const stall=new THREE.Mesh(new THREE.BoxGeometry(5.2,0.4,2.0),texturedMat("wood",PLANK));
-      stall.castShadow=false; stall.position.set(2.4,2.0,3.2); g.add(stall);
-      const awn=box(5.6,0.16,2.6,tc); awn.rotation.x=0.16; awn.castShadow=false; awn.position.set(2.4,3.1,3.4); g.add(awn);
-      const goods=box(4.0,0.7,1.4,0xe0a92e); goods.castShadow=false; goods.position.set(2.4,2.55,3.2); g.add(goods);
+      stall.castShadow=false; stall.position.set(2.4,1.3,3.2); g.add(stall);
+      const awn=box(5.6,0.16,2.6,tc); awn.rotation.x=0.16; awn.castShadow=false; awn.position.set(2.4,2.4,3.4); g.add(awn);
+      const goods=box(4.0,0.7,1.4,0xe0a92e); goods.castShadow=false; goods.position.set(2.4,1.85,3.2); g.add(goods);
       for(let i=0;i<2;i++){const bar=cyl(0.62,0.7,1.4,0x7a5a34,8); bar.castShadow=false;
         bar.position.set(-3.6+i*1.5,1.6,3.6); g.add(bar);}
     }else{
@@ -2557,21 +2580,23 @@ function buildingMesh(type,team,age,hx,hz){
       // the portico, and the parapet §F.6 asks for on top of it
       const port=box(6.4,0.5,3.0,P.stone); port.castShadow=false; port.position.set(0,1.4,6.2); g.add(port);
       for(const px of [-2.4,-0.8,0.8,2.4])colAt(g,px,6.0,4.8,0.38,5);
-      const pent=box(7.0,0.7,2.6,P.wall); pent.castShadow=false; pent.position.set(0,6.1,6.0); g.add(pent);
-      balustrade(g,6.4,6.5,6.0,P.stone);
+      const pent=box(7.0,0.7,2.6,P.wall); pent.castShadow=false; pent.position.set(0,5.6,6.0); g.add(pent);
+      balustrade(g,6.4,6.0,6.0,P.stone);
       // THE CUPOLA, lead-coated: an octagonal drum, a lantern and a little dome, all in §F.6's
       // lead #8A9099 rather than verdigris — copper is the town centre's and the temple's.
-      const drum=cyl(2.4,2.6,2.0,P.stone,8); drum.castShadow=true; drum.position.y=apex+0.8; g.add(drum);
+      // the cupola sat on the hipped APEX — a point, not a plane — so a 2.4-radius drum had 0.99 of
+      // mean air under it (A11 PERCH). The whole stack drops 1.0 so the drum meets roof, not ridge.
+      const drum=cyl(2.4,2.6,2.0,P.stone,8); drum.castShadow=true; drum.position.y=apex-0.2; g.add(drum);
       for(let i=0;i<8;i++){const a=i*Math.PI/4;
         const op=box(0.5,1.0,0.5,P.dark); op.castShadow=false;
-        op.position.set(Math.sin(a)*2.3,apex+0.8,Math.cos(a)*2.3); op.rotation.y=-a; g.add(op);}
-      const cdome=bDome(2.6,"wood",P.lead); cdome.position.y=apex+1.8; g.add(cdome);
-      const lant=cyl(0.7,0.75,1.4,P.stone,8); lant.castShadow=false; lant.position.y=apex+4.1; g.add(lant);
-      const lfin=cone(0.4,1.0,GOLD,6); lfin.castShadow=false; lfin.position.y=apex+5.3; g.add(lfin);
+        op.position.set(Math.sin(a)*2.3,apex-0.2,Math.cos(a)*2.3); op.rotation.y=-a; g.add(op);}
+      const cdome=bDome(2.6,"wood",P.lead); cdome.position.y=apex+0.8; g.add(cdome);
+      const lant=cyl(0.7,0.75,1.4,P.stone,8); lant.castShadow=false; lant.position.y=apex+3.1; g.add(lant);
+      const lfin=cone(0.4,1.0,GOLD,6); lfin.castShadow=false; lfin.position.y=apex+4.3; g.add(lfin);
       const stall=new THREE.Mesh(new THREE.BoxGeometry(5.0,0.4,1.9),texturedMat("wood",PLANK));
-      stall.castShadow=false; stall.position.set(2.0,2.2,3.4); g.add(stall);
-      const goods=box(3.8,0.7,1.3,0xe0a92e); goods.castShadow=false; goods.position.set(2.0,2.75,3.4); g.add(goods);
-      const awn=box(5.4,0.16,2.4,tc); awn.rotation.x=0.16; awn.castShadow=false; awn.position.set(2.0,3.3,3.6); g.add(awn);
+      stall.castShadow=false; stall.position.set(2.0,1.6,3.4); g.add(stall);
+      const goods=box(3.8,0.7,1.3,0xe0a92e); goods.castShadow=false; goods.position.set(2.0,2.15,3.4); g.add(goods);
+      const awn=box(5.4,0.16,2.4,tc); awn.rotation.x=0.16; awn.castShadow=false; awn.position.set(2.0,2.7,3.6); g.add(awn);
     }
   }else if(type==="temple"){
     // ===================== THE TEMPLE, AGES §F.4-§F.6 =====================
@@ -2674,8 +2699,8 @@ function buildingMesh(type,team,age,hx,hz){
       // the portico
       const port=box(6.0,0.5,2.8,P.stone); port.castShadow=false; port.position.set(0,1.2,5.4); g.add(port);
       for(const px of [-2.2,-0.75,0.75,2.2])colAt(g,px,5.2,4.6,0.36,5);
-      const pent=box(6.6,0.7,2.4,P.wall); pent.castShadow=false; pent.position.set(0,6.1,5.2); g.add(pent);
-      const ped=pedTri(6.6,1.7,P.wall); ped.position.set(0,7.2,5.2); g.add(ped);
+      const pent=box(6.6,0.7,2.4,P.wall); pent.castShadow=false; pent.position.set(0,5.4,5.2); g.add(pent);
+      const ped=pedTri(6.6,1.7,P.wall); ped.position.set(0,6.5,5.2); g.add(ped);
       const door=box(1.9,2.9,0.2,P.dark); door.castShadow=false; door.position.set(0,1.95,3.96); g.add(door);
       // THE STEEPLE. Tower, then three diminishing stages, then the spire.
       let y=apex-0.6, wStage=4.6;

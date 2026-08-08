@@ -701,7 +701,26 @@ function moveUnit(u,dx,dz,dt){
       }
       continue;
     }
-    // v131.6 THE PUSH READS rBlock, NOT r. `r` is the SPACING radius as well as the physical one
+    // v131.9 THE PUSH IS A BOX WHERE WE HAVE ONE. A circumscribing circle stands proud of a flat
+    // wall by (corner - halfwidth) and proud of a diagonal by nothing, which is why it played as
+    // an invisible wall that moved depending on which way you walked at it. Push out along the
+    // axis of LEAST penetration, so a body sliding along a wall keeps sliding instead of being
+    // flicked round a corner.
+    if(b.def.fx!==undefined){
+      const rot=b.rot||0, c=Math.cos(rot), sn=Math.sin(rot);
+      const dx0=nx-b.x, dz0=nz-b.z;
+      const lx=dx0*c-dz0*sn, lz=dx0*sn+dz0*c;
+      const hx=b.def.fx+0.7, hz=b.def.fz+0.7;      // +0.7: the body's own half-width, as before
+      const ax=Math.abs(lx), az=Math.abs(lz);
+      if(ax<hx&&az<hz){
+        let gx=lx, gz=lz;
+        if(hx-ax<hz-az)gx=(lx>=0?hx:-hx); else gz=(lz>=0?hz:-hz);
+        nx=b.x+gx*c+gz*sn; nz=b.z-gx*sn+gz*c;
+      }
+      continue;
+    }
+    // and the circle stays for the types that have no box yet — the castle, and anything new
+    // whose footprint has not been measured. `r` is the SPACING radius as well as the physical one
     // (03-buildings.js:2985 has said so all along), so when the v131 models outgrew their blockers
     // and the fix was to grow `r`, the exclusion disc `r+r'+2.2` in validFor grew with it and the
     // AI stopped being able to place a stable, a market or a forge at all. One number cannot be
@@ -738,7 +757,7 @@ function steerAroundBuildings(u,hx,hz,distT,tx2,tz2){
   else for(const b of buildings){
     if(!b.alive||b.def.flat||b.def.wall)continue; // walls slide endward in moveUnit already
     if(b.def.gate&&b.team===u.team)continue;      // own gates stand open
-    const rr=b.def.rBlock+1.4;      // v131.6 the EDGE we round is the physical one — see :663
+    const rr=bSteer(b.def)+1.4;     // v131.9 the EDGE we round is the box, where there is one
     if(dist2(tx2,tz2,b.x,b.z)<(rr+0.8)*(rr+0.8))continue; // that's our destination's building — walk up to it
     const ox=b.x-px, oz=b.z-pz;
     const proj=ox*hx+oz*hz;             // how far ahead along our heading
@@ -753,7 +772,7 @@ function steerAroundBuildings(u,hx,hz,distT,tx2,tz2){
   let s=u._avS||0;
   if(!s){s=((-rz/RL)*hx+(rx/RL)*hz>=0)?1:-1;u._avS=s;} // choose a side ONCE, stick with it
   let sx=-rz/RL*s, sz=rx/RL*s;
-  const rr=blk.def.rBlock+1.4;                   // v131.6 same circle the push uses — see :663
+  const rr=bSteer(blk.def)+1.4;                  // v131.9 must agree with the box the push uses
   if(RL<rr+0.6){sx+=rx/RL*0.7;sz+=rz/RL*0.7;}    // pressed against the edge: ease outward too
   const SL=Math.hypot(sx,sz)||1;
   return [sx/SL,sz/SL];

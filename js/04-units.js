@@ -3086,8 +3086,12 @@ function _buildBodyRaw(u){
   // in 00-data.js for the ladder and for why ages 1 and 3 are the same value on purpose.
   const _kingBeard=(CLS[u.cls].rig==="king"), _bOv=CLS[u.cls].beardTone;
   const _bAge=unitAge(u), _bSlot=_bAge*BEARD_PER_AGE+(u.id%BEARD_PER_AGE);
+  // §2.6b: one in five is an elder. Pure function of u.id — never Math.random(), or peers desync.
+  // The king is excluded because he already ages on his own clock, and a class with an explicit
+  // beardTone (the neutrals, §D) keeps the tone its §D entry names.
+  const _elder=!_kingBeard&&_bOv===undefined&&(u.id%5)===2;
   const bTone=_kingBeard?(_bAge>=4?0x6E665C:0x7A4526)
-    :_bOv!==undefined?_bOv:BEARD_TONES[_bSlot];
+    :_bOv!==undefined?_bOv:(_elder?ELDER_TONES[_bAge]:BEARD_TONES[_bSlot]);
   const bT=NC_HEADRC*1.081;                                  // topW 1.192 = 1.081 x headWidth (§6.3c: 1.05-1.15)
   const bp=(r,y)=>new THREE.Vector2(bT*r,y);
   // THE PROFILE RUNS BOTTOM-TO-TOP, AND THAT IS NOT A STYLE CHOICE. r128's LatheGeometry winds
@@ -3151,7 +3155,7 @@ function _buildBodyRaw(u){
   // profile and NOT a third silhouette event on a figure §6.3 budgets at two.
   const mTone=_kingBeard?(_bAge>=4?0x4F4942:0x58321C)
     :_bOv!==undefined?MOUSTACHE_TONES[BEARD_TONES.indexOf(_bOv)>=0?BEARD_TONES.indexOf(_bOv):0]
-    :MOUSTACHE_TONES[_bSlot];
+    :(_elder?ELDER_MOUSTACHE[_bAge]:MOUSTACHE_TONES[_bSlot]);
   // A HELMET THAT COVERS THE FACE MUST COVER THE FACE GEOMETRY TOO. The Medieval great helm
   // encases the skull from 0.06 H above the chin upward, and the moustache bar stands at z=0.47
   // with 0.26 of depth — front face 0.60, outside the helm's own surface — so the fully-enclosed
