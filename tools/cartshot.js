@@ -46,7 +46,10 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
       if(typeof sun!=="undefined"&&sun.target){sun.target.position.set(0,0,0);sun.target.updateMatrixWorld();}
       renderer.shadowMap.needsUpdate=true;
       const bb=new THREE.Box3().setFromObject(u.root);
-      renderer.render(scene,camera);
+      // v131 COMPOSER, NOT RENDERER — see the note in unitshot.js. A bare renderer.render()
+      // skips bloom and the grade, so any colour eyedroppered off this PNG is a colour the game
+      // never draws. AGES §G.6 names this file as a blocker.
+      if(typeof composer!=="undefined"&&composer)composer.render(); else renderer.render(scene,camera);
       return {size:[+(bb.max.x-bb.min.x).toFixed(2),+(bb.max.y-bb.min.y).toFixed(2),+(bb.max.z-bb.min.z).toFixed(2)]};
     },s);
     console.log(s.name+" bounds W×H×L = "+info.size.join(" × "));

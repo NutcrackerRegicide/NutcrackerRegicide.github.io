@@ -8,8 +8,238 @@
 
 // ---------- data ----------
 const BLUE=0, RED=1, NEUTRAL=2; // team 2: the wilds — creep camps, hostile to both crowns
-const TEAMCOL=[0x3d6ef2,0xd94a3d,0x8a8f7a];
+// ART-DIRECTION §2.5. The old blue/red pair (0x3d6ef2 / 0xd94a3d) were both light and both
+// desaturated, so at 40px the two armies were one grey smear; these are darker and further apart
+// in hue, which is what lets a coat carry the team read without a banner. The wilds move off olive
+// because olive IS the grass — a neutral creep was camouflaged against the map it stands on.
+const TEAMCOL=[0x2E5FD8,0xD62B2B,0x9AA0A8];
 const TEAMNAME=["Blue","Red","Wilds"];
+
+// THE NUTCRACKER PALETTE — ART-DIRECTION §2.6, fixed and not negotiable.
+// Every part of a unit that carries the five-band value ladder (hat / beard / coat / trousers /
+// boots) reads its hex from here. The point of centralising it is that the barcode cannot drift
+// one class at a time: the measured baseline was 0.35→0.72→0.90→0.72→0.88→0.72→0.35, i.e. one
+// skin tone with two white spots, precisely because eighteen hat blocks each picked their own grey.
+// Only `coat` is team-driven — swapping its hue leaves every other band's VALUE untouched, which
+// is the whole reason the coat is where team colour goes (§6.6).
+const NC={
+  black:0x252525, blackD:0x131315,          // shako, boots, belt — never #000000, it kills the ramp
+  gold:0xCFB53B, goldD:0x8C6D2B, goldH:0xEBD46A,
+  trouser:0xEDE7D3, trouserD:0xBDB49A,
+  // v130.7 THE BEARD WAS 100% OF THIS GAME'S CLIPPING, AND IT WAS MEASURED THROUGH THE WRONG RENDER.
+  // §2.6 authors #F7F3E8 (luma 0.953) and v130.6 dutifully divided it by the ramp's LIT gain so it
+  // would land back on that swatch. It does — under `renderer.render()`. But the game and vista.js
+  // both draw through `composer.render()`, and UnrealBloomPass's high pass is
+  // smoothstep(0.86, 0.87, luma), so at 0.949 the beard sat ON the cliff, self-composited, and came
+  // out (255,255,247) — two channels pegged, ~6,900 flat pixels per figure, 2,682 clipped px in the
+  // town shot and 5,905 in the crowd shot with this surface as the top colour in both. A clipped
+  // surface has no form by definition, which is the whole reason the beard read as a folded paper
+  // bib instead of hair.
+  // The engine lane hit the identical cliff on the clouds and wrote the answer down (01-engine.js,
+  // CLOUD_TOP): "218 is the ceiling the buffer prints, not a preference — luma 0.853, and the bloom
+  // cliff is at 0.86." This is that ceiling, applied to 136 bodies. Dropping 0.12 of luma is safe
+  // for §6.2's ladder because the head+beard band's median is carried by the FACE facet at
+  // 0.62-0.65, not by the beard — all four adjacent deltas stay above 0.25 with margin.
+  // CALIBRATE THROUGH THE COMPOSER. Any future re-derivation of these whites that uses
+  // `renderer.render()` will "prove" the bright value is fine and put the clipping straight back.
+  // v131 …AND THE ANSWER WAS NEVER A DARKER WHITE. v130.7 read the clipping correctly and then
+  // treated it as a brightness problem, so the beard went from #F7F3E8 to #D8D4C4 and stayed a
+  // pale slab. §2.6a says what it actually is: every beard in docs/ref/nutcracker-reference.png is
+  // WARM CARVED WOOD — chestnut, auburn, walnut, one golden blonde — and not one of them is white.
+  // A brown beard is nowhere near the 0.86 bloom cliff, so the art direction and the bug have the
+  // same answer and neither of these two keys has a reader left. They stay only so that a future
+  // grep for `nc.beard` lands here and reads why, rather than finding nothing and reinventing it.
+  beard:0x6B4A2E, beardD:0x4D3521,          // SUPERSEDED by BEARD_TONES below — see §2.6a
+  face:0xEFC49A, faceD:0xC2916A, cheek:0xD9584E,
+  teeth:0xFFFFFF,                           // the ONLY pure white permitted anywhere in the game
+  mouth:0x1A1210, eye:0x14100E,
+  brow:0x2A1D12                             // §6.3b.3: heavy dark brows, warm — not the eye's black
+};
+
+// THE BEARD IS CARVED WOOD AND IT VARIES PER UNIT — ART-DIRECTION §2.6a — **AND PER AGE**.
+//
+// v131.2 THE BEARD WAS THE BIGGEST CONSTANT IN §H A2'S OWN CROP, AND IT IS MEASURED.
+// The previous table was five warm browns picked by `u.id % 5` with no age term at all. Measured
+// through the composer with the beard left IN the crop the way the written gate has it, the beard
+// was 22–52% of A2's 28–58% band on every age (Stone 52%, Classical 51%, Iron 46%) and it came
+// back the same brown at hue 28–40° on all six: #523B23 / #897250 / #7E5D42 / #8F764A / #695A44 /
+// #6E5A31, worst pair ΔE00 **3.1** against a floor of 12, all five adjacent |ΔV| under 0.25 and
+// the Medieval/Enlightenment pair at 0.001. That is the same defect as the gold epaulettes that
+// were correctly taken OFF all six shoulders — a constant sitting in the middle of the one region
+// the gate looks at — except the beard is three times the area. The small one was fixed and the
+// big one shipped.
+//
+// >>> THE SELECTION IS `BEARD_TONES[unitAge(u)*3 + u.id % 3]`. AGE-MAJOR, THREE TONES PER AGE. <<<
+// The array stays FLAT and stays an array of plain ints on purpose: tools/agecheck.js flags the
+// beard for measurement by overwriting every slot with a green sentinel and re-shooting, so a
+// nested table would silently blind the only tool that can see this surface.
+//
+// §G.5 still binds and is not weakened by this: `(u.id, age)` is a pure function of state every
+// peer already agrees on — a class's age is fixed in CLS, and the villager's and the king's is
+// `teamAge[u.team]`, which is sim state. NEVER Math.random(): a beard drawn from the casino makes
+// the host and every guest render the same soldier differently, and unlike a wrong colour a
+// desynced one is invisible in a screenshot — you only ever find it in the source.
+//
+// THE LADDER, and why it is shaped this way. It AMPLIFIES each age instead of averaging it:
+//   0 Stone   dark walnut, warm      V 0.15-0.20  under a dark warm hide  → pushes the age darker
+//   1 Bronze  flaxen honey, YELLOW   V 0.50-0.56  under cream linen       → the pale rung
+//   2 Iron    auburn rust, RED       V 0.29-0.38  under cool grey scale   → the only red beard
+//   3 Classical silvered ash, NEUTRAL V 0.51-0.56 under bright steel      → light like Bronze and
+//       separated from it by CHROMA, which is exactly the mechanism §A.2 uses for its own two
+//       deliberate collisions. Do not "fix" this pair by pulling one of them on value.
+//   4 Medieval dark grey-brown       V 0.23-0.28  under matte mail
+//   5 Enlight. near-black            V 0.12-0.17  under black felt
+//
+// CEILING: §2.6a caps a beard at luma 0.62 and §H A8 fails on any beard PIXEL above it. Measured
+// through composer.render(), a beard's brightest pixel comes back at ~1.06x its authored luma and
+// its mesh mean at ~0.80x, so the authored ceiling is 0.58 and the lightest tone here is 0.564.
+// Authored luma is not the number that matters and never was; the whole 6,900-clipped-pixels-per-
+// figure episode happened because someone measured through `renderer.render()`.
+// These are FLAT colours: plainMat() costs no atlas cell and makes no Math.random() call, so
+// eighteen beards are eighteen free hexes rather than eighteen of the ~27 cells left (§G.4).
+// v131.4 AGE 3 GOES DARK WALNUT AND AGE 2 GOES DEEPER, AND BOTH ARE §6.3c AND NOT §H A2.
+// §6.3c's acceptance test is "at 40px greyscale it must read as a TRIANGLE", i.e. it is about a
+// value EDGE against whatever the beard hangs in front of — and it failed on all six ages for two
+// rounds. Measured through the composer against a 3px ring: Classical came back beard 0.442 vs
+// surround 0.446, FOUR THOUSANDTHS, because a silvered-ash beard was placed against polished-steel
+// armour; Iron 0.132. The silvered ash was chosen so this age would sit apart from Bronze on
+// CHROMA rather than value — a §H A2 argument — but §H A2's crop masks the beard out, so that
+// argument was buying nothing while §6.3c paid for it. Age 3's armour is the brightest surface in
+// the game, so its beard is the darkest: #2.6a's own dark walnut, which the amendment describes as
+// "reads almost black at 40px — good, it deepens the ladder".
+const BEARD_TONES=[
+  0x322416,0x3C2A1A,0x2C2013,   // 0 STONE — walnut-black; unkempt, and it reads as the hat's twin
+  0x6E5228,0x624820,0x786030,   // 1 BRONZE — dark honey. §6.3c is a VALUE EDGE and the flaxen tone
+                                //   measured 0.163 against the cream it hangs on; the age is pale,
+                                //   the beard on it is not, and that IS the edge.
+  0x562C16,0x4C2712,0x60341A,   // 2 IRON — deep auburn rust; the one red beard in the game
+  0x4A3524,0x412E1F,0x533B29,   // 3 CLASSICAL — §2.6a's dark walnut, under the brightest armour
+  0x3A322C,0x342D28,0x413830,   // 4 MEDIEVAL — dark grey-brown, matte, no warmth to speak of
+  0x24262A,0x1E2024,0x2A2C30    // 5 ENLIGHTENMENT — near-black, and the one COOL beard: §H A2
+                                //   cannot separate this age on value (its crop is ~45% face), so it
+                                //   is separated on chroma, the way §A.2 separates its own two
+                                //   deliberate collisions. Never #000000 (§2.6).
+];
+// §2.6a: "Pair the moustache one step darker than the beard, as a separate bar." Same age-major
+// layout, index for index. Authored as literals rather than derived with offsetHSL at load: a
+// float HSL round-trip can hand back two hexes one byte apart for what is meant to be one colour,
+// and every distinct hex that reaches texturedMat costs an atlas cell (the same trap _TEAM_JERKIN
+// in 04-units.js is memoised against).
+const MOUSTACHE_TONES=[
+  0x241A0F,0x2C1E12,0x1E160D,
+  0x503A1C,0x473317,0x584523,
+  0x3E2010,0x371B0D,0x452513,
+  0x2A2420,0x25201C,0x2F2822,
+  0x352E28,0x2F2A25,0x3B322A,
+  0x191B1E,0x151719,0x1E2023
+];
+// The age a beard belongs to, given a unit. Kept beside the table so the one indexing rule lives
+// with the data it indexes; 04-units.js calls this and never does the arithmetic itself.
+const BEARD_PER_AGE=3;
+
+// ============ THE SIX AGES AS A PALETTE LADDER — AGES §A.3, hex for hex ============
+// THE FAILURE THIS EXISTS TO FIX IS MEASURED, TWICE. The v130.7 build's six torsos came out
+// #785a41 / #957650 / #886c4a / #8a735e / #7d6755 / #7d6140 — six browns, worst pair ΔE00 3.8
+// against §H A2's floor of 12, all fifteen pairs failing; the build before it had every age's cap
+// in the same near-black felt. Both happened for the same reason: each class picked its own hexes
+// at its own call site, so "the age" was never a thing any one file owned and drift was invisible
+// until someone downsampled the army. It is one table now, and a class may override the SHAPE of
+// a garment but never its colour.
+//
+// TWO CARRIERS DO THE WORK (§A.1) and both are gated: `crown` is the headwear mass, `dominant` is
+// the largest NON-TEAM body surface. Team colour lives on the coat and therefore cannot carry the
+// age — §H A2 masks every pixel within ΔE00 12 of TEAMCOL before it measures, which is exactly the
+// trap a six-blue-coats build falls into.
+//
+// THE LADDER, as authored (Rec.709 on encoded bytes, §A.0):
+//   crown     0.287 → 0.797 → 0.454 → 0.727 → 0.417 → 0.127
+//   dominant  0.374 → 0.789 → 0.458 → 0.727 → 0.378 → 0.127
+// Adjacent |ΔV| ≥ 0.25 on both, worst pairwise ΔE00 14.5 / 12.8 — the design has 2.5 and 0.8 of
+// headroom on §H's floor of 12 and NOT MORE, so an implementer who "warms up" one of these by a
+// few values is spending margin that is not there.
+//
+// TWO COLLISIONS ARE DELIBERATE AND A CRITIC MUST NOT "FIX" THEM: Iron 0.454 sits near Medieval
+// 0.417, and Stone 0.374 near Medieval 0.378. They are separated by CHROMA — Iron's crown is warm
+// gold-bronze at C* ≈ 38, Medieval's is neutral grey at C* ≈ 4 — which is why §H tests ΔE00 and
+// not ΔV alone. Pulling either apart on value would break the adjacent-ΔV chain that does pass.
+//
+// EVERY ONE OF THESE IS A FLAT COLOUR. plainMat() costs no atlas cell and makes no Math.random()
+// call, so fifty-four hexes are fifty-four free colours rather than fifty-four of the ~27 cells
+// left in the atlas (§G.4). Only where §A.3 names a PATTERN — the Otzi stripe, iron scale, mail —
+// does anything here reach texturedMat.
+//
+// age0.metal IS DELIBERATELY ABSENT. §A.3: "Nothing metal on any Stone Age unit. This is the age's
+// hardest rule." The key is present and set to the rawhide hex so that a shared builder asking for
+// `metal` on age 0 gets leather rather than a crash or, worse, a bronze fitting.
+const AGEPAL=[
+  { name:"Stone",                                     // "Bear-hide and greenstone."
+    crown:0x5A4636, dominant:0x7A5B3C, light:0xA88A62, // Otzi's cap; stitched hide + its light stripe
+    metal:0x8C6B45, metalD:0x6E5334,                   // §A.3: THERE IS NO METAL. Rawhide stands in.
+    leather:0x8C6B45, accent:0xC9BBA0, wood:0x8A6B45, stone:0x5F7355,
+    trim:0xC9BBA0, dark:0x3A2E24, patt:"hide" },
+  { name:"Bronze",                                    // "Linen and brown-gold." The pale rung.
+    // §A.3 authors age1.crown at #DCCFAA — max channel 220, and §G.6 flags it as OVER the 216 the
+    // buffer prints (CLOUD_TOP, luma 0.853, against UnrealBloomPass's 0.86 cliff). §I open
+    // question 2 says the same. Held at 216 exactly rather than shipped two values into the bloom:
+    // this is the surface the whole age is named for and a blown ivory helmet is the beard defect
+    // wearing a different hat. V 0.797 against the ladder's 0.812 — the rung is unmoved.
+    crown:0xD8CBA6, dominant:0xD6C9A4, light:0xE0D6BC,
+    metal:0xA87A3A, metalD:0x8A6430, metalLit:0xC29A52,
+    leather:0x9A7A50, accent:0xD8CDAE, wood:0x8A6B45, faience:0x3E8C8A,
+    trim:0xC29A52, dark:0x5A4630, patt:"cloth" },
+  { name:"Iron",                                      // "Cold grey and rust." The temperature flip.
+    crown:0x95712E, dominant:0x6E767E, light:0x8A9099,
+    metal:0x8A9099, metalD:0x5A6068, metalLit:0x8A9099,
+    leather:0x5A4630, accent:0x7A4A32, wood:0x7A6242, rust:0x7A4A32,
+    check:[0x9A4234,0xB49A3C,0x3A5A7A,0x7A6242],       // civilian only; woad ≤5% (§A.4)
+    trim:0x95712E, dark:0x3A3A38, patt:"metal" },
+  { name:"Classical",                                 // "Polished steel, brass and marble."
+    crown:0xB4BAC2, dominant:0xB4BAC2, light:0xC9CFD6,
+    metal:0xC9A03C, metalD:0x9A7A2E, metalLit:0xC29A4E,
+    // §A.3 authors age3.marble at #DDD4BE — max channel 221, and §G.6 flags it with age1.crown as
+    // OVER the 216 the buffer prints. Rendered, the Classical villager's pilos came back with a
+    // bloom halo round it: 221 x the LIT cell's 1.046 x the grade's 1.02 is 236 before the high
+    // pass even looks at it.
+    // v131.2 AND 216 WAS STILL NOT LOW ENOUGH. Re-measured over the pilos region of the age-3
+    // villager, #D8CFB8 (luma 0.813) came back with max luma 0.992 at (255,255,227), 1,107 px at
+    // or above 254 in some channel and a visible white halo bleeding past the silhouette into the
+    // key — the beard's own defect on a new surface. The arithmetic says why: 0.813 x 1.046 x 1.02
+    // = 0.867, and UnrealBloomPass's high pass is smoothstep(0.86, 0.87). The ceiling is not a
+    // channel value, it is 0.86 / 1.046 / 1.02 = 0.806 of AUTHORED luma; #D2C9B2 is 0.790 and
+    // lands at 0.843, under the cliff with margin. §I's own recommendation was #D6CDB6 (0.805),
+    // which sits exactly ON it.
+    leather:0x6B4A2E, accent:0xD2C9B2, wood:0x8A6B45, crimson:0xA83228,
+    trim:0xC9A03C, dark:0x4A4A4E, patt:"metal" },
+  { name:"Medieval",                                  // "Matte mail and deep wool." No gleam.
+    crown:0x6E6A62, dominant:0x5E6258, light:0x767068,
+    // v131.4 #C2C8CE COMES DOWN TO #BAC0C6 AND §H A8 IS WHY. age4.plate.bright is authored at
+    // luma 0.780; on the knight's lit cuirass and pauldrons the ramp's LIT cell (x1.046) and the
+    // grade (x1.02) put every channel over 216 across a CONTIGUOUS 385px region — §H A8's second
+    // clause fails at 200px². The composer's real ceiling is 0.806 of authored luma (§G.6) and a
+    // large curved plate that catches the sun spends most of that on the gain alone. 0.755 lands
+    // the lit face at ~212/218/224 → under the clause with the age's material contrast intact:
+    // bright plate against matte mail at 0.378 is still ΔV 0.38. Nothing outside js/04-units.js
+    // reads this key (js/03-buildings.js has its own BPAL, and says so at :42).
+    metal:0xBAC0C6, metalD:0x8A9098, metalLit:0xBAC0C6, // plate.bright — knight and pikeman ONLY
+    leather:0x3A2E24, accent:0xD6CBB0, wood:0x4A3A2A, green:0x3F5A32,
+    trim:0x767068, dark:0x2E2A24, patt:"metal" },
+  { name:"Enlight.",                                  // "Black felt, white lace and gold."
+    crown:0x22201E, dominant:0x22201E, light:0x3A3630,
+    metal:0x3E4650, metalD:0x2A3038, metalLit:0x8A9099,
+    leather:0x221E1A, accent:0xD8CFB8, wood:0x6B4A2E,
+    gunbronze:0x8A6A3A, patina:0x6E7250, buff:0xD8CFB8, rifleGreen:0x3A5233,
+    trim:0xCFB53B, dark:0x14130F, patt:"cloth" }
+];
+// The age a unit DRESSES for. A class's `age` field is fixed (a Legionaire is Classical wherever he
+// stands); the villager, the king and the trade line follow their team's current age instead, which
+// is what makes a town's people change with its buildings. Clamped, because teamAge is a live sim
+// value and a body built during an age-up transition must never index off the end of the table.
+function unitAge(u){
+  const d=CLS[u.cls];
+  if(d.rig==="villager"||d.rig==="king")
+    return Math.max(0,Math.min(5,(typeof teamAge!=="undefined"&&teamAge[u.team])||0));
+  return Math.max(0,Math.min(5,d.age||0));
+}
 
 const CLS={
   villager:   {name:"Villager",hp:60,dmg:6,spd:8.2,rng:2.4,cd:0.7,cost:null,col:0xd9b38c,line:"civil",rig:"villager",tier:0,age:0},
@@ -59,10 +289,10 @@ const CLS={
   // ---- The Wilds (creep camps) — appended LAST so CLS_KEYS snapshot indices stay stable ----
   // cost = the kill bounty (costPts). Packs of 4-5 are tuned so 2-3 grouped players clear a camp; one alone dies.
   wolf:      {name:"Wild Wolf",hp:155,dmg:14,spd:11,rng:2.2,cd:0.9, cost:{food:30},col:0x8a8f96,line:"wilds",rig:"wolf",tier:0,age:0},
-  barbarian: {name:"Barbarian",hp:155,dmg:18,spd:8.5,rng:2.5,cd:0.95,cost:{gold:40},col:0x8a5a3a,line:"wilds",rig:"barbarian",tier:0,age:0},
+  barbarian: {name:"Barbarian",hp:155,dmg:18,spd:8.5,rng:2.5,cd:0.95,cost:{gold:40},col:0x8a5a3a,line:"wilds",rig:"barbarian",tier:0,age:0,beardTone:0x45311F},
   // the shore raid (v79) — bounties: 40 pts a viking, 300 for the chieftain's head
-  viking:    {name:"Viking Raider",hp:160,dmg:20,spd:8.5,rng:2.5,cd:0.9,cost:{food:20,gold:20},col:0x6a7a8c,line:"wilds",rig:"viking",tier:0,age:0},
-  vikingboss:{name:"Viking Chieftain",hp:500,dmg:42,spd:7.5,rng:3.2,cd:1.4,cost:{food:150,gold:150},col:0x4a5a6c,line:"wilds",rig:"vikingboss",tier:0,age:0}
+  viking:    {name:"Viking Raider",hp:160,dmg:20,spd:8.5,rng:2.5,cd:0.9,cost:{food:20,gold:20},col:0x6a7a8c,line:"wilds",rig:"viking",tier:0,age:0,beardTone:0xB08640},
+  vikingboss:{name:"Viking Chieftain",hp:500,dmg:42,spd:7.5,rng:3.2,cd:1.4,cost:{food:150,gold:150},col:0x4a5a6c,line:"wilds",rig:"vikingboss",tier:0,age:0,beardTone:0xB08640}
 };
 
 // unit lines: pick a LINE at its building; your team's AGE decides the tier you get

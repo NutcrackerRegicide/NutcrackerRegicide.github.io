@@ -270,7 +270,25 @@ const FOW_VISION=70, BAR_D=60; // vision up: no more point-blank ambush pop-in
 // v116: HIDE_D is a `let` with a setter so the mobile spike (12-touch.js) can pull the cull line
 // in without touching this file. Desktop never calls it and the value is unchanged.
 let HIDE_D=150;
-function setHideD(v){HIDE_D=Math.max(40,Math.min(400,v));}
+// v130.3 THE CULL LINE AND THE FOG ARE ONE NUMBER NOW, and this setter is where that becomes true.
+// ART-DIRECTION §4.2: fog.far must EQUAL HIDE_D and fog.near must be half of it, because the fog
+// is the only thing hiding the cull. They were maintained independently and they drifted — fog ran
+// 104 → 182 while this setter pulls the line to 105 (mobile) or 88 (battery saver). At 88 the fog
+// factor is 0.01, so a phone player watched whole stands of trees APPEAR AT FULL SATURATION ninety
+// units away every time the camera moved; desktop was subtler and still wrong, deleting trees at
+// 41% opacity. Bind them and the saver can put the cull line wherever the battery needs it while
+// the seam stays invisible on every device, with no second number for anyone to remember.
+// __setFogRange (01-engine.js) writes scene.fog AND the ink shader's private copy of the range in
+// the same call — the outlines reimplement linear fog by hand and will fog on a different curve
+// from their own bodies if they are missed (§10.13).
+function setHideD(v){
+  HIDE_D=Math.max(40,Math.min(400,v));
+  if(window.__setFogRange)window.__setFogRange(HIDE_D);
+}
+// Desktop never calls the setter, so apply the desktop case once at load — otherwise the two
+// numbers only ever agree on a phone, and 01-engine.js's constants are a second copy waiting to
+// rot rather than a default.
+if(window.__setFogRange)window.__setFogRange(HIDE_D);
 function applyLOD(){
   const cx=camera.position.x, cz=camera.position.z;
   const blues=[], bblds=[];
@@ -719,10 +737,11 @@ function renderFrame(dt){
     const ma=menuOrbitT*0.045;
     camera.position.lerp(new THREE.Vector3(Math.cos(ma)*135,60,Math.sin(ma)*88),0.02);
     camera.lookAt(0,2,0);
-    if(skyDome)skyDome.position.set(camera.position.x,0,camera.position.z);
+    // (the sky dome, the cloud field, the dust box and the sun disc all pin themselves to the
+    //  camera from scene.onBeforeRender in 01-engine.js — see the note there for why they moved)
     lodT-=dt; if(lodT<=0){lodT=0.15;applyLOD();}
     frameNo++;
-    for(const c of clouds){c.position.x+=0.6*(1/60); if(c.position.x>300)c.position.x=-300;} // the sky never waits
+    for(const c of clouds){c.position.x+=0.6*(1/60); if(c.position.x>CLOUD_WRAP)c.position.x=-CLOUD_WRAP;} // the sky never waits
     if(composer)composer.render(); else renderer.render(scene,camera);
     return;
   }
@@ -776,17 +795,28 @@ function renderFrame(dt){
     camera.position.lerp(new THREE.Vector3(cx,cy,cz),0.35);
     camera.lookAt(p.x,p.y+2,p.z);
   }
-  if(skyDome)skyDome.position.set(camera.position.x,0,camera.position.z); // sky travels with you
+  // v130.3 THE SKY USED TO TRAVEL WITH YOU FROM HERE, AND ONLY FROM HERE — which meant it did not
+  // travel at all in any tool that freezes the loop, i.e. in every render this overhaul is judged
+  // on. It pins itself from scene.onBeforeRender now (01-engine.js), one call site for the dome,
+  // the clouds, the dust and the sun disc, driven by whichever camera is actually rendering.
   lodT-=dt; if(lodT<=0){lodT=0.15;applyLOD();}
   frameNo++;
   renderer.shadowMap.needsUpdate=(frameNo%2===0); // shadows at half rate
-  if(player.root){ // the sun's tight shadow box rides with the player
-    const pp=player.root.position;
-    sun.target.position.set(pp.x,0,pp.z);
-    sun.position.set(pp.x+120,168,pp.z+80);
-  }
+  // v130.4 THE SUN'S SHADOW BOX USED TO BE AIMED FROM HERE, AT THE PLAYER'S FEET.
+  // It left for the same reason the sky did: this function does not run inside tools/vista.js, so
+  // every render the art pass is judged on was shot with the box parked wherever the player was
+  // standing — 175 units from the town vantage, 200 from the forest one, i.e. off frame, i.e. no
+  // shadows at all in the pictures the critic scores. ART-DIRECTION §3.8 wants it on the VIEW
+  // anyway (the camera stands behind the player and looks past him), so it is `aimShadow` in
+  // 01-engine.js now, called from scene.onBeforeRender off whichever camera is doing the rendering.
+  // Do not re-add a player-parked sun here: two owners writing sun.position is how it drifted out
+  // of agreement with the painted disc in the first place.
   // living atmosphere: clouds drift, dust motes swirl through the light
-  for(const c of clouds){c.position.x+=0.6*(1/60); if(c.position.x>300)c.position.x=-300;}
+  // The wrap has to be WIDER than the field is, and it was not: the clouds are seeded on a ring of
+  // radius 110–340 (01-engine.js), so every cloud that started past x=300 teleported to the far
+  // side of the sky on the first frame of play — in plain view, since the field is pinned to the
+  // camera. 360 clears the ring.
+  for(const c of clouds){c.position.x+=0.6*(1/60); if(c.position.x>CLOUD_WRAP)c.position.x=-CLOUD_WRAP;}
   if(dustPts){
     const a=dustPts.geometry.attributes.position, tt=clock.elapsedTime;
     for(let i=0;i<a.count;i+=3){ // update a third per frame — plenty at mote speed

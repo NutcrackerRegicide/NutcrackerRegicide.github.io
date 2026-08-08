@@ -50,7 +50,17 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
       camera.lookAt(0,terrainHeight(0,140)+1.15,140);
       camera.updateProjectionMatrix();
       renderer.shadowMap.needsUpdate=true;
-      for(let i=0;i<3;i++)renderer.render(scene,camera);
+      // v131 THIS TOOL WAS CALIBRATING THROUGH THE WRONG RENDER, and every colour taken with it
+      // was void. The game draws through the EffectComposer; a bare renderer.render() skips
+      // UnrealBloomPass and the grade and writes an un-encoded buffer. That is exactly how
+      // nc.beard #F7F3E8 was "proved" correct and then SHIPPED at (255,255,247) with two channels
+      // pegged, ~6,900 flat pixels per figure on 136 bodies — the bloom high pass is at 0.86 and
+      // the beard sat on the cliff. vista.js/phoneshot.js/inkweight.js have always done it this
+      // way; unitshot is the per-class tool and was the one that mattered. AGES §G.6.
+      for(let i=0;i<3;i++){
+        if(typeof composer!=="undefined"&&composer)composer.render();
+        else renderer.render(scene,camera);
+      }
       let m=0;u.body.traverse(o=>{if(o.isMesh)m++;});
       const s=new Set();u.body.traverse(o=>{if(o.isMesh)s.add(o.material);});
       return m+"/"+s.size;

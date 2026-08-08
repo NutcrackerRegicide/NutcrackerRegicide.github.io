@@ -171,6 +171,12 @@
       window.__basePR=pr;
       if(typeof pixelMode==="undefined"||!pixelMode)renderer.setPixelRatio(pr);
       if(typeof setHideD==="function")setHideD(saverHide());
+      // v130.4 THE SHADOW MAP IS A PHONE COST NOW. It went to 2048 for a hard cel edge
+      // (ART-DIRECTION §3.8) — 4× the depth-pass fill and a 16MB target, on the one platform that
+      // can spare neither, and the kind of thing that surfaces weeks later as "it got hot and
+      // dropped to 12fps". Halving it under the saver keeps the box at ±52, so the edge is still
+      // 0.102 world units per texel — sharper than the ±70/1024 rig this replaces, same memory.
+      if(window.__shadowRes)window.__shadowRes(saver?1024:2048);
       fit(true);
       // v128.1: the saver moves the drawing buffer under the outlines. Their width is in DEVICE
       // pixels, so without this the lines keep the pre-toggle weight — and a phone render at 0.7

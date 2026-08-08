@@ -55,6 +55,8 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.5: lag compensation — the rewind context, the projectile step and THREE itself
   "updateProjectiles,setRewind,segDist2,rwDist,dist2,THREE,renderFrame,tickObjectiveFade,"+
   // v128.6: the atlas and the merge, so the draw budget can be asserted
+  // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
+  "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
   "UATLAS,mergeUnitBody,texturedMat,isSharedMat};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
@@ -202,6 +204,53 @@ check("neutral bazaars placed (3)",typeof neutralMarkets!=="undefined"&&neutralM
   const d0=dTo(TP[0]), d1=dTo(TP[1]);
   check("bazaar distances mirror between the thrones ("+d0.map(d=>d.toFixed(1)).join("/")+")",
     d0.every((d,i)=>Math.abs(d-d1[i])<0.01));
+}
+// ---- v131 THE HOUR, AND THE ONE THING ABOUT IT THAT CAN BREAK SILENTLY ----
+// setSunHour() (02-world.js) drops the sun from §3.1's 49.4° to 21° for the low-sun vantage. It is
+// allowed to change the ELEVATION and nothing else, because paintContactShadows BAKES 1,300 ground
+// pools along _SUN_OFF's ground bearing at world-build time. Swing the bearing at runtime and every
+// painted pool on the map points one way while every cast shadow points the other — which renders
+// perfectly, in every screenshot, and is only visible by measuring. That is exactly the class of bug
+// this file exists for. Length matters too: sun.shadow.camera near=110/far=340 brackets |_SUN_OFF|
+// and nothing else, so a shorter vector clips casters out of the depth pass.
+{
+  const G=global.__G, SO=G._SUN_OFF;
+  if(typeof G.setSunHour!=="function"||!SO){
+    check("v131 hour rig: setSunHour and _SUN_OFF are exported",false);
+  }else{
+    const az0=Math.atan2(SO.z,SO.x), L0=Math.hypot(SO.x,SO.y,SO.z);
+    const el=()=>Math.asin(Math.max(-1,Math.min(1,SO.y/Math.hypot(SO.x,SO.y,SO.z))))*180/Math.PI;
+    const e0=el();
+    G.setSunHour(1);
+    const az1=Math.atan2(SO.z,SO.x), L1=Math.hypot(SO.x,SO.y,SO.z), e1=el();
+    check("v131 hour rig: dusk drops the sun to 21° ("+e0.toFixed(1)+"° → "+e1.toFixed(1)+"°)",
+      Math.abs(e0-49.4)<0.3&&Math.abs(e1-21)<0.3);
+    check("v131 hour rig: the BEARING never moves — the contact pools are baked along it",
+      Math.abs(az1-az0)<1e-6);
+    check("v131 hour rig: |_SUN_OFF| is preserved — near/far bracket that length, not that angle",
+      Math.abs(L1-L0)<1e-3);
+    G.setSunHour(0);
+    check("v131 hour rig: hour 0 restores noon exactly, so shot 5 cannot leave shot 6 warm",
+      Math.abs(el()-e0)<1e-4&&Math.abs(Math.hypot(SO.x,SO.y,SO.z)-L0)<1e-3);
+  }
+  // the dry/lush field the terrain and four undergrowth layers share. It has to be PURE — it is
+  // called from inside the seeded window, so a Math.random() in here would move every node index.
+  if(typeof G.meadowPatch!=="function"){
+    check("v131 meadow field: meadowPatch is exported",false);
+  }else{
+    let lo=1e9,hi=-1e9,same=true;
+    for(let i=0;i<400;i++){
+      const x=(i*37)%700-350, z=(i*53)%600-300, v=G.meadowPatch(x,z);
+      if(v<lo)lo=v; if(v>hi)hi=v;
+      if(G.meadowPatch(x,z)!==v)same=false;      // twice, same answer, or it is not a function of xz
+    }
+    check("v131 meadow field: pure and in range ("+lo.toFixed(2)+" … "+hi.toFixed(2)+")",
+      same&&lo<-0.5&&hi>0.5&&lo>=-1.05&&hi<=1.05);
+  }
+  // every static prop class writes its foot down for paintContactShadows. 56 resource nodes joined
+  // the list in v131; before that the piles a villager stands at all game had clean lawn to the edge.
+  check("v131 grounding: every prop class wrote its foot down ("+G.PROP_FEET.length+" pools + the nodes)",
+    Array.isArray(G.PROP_FEET)&&G.PROP_FEET.length>800);
 }
 const mm=buildingMesh("market",0);
 check("market mesh has geometry ("+mm.children.length+" parts)",mm.children.length>=4);
