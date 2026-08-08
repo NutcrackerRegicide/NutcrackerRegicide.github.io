@@ -3543,6 +3543,9 @@ function _buildBodyRaw(u){
         edge.position.set(ex,0.72,0); GG.add(edge);}
       const ggd=noShadow(box(0.42,0.08,0.14,0xd9a92e)); ggd.position.y=0.12; GG.add(ggd);
       const pomG=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.09,6,5),gold)); pomG.position.y=-0.08; GG.add(pomG);
+      // the bone grip: a gladius' handle is the one part of it that is not metal, and it was
+      // missing entirely — 0.070 of daylight between pommel and guard.
+      const gripG=noShadow(cyl(0.05,0.055,0.17,0xcfc6ae,6)); gripG.position.y=0.045; GG.add(gripG);
       // the tower scutum — the biggest shield on the field, gold-rimmed
       const scutum=noShadow(new THREE.Mesh(new THREE.BoxGeometry(0.12,1.5,0.95),heraldryMat(u.team,u.id)));
       scutum.position.set(-0.12,-0.3,0.15); R.faL.add(scutum);
@@ -3573,6 +3576,10 @@ function _buildBodyRaw(u){
       const zw=noShadow(box(0.17,1.9,0.12,0xc4cad2)); zw.position.y=1.1; ZG.add(zw);
       const zgd=noShadow(box(0.64,0.1,0.16,0x8d949c)); zgd.position.y=0.13; ZG.add(zgd);
       const zpom=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.11,6,5),plainMat(0xd9a92e))); zpom.position.y=-0.1; ZG.add(zpom);
+      // 'both fists belong on the hilt' says the line below — and there was no hilt to put them
+      // on: 0.070 of daylight between pommel and guard. Leather-wrapped, and long, because a
+      // two-hander's grip is the one place its silhouette says two-hander.
+      const gripZ=noShadow(cyl(0.055,0.06,0.19,0x4a3826,6)); gripZ.position.y=0.04; ZG.add(gripZ);
       // no shield — both fists belong on the hilt
     }
   }
@@ -4103,6 +4110,9 @@ function _buildBodyRaw(u){
       const bladeH=noShadow(box(0.07,1.2,0.16,0xb9c0c9)); bladeH.position.y=0.76; SW.add(bladeH);
       const tipH=noShadow(cone(0.085,0.2,0xb9c0c9,4)); tipH.position.y=1.46; SW.add(tipH);
       const pomH=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.08,5,4),plainMat(0x9a7532))); pomH.position.y=-0.14; SW.add(pomH);
+      // THE GRIP. Without it this sword is a pommel, 0.165 of daylight, then a crossguard —
+      // which is exactly what John saw: 'missing handle and floating in front of hand'.
+      const gripH=noShadow(cyl(0.055,0.06,0.22,0x4a3826,6)); gripH.position.y=0.02; SW.add(gripH);
     }
     if(u.cls==="cataphract"){ // CLASSICAL: mail head to toe, the faceless Sasanian helm
       for(let i=0;i<3;i++){const skirtM=new THREE.Mesh(new THREE.CylinderGeometry(0.56+i*0.02,0.58+i*0.02,0.2,10),texturedMat("metal",i%2?0x8d949c:0x7d858f));
@@ -5007,8 +5017,16 @@ function makeUnit(team,cls,x,z,opts){
   units.push(u); return u;
 }
 function restyleUnits(team,defer){ // villagers change wardrobe with the age, like the town does
+  // v131.11 AND THE KING, WHO IS THE REASON THIS WAS A BUG. John: "the king outfit does not
+  // currently change as city ages up." The §C ladder for him is all there — six crowns, six robes,
+  // Tyrian purple at Classical, the team mantle at Medieval — and none of it ever rendered past the
+  // age he spawned in, because this loop only ever re-dressed villagers.
+  // Soldiers are deliberately NOT included: a soldier is built at the age he is trained in and
+  // keeps that kit, which is both the cheaper behaviour and the readable one (an old spearman looks
+  // old). The king is the one unit that is spawned once at match start and never respawns, so for
+  // him "re-dress on age-up" is the ONLY path his own ladder has.
   for(const u of units){
-    if(u.alive&&u.team===team&&u.cls==="villager"){
+    if(u.alive&&u.team===team&&(u.cls==="villager"||(CLS[u.cls]&&CLS[u.cls].rig==="king"))){
       if(defer)_restyleQ.push({kind:"u",u});
       else buildBodyFor(u);
     }

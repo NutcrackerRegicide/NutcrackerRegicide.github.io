@@ -934,9 +934,23 @@ let dustPts=null;
   // catch-the-light layer for the near field, so it now lives in a 48-unit box that rides with the
   // camera (see the sky hook below). Same 260 motes, all of them where they do their job, none of
   // them in the fog.
-  const N=260, pos=new Float32Array(N*3);
+  // v131.11 JOHN, THIRD TIME: "can we tone down the sparkly ambient floater things?" — and the two
+  // notes above are the first two attempts, so this one moves the numbers that were never moved
+  // rather than re-arguing the blend mode. What actually makes a mote sparkle is that gl_PointSize
+  // clamps at ONE PIXEL: past ~18 units the computed size is already sub-pixel, so sizeAttenuation
+  // stops attenuating anything and every far mote is a full-brightness additive dot. You cannot fix
+  // that with opacity alone; you fix it with FEWER of them, LOWER, and dimmer.
+  //   count   260 -> 110   (the horizon band gets less than half as many splats projected into it)
+  //   ceiling 6.6 ->  4.2  (they stay in the near field where they catch light, out of the sky)
+  //   opacity 0.22 -> 0.10
+  // Kept: additive, which is the whole point of a catch-the-light layer, and the 48-unit box that
+  // rides the camera. Named so the next pass can turn one dial instead of hunting three literals.
+  const DUST_N=110, DUST_BOX=48, DUST_LOW=0.5, DUST_HIGH=4.2;
+  const N=DUST_N, pos=new Float32Array(N*3);
   for(let i=0;i<N;i++){
-    pos[i*3]=(Math.random()*2-1)*48; pos[i*3+1]=0.6+Math.random()*6; pos[i*3+2]=(Math.random()*2-1)*48;
+    pos[i*3]=(Math.random()*2-1)*DUST_BOX;
+    pos[i*3+1]=DUST_LOW+Math.random()*(DUST_HIGH-DUST_LOW);
+    pos[i*3+2]=(Math.random()*2-1)*DUST_BOX;
   }
   const g=new THREE.BufferGeometry();
   g.setAttribute("position",new THREE.BufferAttribute(pos,3));
@@ -946,8 +960,8 @@ let dustPts=null;
   // them project straight into the fog band and read as confetti scattered across the distance
   // (plainly visible in 06-wide). Warmer and quieter: they still catch the light in a close shot,
   // which is the whole point of the layer, without punching holes in the horizon.
-  dustPts=new THREE.Points(g,new THREE.PointsMaterial({color:0xffe0a0,size:0.3,transparent:true,
-    opacity:0.22,blending:THREE.AdditiveBlending,depthWrite:false,sizeAttenuation:true}));
+  dustPts=new THREE.Points(g,new THREE.PointsMaterial({color:0xffe0a0,size:0.26,transparent:true,
+    opacity:0.10,blending:THREE.AdditiveBlending,depthWrite:false,sizeAttenuation:true}));
   scene.add(dustPts);
 })();
 // THE ATMOSPHERE RIDES WITH THE CAMERA, AND IT HAS TO DO IT FROM IN HERE.

@@ -3345,7 +3345,11 @@ function drainVisualQueue(){ // a few jobs per frame: the wave sweeps the town i
   while(budget>0&&_restyleQ.length){
     const j=_restyleQ.shift();
     if(j.kind==="b")_restyleOneBuilding(j.b);
-    else if(j.kind==="u"&&j.u.alive&&j.u.cls==="villager")buildBodyFor(j.u);
+    // v131.11 THE SAME FILTER LIVED HERE TOO, which is why fixing restyleUnits alone did
+    // nothing: the king was enqueued and then dropped on the way out. If a job reached this
+    // queue something decided it needed re-dressing, so trust that decision and just check the
+    // unit is still alive.
+    else if(j.kind==="u"&&j.u.alive)buildBodyFor(j.u);
     budget--;
   }
   if(_restyleQ.length)return; // roads repave once the wave has passed
