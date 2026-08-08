@@ -614,7 +614,7 @@ function raidEnemyBase(u,dt){
         }
         if(bf)bb=bf;
       }
-      if(bb){moveToward(u,bb.x,bb.z,dt,u.rng+bb.def.r-0.6);tryAttack(u);}
+      if(bb){moveToward(u,bb.x,bb.z,dt,u.rng+bSurf(bb.def)-0.6);tryAttack(u);}
     }
   }
 }
@@ -647,7 +647,8 @@ function bandTargetEcon(team){ // juiciest target: carts and working villagers, 
 const HOLD_TOUR=45, HOLD_QUIET=18, HOLD_WATCH=48;
 function bandHoldPoint(team,idx){ // castles first, then denying a bazaar, then the road
   const own=buildings.filter(b=>b.alive&&b.built&&b.team===team&&b.type==="castle");
-  if(own.length){const c=own[idx%own.length];return {x:c.x+4,z:c.z+4,why:"castle"};}
+  if(own.length){const c=own[idx%own.length];const hr=(bSurf(c.def)+3)*0.7071; // +4,+4 was 5.66 out; a castle blocks to 19.8
+    return {x:c.x+hr,z:c.z+hr,why:"castle"};}
   if(neutralMarkets.length){const m=neutralMarkets[idx%neutralMarkets.length];return {x:m.x+3,z:m.z+3,why:"bazaar"};}
   const tc=TCPOS[team],et=TCPOS[1-team];
   return {x:tc[0]+(et[0]-tc[0])*0.35,z:tc[1]+(et[1]-tc[1])*0.35,why:"road"};
@@ -758,7 +759,7 @@ function manageBands(D){
     if(bd.role==="patrol"){
       if(!bd.wps){
         const tc=TCPOS[team];
-        bd.wps=[{x:tc[0],z:tc[1]},{x:tc[0]+side*22,z:tc[1]+16},{x:tc[0]+side*4,z:tc[1]-24},{x:tc[0]+side*26,z:tc[1]-6}];
+        bd.wps=[{x:tc[0]+side*15,z:tc[1]+11},{x:tc[0]+side*22,z:tc[1]+16},{x:tc[0]+side*4,z:tc[1]-24},{x:tc[0]+side*26,z:tc[1]-6}];
         bd.wi=0;
       }
       const wp=bd.wps[bd.wi]; let near=0;
@@ -775,7 +776,7 @@ function manageBands(D){
         if(bd.role!=="patrol"&&bd.role!=="hold")continue;
         for(const v of bd.members){const d=dist2(v.root.position.x,v.root.position.z,bl.x,bl.z);if(d<bdd){bdd=d;best=bd;}}
       }
-      if(best){best.aid={x:bl.x,z:bl.z,until:T+14};D.lastAid=T;}
+      if(best){best.aid={x:bl.x,z:bl.z,r:bSurf(bl.def),until:T+14};D.lastAid=T;}
       break;
     }
   }
@@ -867,7 +868,7 @@ function updateBot(u,dt){
         if(typeof Sound!=="undefined"&&u.team===MYTEAM)Sound.play("bazaarload",{x:u.root.position.x,z:u.root.position.z});
         if(typeof NET!=="undefined"&&NET.mode==="host"&&typeof teamHasHuman==="function"&&teamHasHuman(u.team))NET.bcast({t:"snd",k:"bazaarload",team:u.team,x:u.root.position.x,z:u.root.position.z});}
     }else{
-      if(moveToward(u,home.x+home.def.r+2,home.z,dt,home.def.r*0.5+2.5)){
+      if(moveToward(u,home.x+bSurf(home.def)+2,home.z,dt,bStand(home.def,home.def.r*0.5+2.5))){
         const d=Math.hypot(home.x-u.tradeTarget.x,home.z-u.tradeTarget.z);
         const g=tradeGold(d);
         stock[u.team].gold+=g;
@@ -914,7 +915,7 @@ function updateBot(u,dt){
         if(u.team===BLUE)updateResHud();
         u.convertTo=null;return;
       }
-      if(moveToward(u,bar.x+3,bar.z+3,dt,4)){
+      if(moveToward(u,bar.x+3,bar.z+3,dt,bStand(bar.def,4))){
         setClass(u,u.convertTo);u.convertTo=null;u.convertAt=null;
         if(u.team===BLUE&&Math.random()<0.4&&dist(u,player)<50)
           msg(u.name+" armed up as a "+CLS[u.cls].name+".","blue");
@@ -927,7 +928,7 @@ function updateBot(u,dt){
       // stand at the NEAREST point of the site's ring, from whichever side we came —
       // a fixed east-side stand point sat OFF THE MAP for red's border-town sites
       const rdx=u.root.position.x-s.x, rdz=u.root.position.z-s.z, rl=Math.hypot(rdx,rdz)||1;
-      const standX=s.x+rdx/rl*(s.def.r+0.9), standZ=s.z+rdz/rl*(s.def.r+0.9);
+      const standX=s.x+rdx/rl*(bSurf(s.def)+0.9), standZ=s.z+rdz/rl*(bSurf(s.def)+0.9);
       if(moveToward(u,standX,standZ,dt,1.3)){
         u.facing=Math.atan2(s.x-u.root.position.x,s.z-u.root.position.z);
         u.buildT=(u.buildT||0)+dt;
@@ -966,7 +967,7 @@ function updateBot(u,dt){
       b.haul=true;
       const dp=nearestDropoff(u);
       if(!dp)return;
-      if(moveToward(u,dp.x+2.5,dp.z+2,dt,dp.type==="towncenter"?9:6.5)){
+      if(moveToward(u,dp.x+2.5,dp.z+2,dt,bStand(dp.def,dp.type==="storage_pit"?6.5:9))){
         stock[u.team].food+=u.carry.food; stock[u.team].gold+=u.carry.gold;
         stock[u.team].stone+=u.carry.stone; stock[u.team].wood+=u.carry.wood;
         u.carry.food=0;u.carry.gold=0;u.carry.stone=0;u.carry.wood=0;
@@ -1046,7 +1047,7 @@ function updateBot(u,dt){
   if(u.chargeTo&&u.rally){ // THE CHARGE: attack-move — savage everything on the way, then HOLD the far ground
     if(!engageNearest(u,dt,16)){
       const bb=nearestEnemyBuilding(u,12); // buildings in the path fall too
-      if(bb){moveToward(u,bb.x,bb.z,dt,u.rng+bb.def.r-0.6);tryAttack(u);}
+      if(bb){moveToward(u,bb.x,bb.z,dt,u.rng+bSurf(bb.def)-0.6);tryAttack(u);}
       else moveToward(u,u.chargeTo.x+(u.spread||0)*0.25,u.chargeTo.z+(u.spread||0)*0.25,dt,4);
     }
     return;
@@ -1071,7 +1072,7 @@ function updateBot(u,dt){
       return;
     }
     if(bd.aid&&T<bd.aid.until){ // answer the burning farm
-      if(!engageNearest(u,dt,16))moveToward(u,bd.aid.x+u.spread*0.3,bd.aid.z+u.spread*0.3,dt,3);
+      if(!engageNearest(u,dt,16))moveToward(u,bd.aid.x+u.spread*0.3,bd.aid.z+u.spread*0.3,dt,(bd.aid.r||0.8)+2.2);
       return;
     }
     if(bd.role==="patrol"){
@@ -1095,7 +1096,7 @@ function updateBot(u,dt){
           tryAttack(u);
         }
       }else if(t&&t.bld&&t.bld.alive){
-        if(!engageNearest(u,dt,12)){moveToward(u,t.bld.x,t.bld.z,dt,u.rng+t.bld.def.r-0.6);tryAttack(u);}
+        if(!engageNearest(u,dt,12)){moveToward(u,t.bld.x,t.bld.z,dt,u.rng+bSurf(t.bld.def)-0.6);tryAttack(u);}
       }else if(!engageNearest(u,dt,14)){ // between jobs: prowl the frontier — ON THIS BAND'S LANE
         const et=TCPOS[1-u.team], mx=(TCPOS[u.team][0]+et[0])/2, mz=(TCPOS[u.team][1]+et[1])/2;
         const _ez=Math.max(-LANE_EDGE,Math.min(LANE_EDGE,mz+laneFor(u))); // v113: the frontier is a LINE, not a point

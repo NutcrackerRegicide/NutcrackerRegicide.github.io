@@ -563,8 +563,11 @@ function bSurf(def){return def.rBlock>def.r?def.rBlock:def.r;}
 //                   within 4. A barracks blocker at 7.9 puts the nearest reachable point 3.66 from
 //                   that target — it cleared the literal by 0.34.
 //     07-ai.js:972  a hauler banks its load at (dp.x+2.5, dp.z+2) and must get within 9 at a town
-//                   centre. A TC blocker at 11.7 puts the nearest reachable point 8.98 away — it
-//                   cleared the literal by 0.02. TWO HUNDREDTHS OF A UNIT.
+//                   centre. A TC blocker at 11.7 puts the nearest reachable point 8.498 away
+//                   (11.7 - hypot(2.5,2)), so it cleared the literal by 0.502 — NOT the 0.02 an
+//                   earlier draft of this comment claimed. The conclusion is unchanged and the
+//                   arithmetic below is what matters: at a ring of 12.9 the best reachable point
+//                   is 9.698 and the stop is 9, so it fails by 0.698 and the hauler NEVER banks.
 // Move the wall out and both stop dead: measured, a hauler at the v131.5 town-centre radius NEVER
 // DEPOSITS (closest approach 9.82 against a stop of 9), which is a silent economy failure that
 // nothing in the smoketest names. So the rule is arithmetic, not judgement: the wall moved out by

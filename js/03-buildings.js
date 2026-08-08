@@ -394,6 +394,20 @@ const BSCALE={storage_pit:0.95,farm:0.6375,watch_tower:0.75};
 // one. Read the same numbers `buildingMesh` uses; the smoketest's 6 < y < 14 window covers all six.
 function watchTowerH(age){return age>=5?9.2:(age===4?15.5:14);}
 function watchDeck(age,bs){return {y:(watchTowerH(age|0)+0.25)*(bs||1),r:2.5};}
+// v131.3 THE GARRISON SKIN. Hides the cap of the tower THIS client's player is standing in and
+// restores the last one it touched. Purely render state — no simulation reads it — so a guest and
+// the host may disagree about it for ever without desyncing; applyLOD already uses .visible as
+// per-client state for exactly this reason. Driven once per frame rather than from the climb-up /
+// climb-down hooks, so it stays correct across _restyleOneBuilding (which throws b.body away),
+// age-up, the tower dying under you, and a guest adopting a garrison id from a snapshot. One call
+// site, no event to miss, and idempotent so calling it every frame costs a pointer compare.
+let _garrSkinned=null;
+function setGarrisonView(b){
+  if(_garrSkinned===b)return;
+  const flip=(t,v)=>{ if(!t||!t.body)return;
+    t.body.traverse(o=>{ if(o.userData.isCap)o.visible=v; }); };
+  flip(_garrSkinned,true); flip(b,false); _garrSkinned=b;
+}
 // a properly ribbed mammoth-bone dome: hide skin, meridian bone arches, horizontal lashings
 function ribbedDome(g,rx,ry,rz,wallC,nRibs,ringYs){
   const dome=bDome(1,"hide",wallC,true); dome.scale.set(rx,ry,rz); g.add(dome);
@@ -1994,9 +2008,25 @@ function buildingMesh(type,team,age,hx,hz){
       const mast=cyl(0.11,0.13,4.4,PLANK,5); mast.castShadow=false; mast.position.set(-3.0,H+2.6,-2.2); g.add(mast);
       const sig=box(1.2,0.7,0.08,tc); sig.castShadow=false; sig.position.set(-2.4,H+4.2,-2.2); g.add(sig);
     }else{
-      const capForm=age===0?"cone":age===1?"flat":age===2?"gable":age===3?"hip":"gable";
+      // AGES:492 says the Iron cap is "flat, crenellated"; AGES:531 says the Medieval peel tower
+      // is "crenellated, NO PITCH". Both shipped as gables. The 62-degree Medieval gable hung its
+      // eave at 0.66 above the deck — knee height on a 2.406 man — and at ages 2 and 4 the sentry
+      // could not see out AT ANY ELEVATION from -5 to +10 degrees, in any direction. Measured.
+      // If a pitch is ever restored here, yBase must rise from H+2.6 to at least H+3.5+eave*tan(ang),
+      // because the eave EDGE hangs below yBase by that much and that is what does the blocking.
+      const capForm=age===0?"cone":age===1?"flat":age===2?"flat":age===3?"hip":"flat";
+      const capMark=g.children.length;
       const top=ageRoof(g,age,deckR*2,deckR*2,H+2.6,type,
-        {form:capForm,eave:age===0?0.14:0.10,pitch:age===4?62:undefined});
+        {form:capForm,eave:age===0?0.14:0.10});
+      // everything ageRoof just added IS the cap: keep it out of the weld so a garrisoned player's
+      // own client can hide it. Costs ~3 draw calls per built tower; A10 watches the total.
+      // A FLAG ON THE MESHES, NOT AN INDEX INTO g.children. The first cut stored capFrom as an
+      // index and it was dead on arrival: mergeBuildingBody REMOVES every welded child and APPENDS
+      // one merged mesh, so the index addresses something else by the time anyone reads it. It also
+      // missed the meshes ageRoof nests inside its own sub-groups, which were welded regardless.
+      // Traverse, and tag the meshes themselves — that survives the weld, a restyle and an age-up.
+      for(let i=capMark;i<g.children.length;i++)
+        g.children[i].traverse(o=>{o.userData.noWeld=true; o.userData.isCap=true;});
       // the beacon: a brazier at the ages that signalled with fire, a basket at the iron age
       if(age<=2){brazier(g,deckR*0.62,-deckR*0.62);}
       flagPole(g,0,top,0,2.4,tc,1.7,1);
@@ -2850,7 +2880,7 @@ function mergeBuildingBody(g){
     for(const c of o.children){
       if(c.matrixAutoUpdate)c.updateMatrix(); // .matrix is stale until a render pass; ink hulls
       const cm=new THREE.Matrix4().multiplyMatrices(m4,c.matrix); // opt out and are already baked
-      if(c.isMesh&&c.geometry&&c.visible!==false&&_bMergeableMat(c.material)){
+      if(c.isMesh&&c.geometry&&c.visible!==false&&!c.userData.noWeld&&_bMergeableMat(c.material)){
         const t=c.material.map;
         parts.push({obj:c,geo:c.geometry,m4:cm,col:c.material.color,
           slot:t?UATLAS.slot(t):UATLAS.whiteSlot(),cast:!!c.castShadow});

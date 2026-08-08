@@ -138,7 +138,7 @@ function updatePlayer(dt){
   }
   // traders sell loaded goods at their own Market — 2.5× the NPC rate (v84)
   if(player.cls==="trader"&&player.tradeLoaded){
-    const mk=nearestBuilt(MYTEAM,"market",player.root.position.x,player.root.position.z,8);
+    const mk=nearestBuilt(MYTEAM,"market",player.root.position.x,player.root.position.z,bSurf(BLD.market)+2.6);
     if(mk){
       const d=Math.hypot(mk.x-player.tradeLoaded.x,mk.z-player.tradeLoaded.z);
       const g=Math.round(2.5*tradeGold(d)*(1+0.10*buffSt(player,"trade"))); // DEEP POCKETS
@@ -152,7 +152,7 @@ function updatePlayer(dt){
   }
   // castles accept deposits like a forward Town Center
   if(player.carry.food||player.carry.gold||player.carry.stone||player.carry.wood){
-    const ca=nearestBuilt(MYTEAM,"castle",player.root.position.x,player.root.position.z,BLD.castle.r+3.5);
+    const ca=nearestBuilt(MYTEAM,"castle",player.root.position.x,player.root.position.z,bSurf(BLD.castle)+3.5);
     if(ca){
       awardPts(player,player.carry.food+player.carry.gold+player.carry.stone+player.carry.wood);
       questDeposit(player,player.carry.food,player.carry.gold,player.carry.stone,player.carry.wood);
@@ -165,9 +165,9 @@ function updatePlayer(dt){
   }
   // auto-deposit at the Town Center OR any Storage Pit
   let tc=teamTC(BLUE);
-  const pit=nearestBuilt(MYTEAM,"storage_pit",player.root.position.x,player.root.position.z,9);
+  const pit=nearestBuilt(MYTEAM,"storage_pit",player.root.position.x,player.root.position.z,bSurf(BLD.storage_pit)+3.5);
   if(pit)tc=pit;
-  if(tc&&(player.carry.food||player.carry.gold||player.carry.stone||player.carry.wood)&&dist2(player.root.position.x,player.root.position.z,tc.x,tc.z)<Math.pow(tc.def.r+3.5,2)){
+  if(tc&&(player.carry.food||player.carry.gold||player.carry.stone||player.carry.wood)&&dist2(player.root.position.x,player.root.position.z,tc.x,tc.z)<Math.pow(bSurf(tc.def)+3.5,2)){
     const f=player.carry.food,g=player.carry.gold,st=player.carry.stone,w=player.carry.wood;
     awardPts(player,f+g+st+w);
     questDeposit(player,f,g,st,w);
@@ -746,6 +746,7 @@ function renderFrame(dt){
     return;
   }
   const p=player.root.position;
+  if(typeof setGarrisonView==="function")setGarrisonView(player.garrison||null); // see 03-buildings.js
   if(siegeAim){ // THE SKILL SHOT: rise above the engine, mark the fall of the stone
     const fx=-Math.sin(camYaw),fz=-Math.cos(camYaw);
     const maxD=player.cls==="trebuchet"?player.rng+8:46;
@@ -783,14 +784,23 @@ function renderFrame(dt){
     const rx=-fz,rz=fx;
     const cpos=new THREE.Vector3(
       p.x-fx*7.4+rx*2.4,
-      p.y+Math.max(1.3,3.2+(camPitch-0.55)*5.5),
+      p.y+Math.max(player.garrison?3.8:1.3,3.2+(camPitch-0.55)*5.5),
       p.z-fz*7.4+rz*2.4);
     camera.position.lerp(cpos,0.45);
-    camera.lookAt(p.x+fx*17+rx*2.4, p.y+1.9+(0.55-camPitch)*8, p.z+fz*17+rz*2.4);
+    // On the ground p.y+1.9 at 17 out is a chest-high line. From a deck 11.8 up it tilts the aim
+    // 11.3 degrees ABOVE the horizon: of 360 ground targets sampled on the 80-unit ring, ZERO
+    // projected into the middle ninth of the frame while garrisoned. You were aiming at sky.
+    camera.lookAt(p.x+fx*17+rx*2.4, p.y+(player.garrison?-1.6:1.9)+(0.55-camPitch)*8, p.z+fz*17+rz*2.4);
   }else{
     if(lobRing)lobRing.visible=false;
     const cx=p.x+camDist*Math.sin(camYaw)*Math.cos(camPitch);
-    const cy=p.y+Math.max(1.1,camDist*Math.sin(camPitch)+2); // ride the terrain, stay above grass
+    // 1.1 is right on the ground and wrong on a tower deck: it parks the lens 0.475 BELOW the
+    // parapet crest (1.575) and under a cap seated at 1.7625, which is the whole complaint. The
+    // measured eye height needed to see a man at 80 units with the cap hidden, worst age, runs
+    // 3.55 at camDist 8 to 10.25 at 46; 2.2+0.18*camDist covers all 30 measured cells, worst
+    // margin 0.23 (tools/towerfloor.js).
+    const _floor=player.garrison?(2.2+0.18*camDist):1.1;
+    const cy=p.y+Math.max(_floor,camDist*Math.sin(camPitch)+2); // ride the terrain, stay above grass
     const cz=p.z+camDist*Math.cos(camYaw)*Math.cos(camPitch);
     camera.position.lerp(new THREE.Vector3(cx,cy,cz),0.35);
     camera.lookAt(p.x,p.y+2,p.z);

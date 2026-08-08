@@ -1804,7 +1804,7 @@ function kitSkinsArcher(R,u,tc,fancy){ // the bow line's age body: kilt, wrap, t
     // Bronze's leather cap instantly. Built off the tusk cone's solid with the courses left off.
     const cone1=_lm([[0.60,0],[0.47,0.42],[0.31,0.86],[0.15,1.20],[0,1.40]],12,A.crown);
     cone1.position.y=NC_HATY-0.06; R.head.add(cone1);
-    const rim=_noSh(cyl(0.615,0.635,0.12,tc,12)); rim.position.y=NC_HATY-0.01; R.head.add(rim);
+    const rim=_noSh(cyl(0.615,0.635,0.12,tc,12)); rim.position.y=NC_HATY+0.0164; R.head.add(rim);
     const plu=_noSh(cone(0.078,0.43,tc,5)); plu.position.y=NC_HATY+1.55; R.head.add(plu);
     const flap=_noSh(box(0.58,0.30,0.078,A.leather));
     flap.position.set(0,NC_HATY-0.20,-0.48); flap.rotation.x=-0.35; R.head.add(flap);
@@ -3253,14 +3253,14 @@ function _buildBodyRaw(u){
     if(vAge===1){ // Bronze: a folded linen head-cloth, TC band. Bare-headed is §0-forbidden.
       const cloth=noShadow(box(0.76,0.36,0.76,VA.dominant)); cloth.position.y=NC_HATY+0.10; R.head.add(cloth);
       const fall=noShadow(box(0.74,0.50,0.10,VA.dominant)); fall.position.set(0,NC_HATY-0.16,-0.40); R.head.add(fall);
-      const bandV=noShadow(cyl(0.60,0.615,0.117,tc,12)); bandV.position.y=NC_HATY-0.04; R.head.add(bandV);
+      const bandV=noShadow(cyl(0.60,0.615,0.117,tc,12)); bandV.position.y=NC_HATY+0.0150; R.head.add(bandV);
     }else if(vAge===2){ // Iron: an undyed wool cap with the Phrygian curl, in the age's own grey
       const cap=_lm([[0.575,0],[0.55,0.22],[0.42,0.40],[0,0.48]],12,0x8A8078);
       cap.position.y=NC_HATY-0.06; R.head.add(cap);
       const phry=noShadow(cone(0.34,0.62,0x6E665C,8)); phry.rotation.x=0.35; phry.position.set(0,NC_HATY+0.36,0.08); R.head.add(phry);
       const tip=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.13,6,5),plainMat(0x5A5148)));
       tip.position.set(0,NC_HATY+0.62,0.30); R.head.add(tip); // the forward curl
-      const bandV=noShadow(cyl(0.585,0.60,0.10,tc,12)); bandV.position.y=NC_HATY-0.02; R.head.add(bandV);
+      const bandV=noShadow(cyl(0.585,0.60,0.10,tc,12)); bandV.position.y=NC_HATY+0.0064; R.head.add(bandV);
       // §B.7's 40px cue: THE CHECKED CLOAK ON ONE SHOULDER — the only plaid in the game, pinned
       // with a bronze fibula, and the check is real Iron Age textile rather than decoration.
       const ck=VA.check;
@@ -3270,14 +3270,14 @@ function _buildBodyRaw(u){
     }else if(vAge===3){ // Classical: the PILOS — brimless, conical, soft felt. No brim in this age.
       const pil=_lm([[0.545,0],[0.44,0.22],[0.27,0.42],[0.11,0.54],[0,0.58]],12,VA.accent);
       pil.position.set(0,NC_HATY-0.05,0); pil.rotation.x=0.10; R.head.add(pil);
-      const bandV=noShadow(cyl(0.555,0.565,0.10,tc,12)); bandV.position.y=NC_HATY-0.01; R.head.add(bandV);
+      const bandV=noShadow(cyl(0.555,0.565,0.10,tc,12)); bandV.position.y=NC_HATY+0.0064; R.head.add(bandV);
       const cordP=noShadow(cyl(0.60,0.60,0.05,VA.leather,12)); cordP.position.y=NC_HATY-0.12; R.head.add(cordP);
     }else if(vAge===4){ // Medieval: the chaperon hood with a short liripipe, thrown over a coif
       const hoodV=_lm([[0.60,0],[0.54,0.26],[0.38,0.52],[0.16,0.70],[0,0.78]],10,VA.green);
       hoodV.position.set(0,NC_HATY-0.10,0); hoodV.rotation.x=-0.16; R.head.add(hoodV);
       const lir=noShadow(cyl(0.05,0.078,0.66,VA.green,6));
       lir.position.set(0,NC_HATY-0.16,-0.52); lir.rotation.x=-0.45; R.head.add(lir);
-      const coifV=noShadow(cyl(0.615,0.625,0.14,tc,12)); coifV.position.y=NC_HATY-0.22; R.head.add(coifV);
+      const coifV=noShadow(cyl(0.615,0.625,0.14,tc,12)); coifV.position.y=NC_HATY+0.03; R.head.add(coifV);
       const mantle=new THREE.Mesh(_facetGeo(new THREE.CylinderGeometry(0.56,0.8,0.4,12),12),plainMat(VA.dominant));
       mantle.scale.z=0.85; mantle.position.y=0.98; mantle.castShadow=false; R.torso.add(mantle);
     }else if(vAge===5){ // Enlightenment: a round-crowned felt hat with a real brim. THE one brim.
@@ -3866,7 +3866,7 @@ function _buildBodyRaw(u){
       // a cap, and §B.3's whole point is that the age's ranged unit is the UNARMOURED one.
       const pil=_lm([[0.545,0],[0.44,0.24],[0.28,0.46],[0.12,0.60],[0,0.66]],12,A3c.accent);
       pil.position.set(0,NC_HATY-0.05,0); pil.rotation.x=0.12; R.head.add(pil);
-      const pband=noShadow(cyl(0.555,0.565,0.117,tc,12)); pband.position.y=NC_HATY; R.head.add(pband);
+      const pband=noShadow(cyl(0.555,0.565,0.117,tc,12)); pband.position.y=NC_HATY+0.0150; R.head.add(pband);
     }
     if(u.cls==="crossbowman"){ // MEDIEVAL: lincoln green and the bycocket
       const A4c=AGEPAL[4], green=A4c.green;
@@ -3881,7 +3881,7 @@ function _buildBodyRaw(u){
       hoodC.position.set(0,NC_HATY-0.09,0); hoodC.rotation.x=-0.18; R.head.add(hoodC);
       const lir=noShadow(cyl(0.055,0.086,1.06,green,6));
       lir.position.set(0,NC_HATY-0.10,-0.62); lir.rotation.x=-0.42; R.head.add(lir);
-      const coifC=noShadow(cyl(0.615,0.625,0.16,tc,12)); coifC.position.y=NC_HATY-0.20; R.head.add(coifC);
+      const coifC=noShadow(cyl(0.615,0.625,0.16,tc,12)); coifC.position.y=NC_HATY+0.04; R.head.add(coifC);
     }
     if(u.cls==="skirmisher"){ // ENLIGHTENMENT: Rogers' Rangers — scrappy buckskin and a plain rifle
       for(let i=0;i<5;i++){const fr=noShadow(box(0.05,0.16,0.04,0x4a3a26)); // buckskin fringe

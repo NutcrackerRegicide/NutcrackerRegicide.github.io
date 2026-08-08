@@ -261,7 +261,7 @@ addEventListener("keyup",e=>{keys[e.key.toLowerCase()]=false;});
 const ACTIONS=[
   {k:"t",label:"AGE UP",hint:"advance the age",can:()=>{
     const tc=teamTC(MYTEAM);
-    if(!tc||dist2(player.root.position.x,player.root.position.z,tc.x,tc.z)>12*12)return false;
+    if(!tc||dist2(player.root.position.x,player.root.position.z,tc.x,tc.z)>Math.pow(bStand(tc.def,12),2))return false;
     const nxt=AGES[teamAge[MYTEAM]+1];
     if(!nxt)return false;                       // already in the final age
     if(ageResT[MYTEAM]>0)return false;          // already advancing
@@ -296,7 +296,7 @@ function availableActions(max){
 function nearTrainingBuilding(){
   let best=null,bd=1e9;
   for(const t of TRAIN_BUILDINGS){
-    const b=nearestBuilt(MYTEAM,t,player.root.position.x,player.root.position.z,9);
+    const b=nearestBuilt(MYTEAM,t,player.root.position.x,player.root.position.z,bStand(BLD[t],9));
     if(b){const d=dist2(player.root.position.x,player.root.position.z,b.x,b.z);
       if(d<bd){bd=d;best=b;}}
   }
@@ -312,10 +312,10 @@ function interactCandidateD2(){
   const c=(x,z,r)=>{const d=dist2(px,pz,x,z); if(d<r*r&&d<bd)bd=d;};
   for(const b of buildings){
     if(b.team!==MYTEAM||!b.alive)continue;
-    if(!b.built){c(b.x,b.z,b.def.r+2.6);continue;}           // a foundation to raise
-    if(b.type==="watch_tower"&&!CLS[player.cls].mounted&&!isSiege(player.cls))c(b.x,b.z,b.def.r+2.4);
-    else if(b.type==="farm"&&b.crop>=1)c(b.x,b.z,b.def.r+2.5); // ripe corn
-    else if(b.type==="blacksmith")c(b.x,b.z,b.def.r+2.6);
+    if(!b.built){c(b.x,b.z,bSurf(b.def)+2.6);continue;}           // a foundation to raise
+    if(b.type==="watch_tower"&&!CLS[player.cls].mounted&&!isSiege(player.cls))c(b.x,b.z,bSurf(b.def)+2.4);
+    else if(b.type==="farm"&&b.crop>=1)c(b.x,b.z,bSurf(b.def)+2.5); // ripe corn
+    else if(b.type==="blacksmith")c(b.x,b.z,bSurf(b.def)+2.6);
   }
   const brd=boardFor(MYTEAM); if(brd)c(brd.x,brd.z,BOARD_REACH);
   if(player.cls==="trader")for(const nm of neutralMarkets)c(nm.x,nm.z,7);
@@ -335,7 +335,7 @@ function nearestFriendlySite(){
   let best=null,bd=1e12;
   for(const b of buildings){
     if(b.team!==MYTEAM||b.built||!b.alive)continue;
-    const reach=b.def.r+2.6; // stand outside the footprint and still whack the foundation
+    const reach=bSurf(b.def)+2.6; // stand outside the footprint and still whack the foundation
     const d=dist2(player.root.position.x,player.root.position.z,b.x,b.z);
     if(d<reach*reach&&d<bd){bd=d;best=b;}
   }
@@ -347,7 +347,7 @@ function playerInteract(){
   const px=player.root.position.x, pz=player.root.position.z;
   if(player.garrison){ // climb down
     const b=player.garrison; player.garrison=null; player.deckX=player.deckZ=0;
-    player.root.position.set(b.x+(b.def.r+1.6),0,b.z);
+    player.root.position.set(b.x+(bSurf(b.def)+1.6),0,b.z);
     player.root.position.y=terrainHeight(player.root.position.x,player.root.position.z);
     setClassStats(player); // restore base range
     if(typeof Sound!=="undefined"){Sound.play("garrison",{x:b.x,z:b.z}); // v104: tower clamber
@@ -357,7 +357,7 @@ function playerInteract(){
   }
   for(const b of buildings){ // climb up: man a watch tower
     if(b.team===MYTEAM&&b.alive&&b.built&&b.type==="watch_tower"&&
-       dist2(px,pz,b.x,b.z)<Math.pow(b.def.r+2.4,2)&&!CLS[player.cls].mounted&&!isSiege(player.cls)){
+       dist2(px,pz,b.x,b.z)<Math.pow(bSurf(b.def)+2.4,2)&&!CLS[player.cls].mounted&&!isSiege(player.cls)){
       player.garrison=b; player.rng*=1.35; player.deckX=0; player.deckZ=0;
       if(typeof Sound!=="undefined"){Sound.play("garrison",{x:b.x,z:b.z}); // v104: tower clamber
       if(Math.random()<0.6)Sound.play("veffort",{x:b.x,z:b.z});} // v109: the climb takes a grunt
@@ -367,7 +367,7 @@ function playerInteract(){
   }
   for(const b of buildings){ // harvest ripe corn: +20 food, banked instantly
     if(b.team===MYTEAM&&b.alive&&b.built&&b.type==="farm"&&b.crop>=1&&
-       dist2(px,pz,b.x,b.z)<Math.pow(b.def.r+2.5,2)){
+       dist2(px,pz,b.x,b.z)<Math.pow(bSurf(b.def)+2.5,2)){
       if(player.cls!=="villager"){msg("Only Villagers can harvest the corn.");return;}
       awardPts(player,20);
       questProgress(player,"harvest");    // REAPER
@@ -395,7 +395,7 @@ function playerInteract(){
     if(brd&&dist2(px,pz,brd.x,brd.z)<BOARD_REACH*BOARD_REACH){useTownBoard(player);return;}
   }
   { // v87 THE BLACKSMITH: spend quest XP on a random buff
-    const bs=nearestBuilt(MYTEAM,"blacksmith",px,pz,BLD.blacksmith.r+2.6);
+    const bs=nearestBuilt(MYTEAM,"blacksmith",px,pz,bSurf(BLD.blacksmith)+2.6);
     if(bs){useBlacksmith(player);return;}
   }
   const site=nearestFriendlySite();
@@ -978,7 +978,7 @@ function tryAgeUp(){
   if(!player.alive)return;
   if(typeof NET!=="undefined"&&NET.mode==="guest"){NET.guestAct({act:"ageup"});return;}
   const tc=teamTC(BLUE);
-  if(!tc||dist2(player.root.position.x,player.root.position.z,tc.x,tc.z)>12*12){
+  if(!tc||dist2(player.root.position.x,player.root.position.z,tc.x,tc.z)>Math.pow(bStand(tc.def,12),2)){
     msg("Stand at your Town Center to advance the age (T).");return;
   }
   const nxt=AGES[teamAge[MYTEAM]+1];

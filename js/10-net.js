@@ -975,7 +975,7 @@ NET.driveRemote=function(r,dt){
     r.eUsed=false;
     if(u.garrison){ // climb down
       const b=u.garrison; u.garrison=null; setClassStats(u); u.deckX=u.deckZ=0;
-      u.root.position.set(b.x+(b.def.r+1.6),0,b.z);
+      u.root.position.set(b.x+(bSurf(b.def)+1.6),0,b.z);
       u.root.position.y=terrainHeight(u.root.position.x,u.root.position.z);
       NET.note(r,"You climb down from the watch tower.");
       try{r.conn.send({t:"snd",k:"garrison",x:b.x,z:b.z});}catch(_){} // v104: the acting guest hears it
@@ -983,7 +983,7 @@ NET.driveRemote=function(r,dt){
     }
     if(!r.eUsed)for(const b of buildings){ // climb up
       if(b.team===u.team&&b.alive&&b.built&&b.type==="watch_tower"&&
-         dist2(px0,pz0,b.x,b.z)<Math.pow(b.def.r+2.4,2)&&!CLS[u.cls].mounted&&!isSiege(u.cls)){
+         dist2(px0,pz0,b.x,b.z)<Math.pow(bSurf(b.def)+2.4,2)&&!CLS[u.cls].mounted&&!isSiege(u.cls)){
         u.garrison=b; u.rng*=1.35; u.gathering=null;
         NET.note(r,"You man the watch tower — loose arrows from on high. E climbs down.","blue");
         try{r.conn.send({t:"snd",k:"garrison",x:b.x,z:b.z});}catch(_){} // v104
@@ -992,7 +992,7 @@ NET.driveRemote=function(r,dt){
     }
     if(!r.eUsed)for(const b of buildings){ // harvest ripe corn
       if(b.team===u.team&&b.alive&&b.built&&b.type==="farm"&&b.crop>=1&&u.cls==="villager"&&
-         dist2(px0,pz0,b.x,b.z)<Math.pow(b.def.r+2.5,2)){
+         dist2(px0,pz0,b.x,b.z)<Math.pow(bSurf(b.def)+2.5,2)){
         b.crop=0;
         awardPts(u,20);
         questProgress(u,"harvest");      // REAPER
@@ -1016,7 +1016,7 @@ NET.driveRemote=function(r,dt){
       if(brd&&dist2(px0,pz0,brd.x,brd.z)<BOARD_REACH*BOARD_REACH){useTownBoard(u);r.eUsed=true;}
     }
     if(!r.eUsed){ // v87 THE BLACKSMITH: the guest's XP is spent host-side, validated by proximity
-      const bs=nearestBuilt(u.team,"blacksmith",px0,pz0,BLD.blacksmith.r+2.6);
+      const bs=nearestBuilt(u.team,"blacksmith",px0,pz0,bSurf(BLD.blacksmith)+2.6);
       if(bs){useBlacksmith(u);r.eUsed=true;}
     }
   }
@@ -1054,7 +1054,7 @@ NET.driveRemote=function(r,dt){
   }
   // ---- trader auto-sell at their own Market (4× cart rates) ----
   if(u.cls==="trader"&&u.tradeLoaded){
-    const mk=nearestBuilt(u.team,"market",px0,pz0,8);
+    const mk=nearestBuilt(u.team,"market",px0,pz0,bSurf(BLD.market)+2.6);
     if(mk){
       const d=Math.hypot(mk.x-u.tradeLoaded.x,mk.z-u.tradeLoaded.z);
       // v87: 2.5× — the same premium the host player gets (was 4×, a v84 leftover)
@@ -1132,7 +1132,7 @@ NET.driveRemote=function(r,dt){
     let site=null,sd=1e12;
     for(const b of buildings){
       if(b.team!==u.team||!b.alive||b.built)continue;
-      const reach=b.def.r+2.6; // stand at the 2x footprint's edge and still build — same as the host player
+      const reach=bSurf(b.def)+2.6; // stand at the 2x footprint's edge and still build — same as the host player
       const d=dist2(px,pz,b.x,b.z);
       if(d<reach*reach&&d<sd){sd=d;site=b;}
     }
@@ -1173,9 +1173,9 @@ NET.driveRemote=function(r,dt){
   }
   // auto-deposit at TC / Storage Pit / Castle — same radii as the host player
   if(u.carry.food||u.carry.gold||u.carry.stone||u.carry.wood){
-    let dep=nearestBuilt(u.team,"castle",px,pz,BLD.castle.r+3.5)||nearestBuilt(u.team,"storage_pit",px,pz,BLD.storage_pit.r+3.5);
+    let dep=nearestBuilt(u.team,"castle",px,pz,bSurf(BLD.castle)+3.5)||nearestBuilt(u.team,"storage_pit",px,pz,bSurf(BLD.storage_pit)+3.5);
     const tc=teamTC(u.team);
-    if(!dep&&tc&&dist2(px,pz,tc.x,tc.z)<Math.pow(tc.def.r+3.5,2))dep=tc;
+    if(!dep&&tc&&dist2(px,pz,tc.x,tc.z)<Math.pow(bSurf(tc.def)+3.5,2))dep=tc;
     if(dep){
       awardPts(u,u.carry.food+u.carry.gold+u.carry.stone+u.carry.wood);
       questDeposit(u,u.carry.food,u.carry.gold,u.carry.stone,u.carry.wood); // the collection quests
@@ -1242,7 +1242,7 @@ NET.hostAct=function(r,a){
     return;
   }
   if(a.act==="buff"){ // v93: the guest chose one of the three on the smith's table
-    const bs=nearestBuilt(u.team,"blacksmith",u.root.position.x,u.root.position.z,BLD.blacksmith.r+4.6); // +2 drift slack
+    const bs=nearestBuilt(u.team,"blacksmith",u.root.position.x,u.root.position.z,bSurf(BLD.blacksmith)+4.6); // +2 drift slack
     if(!bs)return deny("Stand at the Blacksmith to trade XP for steel.");
     if((u.xp||0)<1)return deny("No XP to spend — finish Town Board quests.");
     if(!smithPick(u,String(a.pick||"")))return deny("That piece isn't on the table — press E at the forge for the standing offer.");
@@ -1274,7 +1274,7 @@ NET.hostAct=function(r,a){
   }
   if(a.act==="ageup"){
     const tc=teamTC(u.team);
-    if(!tc||dist2(u.root.position.x,u.root.position.z,tc.x,tc.z)>12*12)
+    if(!tc||dist2(u.root.position.x,u.root.position.z,tc.x,tc.z)>Math.pow(bStand(tc.def,12),2))
       return deny("Stand at your Town Center to advance the age (T).");
     const nxt=AGES[teamAge[u.team]+1];
     if(!nxt)return deny("Your civilization is already in the final age.");
@@ -2024,7 +2024,7 @@ NET.guestFrame=function(dt){
       let tx,tz,ty=1.6,col=0xd8c9a3,site=null,sd=1e12,found=false;
       if(player.cls==="villager")for(const b of buildings){ // the ox builds nothing
         if(b.team!==player.team||!b.alive||b.built)continue;
-        const reach=b.def.r+2.6, d=dist2(px,pz,b.x,b.z);
+        const reach=bSurf(b.def)+2.6, d=dist2(px,pz,b.x,b.z);
         if(d<reach*reach&&d<sd){sd=d;site=b;}
       }
       if(site){tx=site.x;tz=site.z;found=true;}
