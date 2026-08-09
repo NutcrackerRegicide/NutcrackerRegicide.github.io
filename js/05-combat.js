@@ -681,8 +681,14 @@ function tryAttack(u){ if(u.dmg<=0)return false;
 // Only the age-5 curtain is low, which is §F.6's whole argument — "the trade is firepower for
 // height, and the drop in height is the upgrade" — and it is also the only one you can walk on. The
 // wall you can stand on is the wall you can shoot over; that is one fact, not two.
-function wallTopY(b){
-  if(!b||!b.def||!b.def.wall)return Infinity;
+// v132.18 …AND IT IS A HEIGHT ABOVE THE WALL'S OWN BASE, so the caller has to add the base. These
+// numbers were measured off a MODEL; a projectile's y is measured from sea level. v132.17 compared
+// the two directly and it only works where a wall stands at y = 0 — which is precisely where the
+// gate built its test curtain, so all three checks passed and John got a shot that still died on
+// his own parapet. Terrain in play runs about -2.5 to +2: on low ground the arrow's world y falls
+// under 5.2 and is eaten by the wall it is standing on, and on high ground it sails through merlons
+// that should stop it. Split in two so the frame is impossible to get wrong at a glance.
+function _wallTopLocal(b){
   const a=Math.max((b.def.age||0),
     Math.min(5,(typeof teamAge!=="undefined"&&teamAge[b.team])||0));
   const wood=b.type.indexOf("wood")===0;
@@ -693,6 +699,10 @@ function wallTopY(b){
   }
   if(wood)return a<=2?6.9:7.2;
   return fort?(a>=5?5.2:10.4):8.2;
+}
+function wallTopY(b){                            // WORLD height of the top of this wall
+  if(!b||!b.def||!b.def.wall)return Infinity;
+  return b.root.position.y+_wallTopLocal(b);
 }
 // …and the one place that decides whether a shot is stopped by a wall at all. ONE function, called
 // from all three sites that carry the circle — the free shot, the homing shot and the guest's

@@ -49,7 +49,7 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
   await page.waitForTimeout(300);
 
   const out=await page.evaluate(()=>{
-    const WX=0, WZ=40;
+    const WX=0; let WZ=40;
     for(const t of buildings.slice())t.alive=false;
     for(const u of units.slice()){u.alive=false;u.root.visible=false;}
     const R={};
@@ -95,6 +95,14 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
     }
 
     // ---- the three shots -------------------------------------------------------------------------
+    // v132.18 ON GROUND THAT IS NOT ZERO. The first cut built its curtain at (0,40), where the
+    // terrain sits near sea level — so the arrow's WORLD y and its height above the wall's own base
+    // were the same number, wallTopY's frame error cancelled, and all three checks passed on a
+    // shipped bug. Find the lowest ground on the map and test there: if the two frames disagree,
+    // this is where it shows.
+    let bestZ=WZ, bestY=1e9;
+    for(let z=-140;z<=140;z+=4){const y=terrainHeight(WX,z); if(y<bestY){bestY=y;bestZ=z;}}
+    WZ=bestZ;
     for(const t of buildings.slice())t.alive=false;
     teamAge[0]=5; teamAge[1]=5;
     const made=[];
@@ -134,6 +142,7 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
     R.over=shoot(WX,terrainHeight(WX,WZ+16),WZ+16,0.42); // from the ground, lofted over it
     R.into=shoot(WX,terrainHeight(WX,WZ+16),WZ+16,0.0);  // from the ground, flat AT it
     R.deckY=+deckY.toFixed(2);
+    R.baseY=+made[1].root.position.y.toFixed(2); R.testZ=WZ;
     R.wallTop=R.crest.filter(c=>c.type==="fort_wall"&&c.age===5).map(c=>c.top)[0];
     return R;
   });
@@ -146,7 +155,10 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
     String(c.top).padStart(5)+"   "+String(c.p90).padStart(5)+
     "   profile z-2..+2: "+c.prof.map(v=>v===null?" - ":String(v)).join(" "));
 
-  console.log("\n  THREE SHOTS at an age-5 curtain (deck "+out.deckY+", crest "+out.wallTop+")");
+  console.log("\n  THREE SHOTS at an age-5 curtain built at z="+out.testZ+
+    ", where its BASE sits at y="+out.baseY+" (deck "+out.deckY+")");
+  console.log("    — deliberately not y=0: wallTopY is a height above the wall's own base and the");
+  console.log("      projectile's y is above sea level, so a wall at zero hides the difference.");
   console.log("    FROM THE DECK   born "+out.deck.born+" at y="+out.deck.y0+
     ", lived "+out.deck.frames+" frames, flew "+out.deck.far);
   console.log("      the shot exists and travels"+F(out.deck.born===1&&out.deck.far>8));

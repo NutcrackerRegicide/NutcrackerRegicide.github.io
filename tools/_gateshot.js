@@ -16,14 +16,15 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
   await page.evaluate(()=>{for(const el of document.querySelectorAll("body > *:not(canvas)"))el.style.display="none";
     try{inMenu=false;}catch(e){} window.requestAnimationFrame=()=>0;});
   await page.waitForTimeout(400);
-  for(const [name,type,age,unit] of [["a2-wood","wood_gate",2,"oxcart"],["a3-stone","stone_gate",3,"catapult"],
-                                     ["a4-fort","fort_gate",4,"cannon"],["a5-fort","fort_gate",5,"catapult"]]){
+  for(const [name,type,age,unit] of [["a5-cannon","fort_gate",5,"cannon"],["a5-catapult","fort_gate",5,"catapult"],
+                                     ["a4-cannon","fort_gate",4,"cannon"],["a5-wallramp","fort_wall",5,"clubman"]]){
     await page.evaluate(({type,age,unit})=>{
       for(const t of buildings.slice())t.alive=false;
       for(const u of units.slice()){u.alive=false;u.root.visible=false;}
       teamAge[0]=age;
       const GX=0,GZ=40;
       const g=makeBuilding(0,type,GX,GZ,true,0); if(g){g.built=true;g.alive=true;}
+      window.__isWall=(type.indexOf("wall")>=0);
       // a wall either side so the gate reads as part of a line
       for(const s of [-1,1])for(let i=1;i<=2;i++){
         const w=makeBuilding(0,age>=5?"fort_wall":(age>=3?"stone_wall":"wood_wall"),GX+s*i*12.5,GZ,true,0);
@@ -44,7 +45,8 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
       scene.traverse(o=>{ if(!o.isMesh&&!o.isSprite)return;
         if(keep.has(o)||o===ground)return; o.visible=false; });
       camera.up.set(0,1,0);
-      camera.position.set(GX+17,10,GZ+27); camera.lookAt(GX,4.5,GZ);
+      if(window.__isWall){camera.position.set(GX+15,13,GZ-19); camera.lookAt(GX,3,GZ-4);}
+      else {camera.position.set(GX+17,10,GZ+27); camera.lookAt(GX,4.5,GZ);}
       camera.updateProjectionMatrix();
       renderer.shadowMap.needsUpdate=true; composer.render();
     },{type,age,unit});

@@ -415,7 +415,15 @@ const WALL_DECK_Y=4.0, WALL_DECK_HX=6.25, WALL_DECK_Z0=-3.4, WALL_DECK_Z1=1.0;
 // a four-unit drop off a knife edge, because the ramp ended exactly where the deck began and the
 // two only touched along a line. A landing is what a real ramp has; this is the cheapest version
 // of one -- clamp the rise at the top of the run, and let the two surfaces share a strip.
-const WALL_RAMP_Z0=-5.4, WALL_RAMP_Z1=-2.8, WALL_RAMP_X0=-6.0, WALL_RAMP_RUN=8.0, WALL_RAMP_FLAT=0.8;
+// v132.20 THE RAMP TURNED NINETY DEGREES (John: "rotate ramps so they are perpendicular to the
+// wall"), so the band turns with it: it is now a RUN IN Z inside a narrow strip of X, where it used
+// to be a run in x inside a strip of z.
+//   WALL_RAMP_HX     half the ramp's width, centred on the segment
+//   WALL_RAMP_ZTOP   where it meets the terreplein's inner edge (WALL_DECK_Z0)
+//   WALL_RAMP_RUN    6.0, not 8.0: rise 4.0 over 6.0 is 1:1.5 at 33.7 degrees, so the tail behind
+//                    the wall is 6.0 rather than the 8.0 the old run would have cost when stood up.
+//                    The tail is the price of a ramp you can see is a ramp; this is the smaller bill.
+const WALL_RAMP_HX=1.1, WALL_RAMP_ZTOP=-3.4, WALL_RAMP_RUN=6.0, WALL_RAMP_FLAT=0.8;
 function wallFloorAt(x,z){
   if(typeof buildings==="undefined")return null;
   for(const b of buildings){
@@ -439,14 +447,15 @@ function wallFloorAt(x,z){
     // gate branch of the model builds no ramp at all — only the curtain branch does. So every
     // age-5 gate has had an invisible slope behind it, lifting the player up a surface that is not
     // drawn and dropping him back off it.
-    if(!b.def.gate&&lz>=WALL_RAMP_Z0&&lz<=WALL_RAMP_Z1&&lx>=WALL_RAMP_X0&&lx<=WALL_RAMP_X0+WALL_RAMP_RUN)
+    if(!b.def.gate&&Math.abs(lx)<=WALL_RAMP_HX&&
+       lz>=WALL_RAMP_ZTOP-WALL_RAMP_RUN&&lz<=WALL_RAMP_ZTOP)
       // v131.34 …AND NEVER BELOW THE GROUND IT RISES OUT OF. The ramp is measured from the wall's
       // own base, and at its foot that is 0 — but the terrain under the foot is wherever the hill
       // is, up to a unit higher. Unclamped, stepping onto the ramp's bottom end SANK the body into
       // the hillside before it started climbing. A ramp emerges from the ground; it does not cut a
       // trench to reach it.
       return Math.max(b.root.position.y+WALL_DECK_Y*
-        Math.min(1,(lx-WALL_RAMP_X0)/(WALL_RAMP_RUN-WALL_RAMP_FLAT)),   // flat landing at the top
+        Math.min(1,(lz-(WALL_RAMP_ZTOP-WALL_RAMP_RUN))/(WALL_RAMP_RUN-WALL_RAMP_FLAT)), // flat landing at the top
         terrainHeight(x,z));
   }
   return null;
@@ -2341,22 +2350,35 @@ function buildingMesh(type,team,age,hx,hz){
       // rather than to loom", so it is 4.6 tall where the Medieval wall is 9.4, and wide enough to
       // work guns on. The history and the gameplay want the same shape.
       //
-      // ALONG THE INNER FACE, NOT OUT THE BACK. A perpendicular ramp needs an 8.0 run behind the
-      // wall and every segment of a curtain would grow a tail into its own courtyard. Run it in x
-      // instead and it lives inside the segment's own 12.5 length. Rise 4.00 over a run of 8.00 is
-      // 1:2, atan(0.5) = 0.46365 rad; the slab's own length is hypot(8,4) = 8.9443, and centred at
-      // x=-2.0, y=2.0 its ends land at (-6.0, 0.0) and (+2.0, 4.0) — ground to walkway exactly.
-      // z=-4.4 puts it just behind the terreplein's inner edge at -3.4, so it meets the deck rather
-      // than overlapping it.
-      const RRISE=4.0, RRUN=8.0, RANG=Math.atan2(RRISE,RRUN);
-      const ramp=new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(RRUN,RRISE),0.4,2.0),
+      // v132.20 OUT THE BACK, PERPENDICULAR, which is what John asked for and overrides the note
+      // that used to stand here ("a perpendicular ramp needs an 8.0 run behind the wall and every
+      // segment of a curtain would grow a tail into its own courtyard"). The cost is real and it is
+      // paid: a ramp lying ALONG the wall does not read as a way up, it reads as a slab leaning on
+      // the masonry — and tools/wallpop.js already recorded that its first run "reported the ramp
+      // broken, because a body walking AT the wall crosses the 2.6-deep ramp band in a fifth of a
+      // second and never travels the 8 units of x the rise is spread over". A ramp you have to
+      // approach sideways is a ramp nobody finds.
+      // 6.0 OF RUN, NOT 8.0: rise 4.0 over 6.0 is 1:1.5 at 33.7 degrees, so the tail is 6.0 behind
+      // the terreplein's inner edge instead of 8.0. Steeper, and the smaller bill.
+      // THE SIGN IS THE TRAP. Rotation about +x sends +z DOWNWARD (y' = y cos - z sin), so the angle
+      // has to be NEGATIVE for the +z end — the one that meets the deck — to rise. Positive buries
+      // the ramp in the ground. Same family as the T-R-S trap this file has paid for three times.
+      // Ends, checked: length hypot(6,4) = 7.2111 centred at z = ZTOP - RRUN/2 = -6.4, y = 2.0.
+      // Local +z end (0,0,3.606) turns to (0,+2.0,+3.0) -> world (0, 4.0, -3.4) = the deck edge.
+      // Local -z end turns to (0,-2.0,-3.0) -> world (0, 0.0, -9.4) = the ground.
+      const RRISE=4.0, RRUN=WALL_RAMP_RUN, RANG=Math.atan2(RRISE,RRUN);
+      const RLEN=Math.hypot(RRUN,RRISE), RMIDZ=WALL_RAMP_ZTOP-RRUN/2;
+      const ramp=new THREE.Mesh(new THREE.BoxGeometry(WALL_RAMP_HX*2,0.4,RLEN),
         texturedMat("metal",P.stone));
-      ramp.rotation.z=RANG; ramp.position.set(-2.0,RRISE/2,-4.4);
+      ramp.rotation.x=-RANG; ramp.position.set(0,RRISE/2,RMIDZ);
       ramp.castShadow=true; ramp.receiveShadow=true; g.add(ramp);
-      // a low kerb on the open side, so the ramp reads as a ramp and not as a leaning slab
-      const kerb=new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(RRUN,RRISE),0.34,0.26),aWall(age));
-      kerb.rotation.z=RANG; kerb.position.set(-2.0,RRISE/2+0.30,-5.33);
-      kerb.castShadow=false; g.add(kerb);
+      // TWO kerbs now, not one: a ramp you walk UP has an edge on either side of you, and a single
+      // kerb on a perpendicular ramp is a handrail on one side of a staircase.
+      for(const ks of [-1,1]){
+        const kerb=new THREE.Mesh(new THREE.BoxGeometry(0.26,0.34,RLEN),aWall(age));
+        kerb.rotation.x=-RANG; kerb.position.set(ks*(WALL_RAMP_HX+0.13),RRISE/2+0.30,RMIDZ);
+        kerb.castShadow=false; g.add(kerb);
+      }
     }else{
       // §F.5 THE MEDIEVAL FORTIFIED WALL. "TALL AND THIN IS CORRECT FOR THIS AGE" — height beats
       // ladders and every siege answer is still muscle-powered. Sloping batter at the base,
@@ -2445,7 +2467,10 @@ function buildingMesh(type,team,age,hx,hz){
       // 4.90 — and a Club Man is 5.43 tall, a Knight 5.49 and an Ox Cart 6.18. Everything that used
       // this gate walked its head through the beam. 8.4 puts the underside at 6.70, which clears the
       // cart. Width was only half of "will it walk through it"; this is the other half.
-      const h=8.4;
+      // v132.19 11.4. The lintel hangs 1.7 deep off the top so the underside is h-1.7: at 8.4 that
+      // was 6.70, and a Cannon is 8.29 tall, a Catapult 9.26. 11.0 gave 9.30 — four hundredths over
+      // the catapult, which is a coincidence and not a clearance. 11.4 gives 9.70.
+      const h=11.4;
       for(const px of [-5.4,5.4]){
         const t=new THREE.Mesh(new THREE.BoxGeometry(2.8,h,squared?3.2:2.8),tim);
         t.position.set(px,h/2,0); t.castShadow=true; t.receiveShadow=true; g.add(t);
@@ -2484,7 +2509,8 @@ function buildingMesh(type,team,age,hx,hz){
       // as near-semicircles, rusticated unfinished block faces, a double passage. The round towers
       // are the building's identity and they survive the ladder.
       const wmat=texturedMat("metal",STONELIT);
-      const h=9.6;
+      // v132.19 11.4: the lintel is 2.0 deep at h-1.0, so the underside is h-2.0 = 9.40.
+      const h=11.4;
       // v132.15 THE DRUMS SLIM AND STEP OUT. 2.5/2.7 at +-5.2 left inner faces at +-2.5 and a 5.0
       // passage before the jambs below cut it to 1.6. 2.0/2.2 at +-6.0 leaves +-4.0 — GATE_PASS
       // with room — and the gate ends up 16.4 overall against the 15.4 it already was, so nothing
@@ -2518,10 +2544,12 @@ function buildingMesh(type,team,age,hx,hz){
       // and became the Classical gate's ceiling at 6.20 — against an Ox Cart 6.18 tall, which is
       // 0.02 of clearance and not a margin. 7.2 puts it at 6.80..7.60, flush with the lintel's
       // underside, where a reveal head belongs.
-      for(const s of [-1,1]){const jb=box(0.6,6.8,0.4,P.dark); jb.castShadow=false;
-        jb.position.set(s*(GATE_PASS/2+0.3),3.4,1.15); g.add(jb);}
-      {const hd=box(GATE_PASS+1.2,0.8,0.4,P.dark); hd.castShadow=false;
-       hd.position.set(0,7.2,1.15); g.add(hd);}
+      // v132.19 the reveal grows with the gate: jambs to the lintel's underside at 9.40, head band
+      // flush above it rather than hanging into the opening.
+      for(const s of [-1,1]){const jb=box(0.6,9.4,0.4,P.dark); jb.castShadow=false;
+        jb.position.set(s*(GATE_PASS/2+0.3),4.7,1.15); g.add(jb);}
+      {const hd=box(GATE_PASS+1.2,0.7,0.4,P.dark); hd.castShadow=false;
+       hd.position.set(0,9.75,1.15); g.add(hd);}
       const ban=box(1.8,1.1,0.09,tc); ban.castShadow=false; ban.position.set(0,h+0.7,1.2); g.add(ban);
     }else if(age>=5){
       // §F.6 — the gate is "often the only decorative masonry on the whole enceinte", a classical
@@ -2532,7 +2560,13 @@ function buildingMesh(type,team,age,hx,hz){
       // lintel spans PGAP + 2*PW + 0.4, which at 7.8 and 2.2 is 12.6 against the 12.5 curtain
       // segment this gate splits. This is the ONE gate genuinely boxed in — the others simply
       // stepped their drums outward, because a gatehouse already stands wider than a curtain.
-      const GH=9.4, PW=2.2, PGAP=GATE_PASS;      // gatehouse height, pier width, clear passage
+      // v132.19 11.8 AND DEEPER PIERS. John: "enlightenment age gate is tiny compared to cannone."
+      // The lintel is 1.3 deep at GH-0.65, so the underside is GH-1.95 = 9.85. Piers 3.0 -> 3.6 deep
+      // because height alone makes a tall thin frame and his word was "tiny" — mass reads as much as
+      // height. Both stay inside the 12.5 curtain segment in plan, so wall placement is untouched,
+      // and §F.6's low rampart with a monumental portal rising out of it is the contrast this
+      // branch's own note argues for. It is now monumental rather than merely taller than a rampart.
+      const GH=11.8, PW=2.2, PGAP=GATE_PASS;     // gatehouse height, pier width, clear passage
       // >>> v131.28 THE RAMPART IS SPLIT AROUND THE PASSAGE, AND UNTIL NOW IT WAS NOT. <<<
       // These two boxes were 12.5 wide and ran straight across the opening: rev topping out at 3.53
       // and core at 3.60, against a body 2.6 tall. The 3.4-wide "clear passage" the piers make was
@@ -2572,7 +2606,7 @@ function buildingMesh(type,team,age,hx,hz){
       // cannot drift apart again; the rustication courses below keep the brick, which is what a
       // rusticated portal is and where the contrast belongs.
       for(const s of [-1,1]){
-        const pier=new THREE.Mesh(new THREE.BoxGeometry(PW,GH,3.0),aWall(age));
+        const pier=new THREE.Mesh(new THREE.BoxGeometry(PW,GH,3.6),aWall(age));
         pier.position.set(s*(PGAP/2+PW/2),GH/2,0.4); pier.castShadow=true; pier.receiveShadow=true; g.add(pier);
         for(let i=0;i<7;i++){const rust=box(PW+0.2,0.3,3.2,_dk(P.stone,0.14)); rust.castShadow=false;
           rust.position.set(s*(PGAP/2+PW/2),0.9+i*1.2,0.4); g.add(rust);}   // rustication, per pier
@@ -2592,7 +2626,10 @@ function buildingMesh(type,team,age,hx,hz){
       // between them was 0.23. v131.25 fixed "the gate looks solid" as far as the reveal and this
       // is the rest of that same defect. Hinged at the jambs and folded back, like every other gate.
       _gateLeaves(g,PGAP/2,-0.55,PGAP/2-0.1,GH-2.6,0.22,P.dark);
-      const arms=box(1.5,0.9,0.2,GOLD); arms.castShadow=false; arms.position.set(0,GH-2.2,2.05); g.add(arms);
+      // v132.19 THE CEILING OF THIS GATE WAS A COAT OF ARMS. The lintel underside gives 9.85; the
+      // 6.75 gatefit measured was this 0.9-tall plaque at GH-2.2, hanging in front of the opening.
+      // Third time in this block that a decorative box has turned out to be the thing in the way.
+      const arms=box(1.5,0.9,0.2,GOLD); arms.castShadow=false; arms.position.set(0,GH-1.2,2.35); g.add(arms);
       const bridge=box(PGAP,0.34,4.6,PLANK); bridge.castShadow=false; bridge.position.set(0,1.0,4.4); g.add(bridge);
       const ban=box(1.4,0.9,0.1,tc); ban.castShadow=false; ban.position.set(0,GH+0.6,0.6); g.add(ban);
       // AND THE WALKWAY RUNS THROUGH. The age-5 curtain carries a terreplein at 4.00 (see the wall
@@ -2620,7 +2657,8 @@ function buildingMesh(type,team,age,hx,hz){
       // vault above, and a drawbridge on chains. None of those four appear on the Classical gate —
       // §F.5 is explicit that they are this rung's upgrade and must not leak downward.
       const wmat=texturedMat("metal",P.stone);
-      const h=10.4;
+      // v132.19 11.8: the vault is 2.4 deep at h-1.2, so the underside is h-2.4 = 9.40.
+      const h=11.8;
       // v132.15 THE DRUMS SLIM AND STEP OUT, same move as the Classical gate one rung down. 2.6/3.0
       // at +-5.0 put the inner faces at +-2.0 — a 4.0 passage on the rung §F.5 calls the strongest
       // part of a castle, and the one an army's siege train has to leave through. 2.2/2.5 at +-6.4
@@ -2647,9 +2685,13 @@ function buildingMesh(type,team,age,hx,hz){
         grv.position.set(s*(GATE_PASS/2+0.17),(h-2.4)/2,1.55); g.add(grv);}   // the portcullis grooves
       // …AND THE RAISED PORTCULLIS RIDES HIGHER. Its bars hung with their bottoms at 5.30 against
       // a body 5.43 tall: raised, and still decapitating the infantry. h-2.4 puts them at 6.50.
+      // v132.19 …AND IT HAS TO BE RAISED INTO THE VAULT, not merely called raised. 3.0-tall bars at
+      // h-2.4 hang from 7.90 once the vault rises — a "raised" portcullis still taking the head off
+      // anything over 7.90. 2.2 at h-1.2 puts them at 9.50..11.70, inside the vault, which is where
+      // a retracted portcullis physically goes.
       {const NB=13, sp=GATE_PASS/(NB-1);
-       for(let i=0;i<NB;i++){const bar=box(0.22,3.0,0.16,STONEDK); bar.castShadow=false;
-         bar.position.set(-GATE_PASS/2+i*sp,h-2.4,1.5); g.add(bar);}}        // the raised portcullis
+       for(let i=0;i<NB;i++){const bar=box(0.22,2.2,0.16,STONEDK); bar.castShadow=false;
+         bar.position.set(-GATE_PASS/2+i*sp,h-1.2,1.5); g.add(bar);}}        // the raised portcullis
       // §F.5's drawbridge, DOWN. rotation.x=-0.28 left the leaf's far underside at 1.90 and its
       // near underside at 0.57 with nothing under either — John's "sits partially up". A leaf lying
       // flat: 0.34 thick resting on grade puts its centre at 0.34/2=0.17, and the hinge belongs on

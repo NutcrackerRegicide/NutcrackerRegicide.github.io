@@ -64,34 +64,29 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
       u.alive=false; u.root.visible=false; if(u.root.parent)u.root.parent.remove(u.root);
       return {top:+top.toFixed(2),end:+end.toFixed(2),over:+(end-gy).toFixed(2)};
     };
-    // model x offsets across one segment. WALL_RAMP_X0 -6.0, run 8.0 -> the ramp lane is -6..+2,
-    // in the z band -5.4..-2.8, i.e. approached from BEHIND the wall.
+    // v132.20 THE RAMP TURNED NINETY DEGREES, so the lane it occupies turned with it: it is now the
+    // narrow strip |lx| <= WALL_RAMP_HX (1.1) running back in z from the deck edge. Everywhere ELSE
+    // along the curtain must still leave you on the ground — so the offsets below skip the ramp
+    // lane instead of skipping a range of x.
     const rows=[];
-    for(const lx of [-9,-6,-4,-2,0,2,4,6,9]){
+    for(const lx of [-9,-6,-4,-2.6,2.6,4,6,9]){
       rows.push({lx,back:drive(WX+lx,WZ-16,+1),front:drive(WX+lx,WZ+16,-1)});
     }
-    // >>> THE RAMP RISES ALONG X, NOT TOWARD THE WALL. <<< The first run of this drove every lane
-    // at the curtain in +z and reported the ramp broken, because a body walking AT the wall crosses
-    // the 2.6-deep ramp band in a fifth of a second and never travels the 8 units of x the rise is
-    // spread over. You climb a wall ramp by walking ALONG the back of the wall, which is what a
-    // real ramp is. So the ramp gets its own drive: start behind the curtain inside the band and
-    // walk +x.
+    // v132.20 AND NOW IT DOES RISE TOWARD THE WALL. The note that used to stand here recorded the
+    // opposite — "the ramp rises along x, not toward the wall… you climb a wall ramp by walking
+    // ALONG the back of the wall" — and that WAS true, and it is the reason John could not find the
+    // ramp at all: one you approach sideways is one nobody uses. It is perpendicular now, so the
+    // drive is the obvious one: stand behind the wall on the ramp's centreline and walk at it.
+    // ONE LEG, because a perpendicular ramp lands ON the deck rather than beside it — the old
+    // two-leg drive existed only because the along-the-wall ramp shared 0.6 of z with the deck and
+    // its top was a landing you had to turn off.
     const rampDrive=()=>{
-      const z0=WZ-4.1;                       // mid of the ramp band, model z -5.4..-2.8
-      const u=makeUnit(0,"villager",WX-9,z0,{name:""});
+      const z0=WZ-9.6;                       // just behind the ramp's foot at model z -9.4
+      const u=makeUnit(0,"villager",WX,z0,{name:""});
       u.isPlayer=true; u.spd=6;
-      u.root.position.set(WX-9,terrainHeight(WX-9,z0),z0);
-      // TWO LEGS, BECAUSE THE RAMP LANDS BESIDE THE DECK AND NOT ON IT. The ramp band is model z
-      // -5.4..-2.8 and the deck is -3.4..1.0; they share only 0.6 of overlap, so the top of the
-      // climb is a landing you then step ONTO the terreplein from. A straight +x drive rides to
-      // 4.00 and then walks off the end of the ramp's x range back onto grass, which is what the
-      // first run of this reported as a failure. Walk +x to the top, then turn onto the deck.
+      u.root.position.set(WX,terrainHeight(WX,z0),z0);
       let top=u.root.position.y;
-      for(let k=0;k<900&&u.root.position.x-WX<1.6;k++){
-        moveUnit(u,1,0,1/60); hug(u);
-        if(u.root.position.y>top)top=u.root.position.y;
-      }
-      for(let k=0;k<300&&u.root.position.z-WZ<-2.2;k++){
+      for(let k=0;k<900&&u.root.position.z-WZ<-2.4;k++){
         moveUnit(u,0,1,1/60); hug(u);
         if(u.root.position.y>top)top=u.root.position.y;
       }
@@ -105,7 +100,7 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
 
   if(out.err){console.log("!! "+out.err);await b.close();srv.close();process.exit(1);}
   console.log("\n  a real body driven at a 3-segment Enlightenment curtain. deck height is "+out.deck+".");
-  console.log("  the ramp lane is model x -6..+2 approached from BEHIND (-z). Everywhere else must");
+  console.log("  the ramp lane is model |x| <= 1.1, running back in z. Everywhere else must");
   console.log("  leave you on the ground.\n");
   console.log("   model x    walking AT the wall from BEHIND      from the FRONT");
   let bad=0;
@@ -119,7 +114,7 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
   }
   const rampOK=out.ramp.end>out.deck-0.15;
   if(!rampOK)bad++;
-  console.log("\n   THE RAMP, walked along the back of the wall then turned onto the deck:");
+  console.log("\n   THE RAMP, walked straight at the wall on its centreline:");
   console.log("     tops out at "+out.ramp.top+", ends at "+out.ramp.end+
     " standing at model ("+out.ramp.x+", "+out.ramp.z+")   deck is "+out.deck+
     (rampOK?"   ok":"   *** FAIL"));
