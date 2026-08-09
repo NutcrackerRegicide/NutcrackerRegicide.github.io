@@ -664,7 +664,20 @@ function validFor(type,x,z,team){
   // collision loop below never saw it)
   if(typeof townBoards!=="undefined")for(const tb of townBoards)
     if(dist2(x,z,tb.x,tb.z)<Math.pow(r+3.5,2))return false;
-  const gap=type==="farm"?0.5:2.2; // farms pack snugly; everything else spreads out (v87: room for clean E targets)
+  // v131.23 THE GAP SCALES WITH THE BUILDINGS. John, on a block of houses: "they need to at least
+  // be spaced 75% of a house apart." A flat 2.2 was the same corridor between two 4.5-wide huts and
+  // two 24-wide castles, so on the thing he builds most it was nothing: a house is ~7.4 across at
+  // most ages, and 2.2 of that is under a third of a house. Read as a fraction of what is being
+  // spaced, 0.75 of the SMALLER building's width is the ask, and it is the right shape of rule --
+  // a corridor should be judged against the things forming it, not against a constant.
+  // CAPPED AT 6.0, because unbounded it spaces a town centre from a barracks by 0.75*20 = 15 and
+  // empties the buildable yard -- which is exactly how v131.1 broke placement and cost a release.
+  // 6.0 is comfortably more than a body (1.30) and holds the corridor open everywhere.
+  const _gapFor=(dA,tA,dB,tB)=>{
+    const wA=2*bSpace(dA,tA), wB=2*bSpace(dB,tB);
+    return Math.max(2.2,Math.min(6.0,0.75*Math.min(wA,wB)));
+  };
+  const farmish=type==="farm";  // farms still pack snugly: a mill needs its fields close
   const wallish=!!BLD[type].wall;
   for(const b of buildings){
     if(!b.alive)continue;
@@ -676,6 +689,7 @@ function validFor(type,x,z,team){
     // the measured footprint since v131.9 and placement was still using r, so a barracks whose
     // shell is 10.00 was being spaced as though it were 7.2 and the gap between two of them
     // vanished. The `gap` constant keeps its old meaning -- clear ground BETWEEN the footprints.
+    const gap=farmish||b.def.flat?0.5:_gapFor(BLD[type],team,b.def,b.team);
     if(dist2(x,z,b.x,b.z)<Math.pow(bSpace(BLD[type],team)+bSpace(b.def,b.team)+gap,2))return false;
   }
   // v114 CLEARING THE LAND: with the map flush with forest, a wood node blocking placement

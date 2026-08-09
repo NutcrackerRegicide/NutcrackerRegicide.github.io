@@ -391,7 +391,26 @@ const NC_PIKE_CARRY=-2.869;
 //     rotX -2.369  ->  44.3 deg            / 45.7 deg             <- his 45
 //     rotX -1.569  ->  89.9 deg            / 89.9 deg             <- perpendicular to the body
 const NC_SPEAR_CARRY=-1.569;   // levelled: the six spear classes
-const NC_SWORD_CARRY=-2.369;   // shouldered at 45: the five sword classes and the club
+const NC_SWORD_CARRY=-2.369;   // shouldered at 45: the CLUB only, after John moved the swords to
+                               // the spear angle -- "swords can also be held at same angle as the
+                               // spears currently are". Kept as its own constant rather than
+                               // inlined, because the club is one class and a shared constant is
+                               // exactly how six weapons ended up on one angle in the first place.
+// v131.22 AND THE GRIP OFFSET IS PER CLASS, BECAUSE John could still see daylight: "club and
+// swords are still not in the hand of the nutcracker, still floating in front". He was right and
+// A12 said 192/192 the whole time -- that gate measures geometry near y=0 in the WEAPON GROUP's
+// frame, which proves the weapon HAS a grip and says nothing about whether the grip is where the
+// hand is. weaponGrip's `z` is a FOREARM-frame translation applied before the rotation, so one
+// shared 0.3 lands somewhere different for every blade length and every carry angle -- and the
+// angle had just changed. The polearms refuter named this blind spot; this is acting on it.
+// Measured (tools/fistseat.js, nearest weapon point to the fist centre, fist radius 0.12):
+//     shortsword  0.307  -> 0.187 OF DAYLIGHT      legionaire  0.128 -> 0.008 of daylight
+//     broadsword  0.278  -> 0.158 OF DAYLIGHT      clubman     0.106 -> 0.014 of bite, marginal
+//     vanguard    0.089  -> 0.032 of bite          elitescout  0.000 -> fully seated, left alone
+// Each z below is the LARGEST value that still seats with ~0.06 of bite, chosen that way on
+// purpose: the least displacement from where the weapon already sits. Seating by the shortest
+// route is what dragged the club into the fur cap's ear flap in v131.17, and a bigger move here
+// would do the same thing to the arm.
 // NC_PIKE_CARRY itself survives for the trader's coin scale, which shares it only by accident of
 // history and is not a weapon at all -- moving it would swing a set of scales to the horizontal.
 // EVERY legacy hat in this file (the cavalry line, the king's crown, the wilds) was hand-fitted to
@@ -3574,7 +3593,7 @@ function _buildBodyRaw(u){
       // four of five rungs either way and their fix is in the PALETTE, not in whether one class's
       // prop happens to shade one crop; a club parked over the ribs to keep a torso mean down is
       // the tool measuring the prop, which is the thing agecheck.js:230 is already complaining about.
-      const CG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3,0.22); // shouldered vertical (§6.5) — see the const
+      const CG=weaponGrip(R.faR,NC_SWORD_CARRY,0.25,0.22); // shouldered vertical (§6.5) — see the const
       // >>> v131.11 THE FIST-SEAT WAS TRIED HERE AND TAKEN OUT AGAIN. DO NOT RE-APPLY IT. <<<
       // The defect it chased is real. weaponGrip parks the group at faR-local (0,-0.52,0.30)
       // while the HAND is endCap's sphere, r=0.12 at faR-local (0,-0.54,0); both hang off faR,
@@ -3607,18 +3626,34 @@ function _buildBodyRaw(u){
     if(u.cls==="shortsword"){ // BRONZE: linen under bronze + the boar's-tusk CONE — no shield
       kitDendra(R,u,tc);
       // the bronze shortsword
-      const SG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3);
+      const SG=weaponGrip(R.faR,NC_SPEAR_CARRY,0.25);   // 0.25 once the grip exists to hold: see fistseat
       const ssw=noShadow(box(0.13,1.0,0.12,0xc9a44a)); ssw.position.y=0.62; SG.add(ssw);
       const sgd=noShadow(box(0.38,0.08,0.14,0x9a7532)); sgd.position.y=0.12; SG.add(sgd);
+    // v131.22 JOHN: "they still dont have handles". This sword was a BLADE AND A CROSSGUARD and
+    // nothing else -- no grip, no pommel, nothing below y=0.08 at all. A12 never saw it because
+    // that gate looks for DAYLIGHT BETWEEN parts and an absent handle leaves no gap to find; the
+    // blade (0.12..1.12) and the guard (0.08..0.16) overlap, so the weapon read as continuous
+    // while the thing the hand closes on did not exist. Guard underside is 0.08, so a 0.20 grip
+    // centres at -0.02 and the pommel caps it at -0.145.
+    const gripS=noShadow(cyl(0.048,0.052,0.20,0x4a3826,6)); gripS.position.y=-0.02; SG.add(gripS);
+    const pomS=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.07,6,5),plainMat(0x9a7532)));
+    pomS.position.y=-0.145; SG.add(pomS);
     }
     if(u.cls==="broadsword"){ // IRON: scale courses, the Negau BELL, a true broadsword
       kitLamellar(R,u,tc);
       // longer and wider than the bronze blade — and canted outboard, because vertical was not
       // enough on its own: at the fist's x=0.68 a 0.2-wide blade came within 0.04 of the beard's
       // bottom corner and crossed it on any camera off the axis (see weaponGrip's `out`).
-      const BG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3,0.12);
+      const BG=weaponGrip(R.faR,NC_SPEAR_CARRY,0.28,0.12);  // 0.28 once the grip exists to hold
       const bsw=noShadow(box(0.2,1.35,0.13,0xb9c0c9)); bsw.position.y=0.8; BG.add(bsw);
       const bgd=noShadow(box(0.48,0.09,0.15,0x8d949c)); bgd.position.y=0.12; BG.add(bgd);
+    // same absent handle as the shortsword, and the same reason A12 could not see it. Guard
+    // underside 0.075; a 0.22 grip centres at -0.03 with the pommel at -0.165. Longer and thicker
+    // than the shortsword's because this is a hand-and-a-half blade and the grip is where a
+    // silhouette says so.
+    const gripB=noShadow(cyl(0.053,0.058,0.22,0x4a3826,6)); gripB.position.y=-0.03; BG.add(gripB);
+    const pomB=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.08,6,5),plainMat(0x8d949c)));
+    pomB.position.y=-0.165; BG.add(pomB);
       // a small round buckler
       const buck=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.42,0.42,0.09,10),heraldryMat(u.team,u.id)));
       buck.rotation.z=Math.PI/2; buck.position.set(-0.14,-0.3,0.15); R.faL.add(buck);
@@ -3642,7 +3677,7 @@ function _buildBodyRaw(u){
       // reads head-on, where the fore-aft fin this replaces disappeared into a line.
       helmGallic(R,tc,AGEPAL[3],{});
       // the gladius: mirror-bright, visibly edged, gold furniture
-      const GG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3);
+      const GG=weaponGrip(R.faR,NC_SPEAR_CARRY,0.23);
       const gla=noShadow(box(0.16,1.15,0.1,0xc8ced6)); gla.position.y=0.72; GG.add(gla);
       for(const ex of [-0.09,0.09]){const edge=noShadow(box(0.035,1.05,0.11,0xccd0d6));  // §10.22: the only pure white is teeth
         edge.position.set(ex,0.72,0); GG.add(edge);}
@@ -3677,7 +3712,7 @@ function _buildBodyRaw(u){
       // coif — look at it.
       helmGreatHelm(R,tc,AGEPAL[4],{});
       // the giant two-hander, carried high over the shoulder
-      const ZG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3);
+      const ZG=weaponGrip(R.faR,NC_SPEAR_CARRY,0.27);
       const zw=noShadow(box(0.17,1.9,0.12,0xc4cad2)); zw.position.y=1.1; ZG.add(zw);
       const zgd=noShadow(box(0.64,0.1,0.16,0x8d949c)); zgd.position.y=0.13; ZG.add(zgd);
       const zpom=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.11,6,5),plainMat(0xd9a92e))); zpom.position.y=-0.1; ZG.add(zpom);
@@ -4805,7 +4840,7 @@ function _buildBodyRaw(u){
         rl.rotation.z=Math.PI/2; rl.position.set(sx*0.56,bandY-0.30,-0.06); R.head.add(rl);}
     }
     // ---- the regalia in his hands, and the age's own sceptre head ----
-    const KG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3);
+    const KG=weaponGrip(R.faR,NC_SPEAR_CARRY,0.3);
     const staff=_noSh(cyl(0.062,0.070,1.45,kAge===0?KA.wood:NC.gold,8)); staff.position.y=0.50; KG.add(staff);
     if(kAge===0){const mace=_noSh(cyl(0.24,0.24,0.30,KA.stone,8)); mace.position.y=1.30; KG.add(mace);}
     else if(kAge===1){const hilt=_noSh(box(0.30,0.10,0.10,NC.goldH)); hilt.position.y=1.24; KG.add(hilt);
