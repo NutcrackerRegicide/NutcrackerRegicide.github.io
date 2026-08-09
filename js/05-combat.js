@@ -411,6 +411,7 @@ function killUnit(u,killer){
 function respawnUnit(u){
   const tc=teamTC(u.team);
   let hx=tc?tc.x:TCPOS[u.team][0], hz=tc?tc.z:TCPOS[u.team][1];
+  let _spawnHost=tc||null;                       // which building the ring is drawn around
   { // spawn point: bots take the nearest; the PLAYER chooses with V (Town Center vs forward castle)
     const wantCastle=!u.isPlayer||(typeof spawnPref!=="undefined"&&spawnPref==="castle");
     if(wantCastle){
@@ -418,12 +419,21 @@ function respawnUnit(u){
       for(const b of buildings){
         if(b.team!==u.team||!b.alive||!b.built||b.type!=="castle")continue;
         const d=dist2(u.root.position.x,u.root.position.z,b.x,b.z);
-        if(d<bd){bd=d;hx=b.x;hz=b.z;}
+        if(d<bd){bd=d;hx=b.x;hz=b.z;_spawnHost=b;}
       }
     }
   }
+  // v131.28 OUTSIDE THE BLOCKER, NOT OUTSIDE A GUESS. This was a flat 14 with the comment "outside
+  // the 2x TC/castle footprint", and a castle blocks to 19.8: at age 4 the mural and gate drums
+  // span radius 12.45-18.35 and at age 5 the bastions span 7.12-14.08, so ~30% of respawn angles
+  // put the reborn villager INSIDE the stone. The circle's outward-only push then teleported him
+  // from 14 to 19.8 in one frame — straight out through the curtain. Now that the castle blocks on
+  // its real outline that push would be to the nearest FACE instead, and inside a sealed ward that
+  // is a trap, so the ring has to clear the collider rather than very nearly clear it.
+  const _spB=_spawnHost;
+  const _spR=(_spB&&_spB.def)?((_spB.def.rBlock||_spB.def.r)+2.6):14;   // defensive: teamTC may hand back a stub
   const a=Math.random()*Math.PI*2;
-  u.root.position.set(hx+Math.cos(a)*14,0,hz+Math.sin(a)*14); // outside the 2x TC/castle footprint
+  u.root.position.set(hx+Math.cos(a)*_spR,0,hz+Math.sin(a)*_spR);
   u.root.position.y=terrainHeight(u.root.position.x,u.root.position.z);
   u.cls="villager"; buildBodyFor(u); setClassStats(u);
   u.alive=true; u.root.visible=true; u.warned=false;
@@ -642,6 +652,22 @@ function tryAttack(u){ if(u.dmg<=0)return false;
   return u.ranged?tryRangedAttack(u):tryMeleeAttack(u); }
 
 // ---------- movement helpers ----------
+// v131.28 THE CLEAR PASSAGE THROUGH A GATE, in MODEL space, as a half-width the body's CENTRE may
+// occupy — i.e. the opening's own half-width less the 0.7 the rest of this function uses for a
+// body. Returns null for any gate whose passage has not been measured off the mesh, and null means
+// "behave exactly as this did before", so an unmeasured age cannot regress.
+//   age 5 (fort_gate / stone_gate): piers at model x +-(PGAP/2 .. PGAP/2+PW), PGAP 3.4
+//     -> opening 3.40 wide, half 1.70, less 0.70 = 1.00 of freedom for the centre.
+//   ages 0-4 are NOT measured here on purpose. The Medieval twin-tower gatehouse's drums leave
+//     inner faces at |x| 2.50 but its jambs close to |x| 0.80, which is 1.60 of air against a 1.40
+//     body — either a deliberate non-passage or a second sealed gate, and the source does not say
+//     which. Guessing it open is how a gate stops being a wall.
+function _gatePassHX(b){
+  const a=Math.max((b.def.age||0),
+    Math.min(5,(typeof teamAge!=="undefined"&&teamAge[b.team])||0));
+  if(a>=5&&(b.type==="fort_gate"||b.type==="stone_gate"))return 3.4/2-0.7;
+  return null;
+}
 function moveUnit(u,dx,dz,dt){
   const len=Math.hypot(dx,dz);
   if(len<0.001)return false;
@@ -682,12 +708,29 @@ function moveUnit(u,dx,dz,dt){
       }
       continue;
     }
-    if(b.def.gate&&b.team===u.team)continue; // your own gates stand open for you
+    if(b.def.gate&&b.team===u.team){
+      // v131.28 YOUR OWN GATE STANDS OPEN — AT ITS OPENING. This was a blanket `continue`, i.e. no
+      // collider at all, so the owner walked through the piers and the rustication exactly as
+      // easily as through the gateway, and the gateway did no work. It also hid the fact that the
+      // age-5 rampart was never split (03-buildings.js), because the one thing that could have
+      // noticed was switched off.
+      // PLAYER ONLY, AND BOTS KEEP THE BYPASS UNCHANGED. 07-ai.js routes a bot to a gate on a 3.5
+      // arrival radius and re-routes along the wall line; handing it a 3.4-wide doorway to thread
+      // is a pathing change, and this is not the commit to make one in.
+      const _gp=_gatePassHX(b);
+      if(!u.isPlayer||_gp===null)continue;                 // as before for bots, and for any age
+      const _r=b.rot||0,_c=Math.cos(_r),_s=Math.sin(_r);   //   whose passage is not measured
+      if(Math.abs((nx-b.x)*_c-(nz-b.z)*_s)<_gp)continue;   // lined up with it: through you go
+    }                                                      // otherwise: your own piers are stone
     // v131.24 A BODY ON THE WALKWAY IS ABOVE THIS WALL, NOT INSIDE IT. The wall's box is thin
     // (hw 1.30) and the ramp lies entirely outside it, so the climb was always unobstructed -- what
     // blocked the walk ALONG the terreplein was this box, at deck height, where there is nothing.
     // Player only, per the owner's scoping, so bots keep colliding with walls exactly as before.
-    if(b.def.wall&&u.isPlayer&&typeof wallFloorAt==="function"){
+    // v131.28 …AND A GUEST IS ON IT TOO. This tested u.isPlayer, which on the HOST is false for
+    // every guest-driven body (10-net.js names those u.remote). So the host blocked a guest at the
+    // wall's box and drew him at terrain height while his own client predicted him on the deck —
+    // not a cosmetic asymmetry but a live position disagreement between the two machines.
+    if(b.def.wall&&(u.isPlayer||u.remote)&&typeof wallFloorAt==="function"){
       const wf=wallFloorAt(nx,nz);
       if(wf!==null&&u.root.position.y>wf-1.2)continue;   // standing on it, or stepping onto it
     }
@@ -706,6 +749,43 @@ function moveUnit(u,dx,dz,dt){
         const s=(Math.abs(along)>0.25)?Math.sign(along):(lx>=0?1:-1); // keep momentum, else nearest end
         let gx=lx+s*u.spd*dt*(0.35+0.85*into);    // slide toward the chosen end
         nx=b.x+gx*c+pz*sn; nz=b.z-gx*sn+pz*c;
+      }
+      continue;
+    }
+    // v131.28 …AND SOME BUILDINGS ARE NOT ONE BOX. 00-data.js's own note — "castle: NO BOX ON
+    // PURPOSE… a single box would fill the courtyard solid" — is true of one box and was taken as
+    // an argument for a circle, which stands 3.50 off an age-4 curtain and 9.80 off an age-5
+    // platform's flat face. Several shapes describe a castle; one never could.
+    if(b.def.blockShapes){
+      const _sA=Math.max((b.def.age||0),
+        Math.min(5,(typeof teamAge!=="undefined"&&teamAge[b.team])||0));
+      const L=b.def.blockShapes[_sA];
+      if(L){
+        const bs=(typeof BSCALE!=="undefined"&&BSCALE[b.type])||1;
+        const rot=b.rot||0, c=Math.cos(rot), sn=Math.sin(rot);
+        for(const q of L){
+          const qx=q.x*bs, qz=q.z*bs;
+          // model -> world, the same convention as blockParts above and the wall OBB below
+          const wx=b.x+qx*c+qz*sn, wz=b.z-qx*sn+qz*c;
+          if(q.r!==undefined){                                  // a drum
+            const qr=q.r*bs+0.7, dd=dist2(nx,nz,wx,wz);
+            if(dd<qr*qr){const d=Math.sqrt(dd)||0.001;
+              nx=wx+(nx-wx)/d*qr; nz=wz+(nz-wz)/d*qr;}
+            continue;
+          }
+          // a slab, carrying its OWN yaw on top of the building's — the curtain segments each
+          // stand square to their own radial, which is the whole reason a circle could not do this
+          const t=rot+(q.yaw||0), tc2=Math.cos(t), ts=Math.sin(t);
+          const dx1=nx-wx, dz1=nz-wz;
+          const lx=dx1*tc2-dz1*ts, lz=dx1*ts+dz1*tc2;
+          const hx=q.hx*bs+0.7, hz=q.hz*bs+0.7;
+          const ax=Math.abs(lx), az=Math.abs(lz);
+          if(ax<hx&&az<hz){                                     // out along the LEAST penetration
+            let gx=lx, gz=lz;
+            if(hx-ax<hz-az)gx=(lx>=0?hx:-hx); else gz=(lz>=0?hz:-hz);
+            nx=wx+gx*tc2+gz*ts; nz=wz-gx*ts+gz*tc2;
+          }
+        }
       }
       continue;
     }

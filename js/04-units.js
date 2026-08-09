@@ -2083,7 +2083,10 @@ function weaponGrip(fa,rotX,z,out){ // hand-anchored weapon group: pieces stack 
 // comment there for why an atlas and not vertex colours.
 const _MERGE_NODES=["legL","shinL","legR","shinR","torso","head","armL","faL","armR","faR",
   // …and the parts of the beast and siege rigs that are driven separately
-  "musketG","bowG","goods","horseG","horseNeck","arm","barrel","gunSG","log"];
+  // v131.28 "xbowG" IS LOAD-BEARING AND NOT COSMETIC. Anything not named here is WELDED into its
+  // parent cluster by mergeUnitBody, so an unregistered weapon group stops existing at merge time
+  // and the rotation above would drive nothing at all.
+  "musketG","bowG","xbowG","goods","horseG","horseNeck","arm","barrel","gunSG","log"];
 function _mergeableMat(m){
   // Only plain toon materials fold into the atlas. This automatically leaves out the priest's
   // transparent MeshBasicMaterial aura, any ink hull's ShaderMaterial and the name-tag sprite,
@@ -4357,11 +4360,17 @@ function _buildBodyRaw(u){
       R.musketG=MG; R.faR.add(MG);
     }
     if(u.cls==="crossbowman"){ // the crossbow, now with a stirrup and string
-      const stockM=noShadow(box(0.14,0.16,1.1,0x6b4a2b)); stockM.position.set(0,-0.45,0.4); R.faR.add(stockM);
-      const bowArm=noShadow(box(0.95,0.08,0.1,0x8a6a3f)); bowArm.position.set(0,-0.45,0.85); R.faR.add(bowArm);
-      const stringX=noShadow(box(0.9,0.03,0.03,0xd2cdbe)); stringX.position.set(0,-0.45,0.72); R.faR.add(stringX);
+      // v131.28 IN A GROUP, so the aim pose has something to counter-rotate. These were four loose
+      // meshes on R.faR, which is why this was the one ranged weapon that pointed at the sky when
+      // the player aimed: R.bowG's compensation line is guarded on a group he did not have.
+      // The group sits at the y all four already shared, so their local y goes to 0 and the idle
+      // pose is bit-for-bit what it was.
+      const XG=new THREE.Group(); XG.position.set(0,-0.45,0); R.faR.add(XG); R.xbowG=XG;
+      const stockM=noShadow(box(0.14,0.16,1.1,0x6b4a2b)); stockM.position.set(0,0,0.4); XG.add(stockM);
+      const bowArm=noShadow(box(0.95,0.08,0.1,0x8a6a3f)); bowArm.position.set(0,0,0.85); XG.add(bowArm);
+      const stringX=noShadow(box(0.9,0.03,0.03,0xd2cdbe)); stringX.position.set(0,0,0.72); XG.add(stringX);
       const stirrup=noShadow(new THREE.Mesh(new THREE.TorusGeometry(0.09,0.03,4,8),plainMat(0x4a4e56)));
-      stirrup.position.set(0,-0.45,0.96); R.faR.add(stirrup);
+      stirrup.position.set(0,0,0.96); XG.add(stirrup);
     }else if(u.cls!=="slinger"&&u.cls!=="skirmisher"){ // the wooden bow for tiers 1-3
       const BG=new THREE.Group(); BG.position.set(0,-0.54,0.18); R.faL.add(BG); R.bowG=BG;
       const br=0.55+tier*0.06;
@@ -5334,6 +5343,12 @@ function animateUnit(u,dt){
     R.armL.rotation.set(al,0,0); R.armR.rotation.set(ar,0,0);
     if(R.faL){R.faL.rotation.set(-flL,0,0); R.faR.rotation.set(-flR,0,0);}
     if(R.bowG)R.bowG.rotation.x=(u.isPlayer&&aiming)?2.0:0; // upright while the arm rises to draw
+    // v131.28 …and the crossbow levels, which it never did. The chain is arm (-1.30) + forearm
+    // (-0.55) = -1.85, and the stock's +Z is the muzzle, so +1.85 puts it dead level along the aim
+    // ray; the camPitch term is the musket's, so the bow tracks the eye instead of sitting flat.
+    // Left uncompensated it read at 74 degrees above horizontal and tipped 16 degrees BACK.
+    if(R.xbowG)R.xbowG.rotation.x=(u.isPlayer&&aiming)
+      ?1.85+((typeof camPitch!=="undefined"?camPitch:0.55)-0.55)*0.7:0;
     if(R.musketG){ // the gun never leaves the right hand
       const MG=R.musketG;
       if(u.isPlayer&&aiming){ // arm raised, gun shouldered and leveled with the eye

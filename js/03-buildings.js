@@ -428,7 +428,11 @@ function wallFloorAt(x,z){
     const lx=dx*c-dz*sn, lz=dx*sn+dz*c;
     if(Math.abs(lx)<=WALL_DECK_HX&&lz>=WALL_DECK_Z0&&lz<=WALL_DECK_Z1)
       return b.root.position.y+WALL_DECK_Y;
-    if(lz>=WALL_RAMP_Z0&&lz<=WALL_RAMP_Z1&&lx>=WALL_RAMP_X0&&lx<=WALL_RAMP_X0+WALL_RAMP_RUN)
+    // v131.28 THE RAMP IS THE CURTAIN'S. Gate types carry wall:true and reach this loop, but the
+    // gate branch of the model builds no ramp at all — only the curtain branch does. So every
+    // age-5 gate has had an invisible slope behind it, lifting the player up a surface that is not
+    // drawn and dropping him back off it.
+    if(!b.def.gate&&lz>=WALL_RAMP_Z0&&lz<=WALL_RAMP_Z1&&lx>=WALL_RAMP_X0&&lx<=WALL_RAMP_X0+WALL_RAMP_RUN)
       return b.root.position.y+WALL_DECK_Y*
         Math.min(1,(lx-WALL_RAMP_X0)/(WALL_RAMP_RUN-WALL_RAMP_FLAT));   // flat landing at the top
   }
@@ -2338,8 +2342,16 @@ function buildingMesh(type,team,age,hx,hz){
       // exposed stretches.
       const wmat=texturedMat("metal",P.stone);
       const h=9.4;
-      const bat=new THREE.Mesh(new THREE.CylinderGeometry(1.0,1.7,2.6,4),wmat);   // the batter
-      bat.rotation.y=Math.PI/4; bat.scale.x=6.25/1.7; bat.position.y=1.3; bat.castShadow=true; g.add(bat);
+      // v131.28 ROTATE THE GEOMETRY, THEN SCALE THE MESH — NOT THE OTHER WAY ROUND. This was
+      // `bat.rotation.y=Math.PI/4; bat.scale.x=6.25/1.7`, and r128 composes T·R·S, so the 3.68x
+      // stretch was applied in the mesh's own axes and the yaw then swung it: a 12.5-long rhombic
+      // prism lying at 45 degrees ACROSS the wall, corners at (+-4.42,-+4.42), standing 3.1 past a
+      // collider 1.30 half-wide — and it is the only ground-level mass a Medieval wall has, so it
+      // is the part a body walks into. Baking the turn into the geometry puts the stretch on the
+      // wall's own long axis, where it was always meant to be.
+      const _batG=new THREE.CylinderGeometry(1.0,1.7,2.6,4); _batG.rotateY(Math.PI/4);
+      const bat=new THREE.Mesh(_batG,wmat);                                      // the batter
+      bat.scale.x=6.25/1.7; bat.position.y=1.3; bat.castShadow=true; g.add(bat);
       const seg=new THREE.Mesh(new THREE.BoxGeometry(12.5,h-2.4,2),wmat);
       seg.position.y=2.6+(h-2.4)/2; seg.castShadow=true; seg.receiveShadow=true; g.add(seg);
       const mach=box(12.5,0.7,2.7,STONEDK); mach.castShadow=false; mach.position.y=h-0.9; g.add(mach);
@@ -2417,9 +2429,22 @@ function buildingMesh(type,team,age,hx,hz){
       // rusticated PORTAL through a low rampart, reached across the ditch by a bridge. The siting
       // rule (a gate goes in a curtain face, never in a bastion) is a placement rule, not a mesh
       // one, but the low silhouette is this mesh's job: nothing here stands above 5.6.
-      const rev=new THREE.Mesh(new THREE.BoxGeometry(12.5,3.4,2.4),aWall(age));
-      rev.rotation.x=-0.12; rev.position.set(0,1.7,0.4); rev.castShadow=true; rev.receiveShadow=true; g.add(rev);
-      const core=box(12.5,3.6,3.4,0x7a6a4a); core.castShadow=false; core.position.set(0,1.8,-2.0); g.add(core);
+      const GH=9.4, PW=2.5, PGAP=3.4;            // gatehouse height, pier width, clear passage
+      // >>> v131.28 THE RAMPART IS SPLIT AROUND THE PASSAGE, AND UNTIL NOW IT WAS NOT. <<<
+      // These two boxes were 12.5 wide and ran straight across the opening: rev topping out at 3.53
+      // and core at 3.60, against a body 2.6 tall. The 3.4-wide "clear passage" the piers make was
+      // a window starting 3.5 above the ground — you could see through this gate and not walk
+      // through it, which is a worse failure than the solid slab it replaced, because it lies.
+      // Nobody caught it because your own gate has no collider (05-combat.js) and the only probe
+      // that walks a gate walks its OWNER through it.
+      // Halved at exactly the offset the terreplein below already uses, so the three parts of this
+      // gate that have to line up now do so by construction instead of by coincidence.
+      const RHW=(12.5-PGAP)/2, ROFF=PGAP/2+RHW/2;
+      for(const s of [-1,1]){
+        const rev=new THREE.Mesh(new THREE.BoxGeometry(RHW,3.4,2.4),aWall(age));
+        rev.rotation.x=-0.12; rev.position.set(s*ROFF,1.7,0.4); rev.castShadow=true; rev.receiveShadow=true; g.add(rev);
+        const core=box(RHW,3.6,3.4,0x7a6a4a); core.castShadow=false; core.position.set(s*ROFF,1.8,-2.0); g.add(core);
+      }
       // v131.25 JOHN, TWICE: "enlightenment fortified gate in general needs to be taller similar to
       // medieval fortified gate", and "gate solid and visually looks like you should not be able to
       // pass through it fix this". Both were literally true. The portal was ONE SOLID BOX
@@ -2437,14 +2462,19 @@ function buildingMesh(type,team,age,hx,hz){
       // gap between them, a lintel across, and the leaves set BACK inside the reveal so the
       // opening has visible depth from any angle. You can see through it, which is the only way a
       // player believes he can walk through it.
-      const GH=9.4, PW=2.5, PGAP=3.4;            // gatehouse height, pier width, clear passage
+      // v131.28 THE SHAFTS ARE THE CURTAIN'S OWN ASHLAR, THE BANDS ARE THE BRICK. Built from
+      // P.stone (BPAL[5] #9E5744, luma 0.395) the whole gatehouse was red brick against a #D2C8B4
+      // rampart at luma 0.787 — 0.39 of value and a hue flip, so the gate read as a different
+      // building set down in the wall. aWall(age) is the SAME CALL the curtain makes, so the two
+      // cannot drift apart again; the rustication courses below keep the brick, which is what a
+      // rusticated portal is and where the contrast belongs.
       for(const s of [-1,1]){
-        const pier=new THREE.Mesh(new THREE.BoxGeometry(PW,GH,3.0),texturedMat("metal",P.stone));
+        const pier=new THREE.Mesh(new THREE.BoxGeometry(PW,GH,3.0),aWall(age));
         pier.position.set(s*(PGAP/2+PW/2),GH/2,0.4); pier.castShadow=true; pier.receiveShadow=true; g.add(pier);
         for(let i=0;i<7;i++){const rust=box(PW+0.2,0.3,3.2,_dk(P.stone,0.14)); rust.castShadow=false;
           rust.position.set(s*(PGAP/2+PW/2),0.9+i*1.2,0.4); g.add(rust);}   // rustication, per pier
       }
-      const lint=new THREE.Mesh(new THREE.BoxGeometry(PGAP+2*PW+0.4,1.3,3.2),texturedMat("metal",P.stone));
+      const lint=new THREE.Mesh(new THREE.BoxGeometry(PGAP+2*PW+0.4,1.3,3.2),aWall(age));
       lint.position.set(0,GH-0.65,0.4); lint.castShadow=true; g.add(lint);
       // the reveal: a recessed head to the passage, set back from the front face so the opening
       // reads as a tunnel with depth rather than as a disc painted on a wall

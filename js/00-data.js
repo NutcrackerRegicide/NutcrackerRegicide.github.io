@@ -704,7 +704,29 @@ BLD.towncenter.age=0; BLD.house.age=0; BLD.storage_pit.age=0; BLD.barracks.age=0
 BLD.archery_range.age=1; BLD.stable.age=1; BLD.farm.age=1; BLD.watch_tower.age=1;
 BLD.siege_workshop.age=2; BLD.wood_wall.age=2; BLD.wood_gate.age=2; BLD.blacksmith.age=2;
 BLD.tower.age=3; BLD.temple.age=3; BLD.market.age=3; BLD.stone_wall.age=3; BLD.stone_gate.age=3;
-BLD.castle.age=4; BLD.fort_wall.age=4; BLD.fort_gate.age=4;
+BLD.castle.age=4;
+// v131.28 THE CASTLE'S REAL OUTLINE, as a per-age list of model-space shapes. See
+// tools/patch-castlebox.js for the measurement and tools/castlewalk.js for the gate that holds it.
+// Built from the SAME expressions 03-buildings.js draws from, so a mesh edit that forgets this
+// list shows up as a diff on one file and not the other.
+//   {x,z,hx,hz,yaw} is a slab   ·   {x,z,r} is a drum   ·   model space, pre-BSCALE (which is 1 here)
+BLD.castle.blockShapes=(function(){
+  const a4=[], a5=[];
+  for(let i=0;i<8;i++){const a=i*Math.PI/4+Math.PI/8;          // the curtain: 13.6 x 1.8, yaw = a
+    a4.push({x:Math.sin(a)*15.4,z:Math.cos(a)*15.4,hx:6.8,hz:0.9,yaw:a});}
+  for(let i=0;i<4;i++){const a=i*Math.PI/2+Math.PI/4;          // mural towers, on the angles
+    a4.push({x:Math.sin(a)*15.4,z:Math.cos(a)*15.4,r:2.95});}
+  a4.push({x:-4.0,z:15.6,r:3.0},{x:4.0,z:15.6,r:3.0});         // the twin gatehouse drums
+  a4.push({x:0,z:0,hx:7.7,hz:7.7,yaw:0});                      // the keep — BoxGeometry(15.4,·,15.4)
+  for(const px of [-7.7,7.7])for(const pz of [-7.7,7.7])a4.push({x:px,z:pz,r:2.8});
+  a5.push({x:0,z:0,hx:10.0,hz:10.0,yaw:0});                    // the platform — BoxGeometry(20,·,20)
+  // the bastions are 4-gons yawed by atan2(px,pz), which puts their CORNERS on the diagonals and
+  // their flats on the axes: the half-width is the apothem, and the frustum's radius at the body
+  // band's mid height (y 1.3 of 3.8) is 4.921, so 4.921/sqrt(2) = 3.48.
+  for(const px of [-10.6,10.6])for(const pz of [-10.6,10.6])a5.push({x:px,z:pz,hx:3.48,hz:3.48,yaw:0});
+  a5.push({x:0,z:10.3,hx:2.5,hz:0.7,yaw:0});                   // the portal block
+  return {0:a4,1:a4,2:a4,3:a4,4:a4,5:a5};                      // BLD.castle.age is 4: only 4 and 5 build
+})(); BLD.fort_wall.age=4; BLD.fort_gate.age=4;
 
 // ---------- the seven ages ----------
 const AGES=[
