@@ -710,7 +710,15 @@ function moveUnit(u,dx,dz,dt){
       const rot=b.rot||0, c=Math.cos(rot), sn=Math.sin(rot);
       const dx0=nx-b.x, dz0=nz-b.z;
       const lx=dx0*c-dz0*sn, lz=dx0*sn+dz0*c;
-      const hx=b.def.fx+0.7, hz=b.def.fz+0.7;      // +0.7: the body's own half-width, as before
+      // v131.19 THE BOX IS PER AGE. A building restyles as the town ages and its footprint moves
+      // with it: a Bronze guard tower is 4.20 wide and its Enlightenment bastion 8.96, so one
+      // baked maximum left 5.03 units of invisible wall standing round the early model. The age is
+      // derived the same way buildingMesh derives it, or the collider and the mesh disagree.
+      const _bA=Math.max((b.def.age||0),
+        Math.min(5,(typeof teamAge!=="undefined"&&teamAge[b.team])||0));
+      const _fx=(b.def.fxA&&b.def.fxA[_bA]!==undefined)?b.def.fxA[_bA]:b.def.fx;
+      const _fz=(b.def.fzA&&b.def.fzA[_bA]!==undefined)?b.def.fzA[_bA]:b.def.fz;
+      const hx=_fx+0.7, hz=_fz+0.7;                // +0.7: the body's own half-width, as before
       const ax=Math.abs(lx), az=Math.abs(lz);
       if(ax<hx&&az<hz){
         let gx=lx, gz=lz;

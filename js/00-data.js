@@ -599,6 +599,33 @@ for(const _k in BLD)if(BLD[_k].rBlock===undefined)BLD[_k].rBlock=BLD[_k].r;
 // and have plan area and are NOT walls; taking every grounded part made the barracks read 11.6
 // deep when its shell is 8.55. Re-measure with `node tools/footprint.js` after any model change.
 // Roof eaves are excluded on purpose: you walk under an eave, not into it.
+// v131.19 PER AGE, AND THAT IS THE WHOLE POINT. v131.9 replaced the circumscribing circle with
+// a box and baked ONE box per type: the MAXIMUM over all six ages. That is a second invisible
+// wall wearing different clothes, and John found it immediately. A Bronze guard tower was
+// blocking a box sized for its Enlightenment bastion -- 8.96 against a real shell of 4.20, so
+// 5.03 units of nothing. Measured over-block from the max-over-ages shortcut:
+//    tower 5.03 · archery_range 5.67 · towncenter 4.15 · market 3.70 · barracks 3.30
+//    blacksmith 2.80 · watch_tower 2.48 · siege_workshop 2.95 · temple 1.85 · house 1.60
+// which is the same order of magnitude as the circle it replaced. A building restyles as the
+// town ages, so its blocker has to age with it.
+// Index by the age the MODEL used -- max(def.age||0, min(5,teamAge)) -- exactly as buildingMesh
+// derives it (03-buildings.js:1057). Two derivations of one number is how a wall ends up
+// somewhere the building is not; the farm learned that in v131.4.
+// Re-measure with `node tools/footprint.js` after ANY model change.
+BLD.towncenter.fxA=[11.26,11.46,8.50,9.50,11.88,9.10]; BLD.towncenter.fzA=[10.75,8.56,7.75,10.80,11.90,9.10];
+BLD.house.fxA=[4.47,3.70,3.70,3.90,3.20,3.60]; BLD.house.fzA=[4.70,3.50,3.70,3.70,3.10,3.30];
+BLD.barracks.fxA=[6.90,6.80,6.70,10.00,6.90,9.95]; BLD.barracks.fzA=[5.50,5.40,5.30,5.80,5.50,8.55];
+BLD.tower.fxA=[4.20,4.20,4.20,4.20,4.00,8.96]; BLD.tower.fzA=[6.30,6.30,6.30,6.30,4.00,9.03];
+BLD.storage_pit.fxA=[6.22,6.22,6.22,6.22,6.22,6.22]; BLD.storage_pit.fzA=[5.70,5.70,5.70,5.70,5.70,5.70];
+BLD.archery_range.fxA=[6.00,6.00,5.91,6.40,7.83,7.83]; BLD.archery_range.fzA=[6.24,6.24,6.24,6.24,11.80,11.91];
+BLD.stable.fxA=[6.86,6.86,6.86,7.00,6.86,6.86]; BLD.stable.fzA=[8.10,8.10,8.10,8.10,8.10,8.10];
+BLD.temple.fxA=[6.75,6.75,6.75,6.75,4.90,5.50]; BLD.temple.fzA=[6.02,6.02,6.02,6.02,6.00,6.80];
+BLD.farm.fxA=[4.59,4.59,4.59,4.59,4.59,5.42]; BLD.farm.fzA=[6.37,6.37,6.37,6.37,6.37,6.37];
+BLD.market.fxA=[7.80,7.80,7.80,7.80,10.60,6.90]; BLD.market.fzA=[7.00,7.00,7.00,7.00,6.60,5.50];
+BLD.siege_workshop.fxA=[6.30,6.30,6.30,6.80,6.50,7.76]; BLD.siege_workshop.fzA=[6.40,6.40,6.40,6.40,9.35,6.46];
+BLD.watch_tower.fxA=[4.24,4.24,2.36,2.36,3.50,3.85]; BLD.watch_tower.fzA=[4.24,4.24,2.36,2.36,3.66,4.84];
+BLD.blacksmith.fxA=[6.50,6.50,6.50,5.25,5.25,8.05]; BLD.blacksmith.fzA=[4.50,4.50,4.50,4.50,4.50,7.00];
+BLD.castle.fxA=[20.50,20.50,20.50,20.50,20.50,24.00]; BLD.castle.fzA=[22.57,22.57,22.57,22.57,22.57,24.00];
 BLD.towncenter.fx=11.88; BLD.towncenter.fz=11.90;
 BLD.house.fx=4.47;       BLD.house.fz=4.70;
 BLD.barracks.fx=10.00;   BLD.barracks.fz=8.55;
