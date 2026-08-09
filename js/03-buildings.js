@@ -433,8 +433,14 @@ function wallFloorAt(x,z){
     // age-5 gate has had an invisible slope behind it, lifting the player up a surface that is not
     // drawn and dropping him back off it.
     if(!b.def.gate&&lz>=WALL_RAMP_Z0&&lz<=WALL_RAMP_Z1&&lx>=WALL_RAMP_X0&&lx<=WALL_RAMP_X0+WALL_RAMP_RUN)
-      return b.root.position.y+WALL_DECK_Y*
-        Math.min(1,(lx-WALL_RAMP_X0)/(WALL_RAMP_RUN-WALL_RAMP_FLAT));   // flat landing at the top
+      // v131.34 …AND NEVER BELOW THE GROUND IT RISES OUT OF. The ramp is measured from the wall's
+      // own base, and at its foot that is 0 — but the terrain under the foot is wherever the hill
+      // is, up to a unit higher. Unclamped, stepping onto the ramp's bottom end SANK the body into
+      // the hillside before it started climbing. A ramp emerges from the ground; it does not cut a
+      // trench to reach it.
+      return Math.max(b.root.position.y+WALL_DECK_Y*
+        Math.min(1,(lx-WALL_RAMP_X0)/(WALL_RAMP_RUN-WALL_RAMP_FLAT)),   // flat landing at the top
+        terrainHeight(x,z));
   }
   return null;
 }
@@ -603,7 +609,16 @@ function _drapedPlane(w,len,ang,cx,cy,cz,lift,mat,uw,ul){
   for(let i=0;i<pos.count;i++){
     const vx=pos.getX(i), vy=pos.getY(i);
     const wx=cx+vx*cA-vy*sA, wz=cz-vx*sA-vy*cA;
-    pos.setZ(i,terrainHeight(wx,wz)+lift-cy);
+    // v131.33 THE DRAWN GROUND, NOT THE FUNCTION. This read terrainHeight(wx,wz), and the ground
+    // the player actually sees is a 150x120 PlaneGeometry SAMPLING that function — so between
+    // lattice points it interpolates linearly while terrainHeight() curves, and across a crease the
+    // mesh rides up to 0.12 ABOVE it. The creases are where the town-centre and bazaar flats begin,
+    // which is exactly where the aprons and their paths are, so a decal lifted 0.06 was sitting a
+    // twentieth of a unit INSIDE the hill it was meant to lie on. groundY() samples the same
+    // lattice, the same triangulation and the same barycentric interpolation r128 will actually
+    // run; kingsRoad has used it since v131.15 and this is the rest of the ground decals catching
+    // up. Guarded because 02-world.js defines it and load order is by filename.
+    pos.setZ(i,(typeof groundY==="function"?groundY(wx,wz):terrainHeight(wx,wz))+lift-cy);
   }
   pg.computeVertexNormals();
   const g=new THREE.Group(); g.position.set(cx,cy,cz); g.rotation.y=ang;
@@ -2349,9 +2364,31 @@ function buildingMesh(type,team,age,hx,hz){
       // collider 1.30 half-wide — and it is the only ground-level mass a Medieval wall has, so it
       // is the part a body walks into. Baking the turn into the geometry puts the stretch on the
       // wall's own long axis, where it was always meant to be.
-      const _batG=new THREE.CylinderGeometry(1.0,1.7,2.6,4); _batG.rotateY(Math.PI/4);
+      // v131.33 …AND THE FIX ABOVE LEFT A HOLE AT EVERY JOINT, WHICH IS JOHN'S "medieval walls
+      // still have gaps in the bottom". Rotating the geometry was right; keeping `scale.x=6.25/1.7`
+      // with it was not. That factor was calibrated against the RAW 4-gon, whose extreme vertex sits
+      // on +X at radius r — so 6.25/1.7 put it at 6.25 and the batter spanned the segment's full
+      // 12.5. After rotateY(PI/4) the extreme vertex is at r·cos45 = 0.707r, so the same factor
+      // gives a half-length of 4.42 and a batter 8.84 long under a 12.5 wall. Segments chain at
+      // 10.9, so every joint carried a 2.1 hole at grade widening to 4.2 at the knee, because the
+      // frustum tapers in X as well as in Z. Measured before the fix (tools/wallbase.js):
+      // 22.5% see-through at grade, 34.7% at knee, 25.7% at shoulder.
+      //
+      // A BATTER IS NOT A TAPERED BOX IN PLAN — IT IS FULL LENGTH TOP AND BOTTOM AND ONLY THICKENS
+      // TOWARD THE GROUND. No single mesh scale can express that, because a cone frustum tapers on
+      // both axes at once, so the length is set PER VERTEX after the turn: every rim vertex goes to
+      // +-6.25 and only the thickness keeps the frustum's taper. Thickness runs 1.00 at the top —
+      // flush with the segment box above it, which is 2 deep — out to 1.35 at grade, so the flare
+      // reads without standing proud of the 1.30 the wall collider uses.
+      const BAT_HL=6.25, BAT_TOP=1.00, BAT_BOT=1.35, K=Math.SQRT1_2;
+      const _batG=new THREE.CylinderGeometry(BAT_TOP/K,BAT_BOT/K,2.6,4).toNonIndexed();
+      _batG.rotateY(Math.PI/4);
+      {const P=_batG.attributes.position;
+       for(let i=0;i<P.count;i++){const x=P.getX(i);
+         if(Math.abs(x)>1e-4)P.setX(i,x>0?BAT_HL:-BAT_HL);}}
+      _batG.computeVertexNormals();   // non-indexed first, so this facets rather than smooths (§G.1)
       const bat=new THREE.Mesh(_batG,wmat);                                      // the batter
-      bat.scale.x=6.25/1.7; bat.position.y=1.3; bat.castShadow=true; g.add(bat);
+      bat.position.y=1.3; bat.castShadow=true; g.add(bat);
       const seg=new THREE.Mesh(new THREE.BoxGeometry(12.5,h-2.4,2),wmat);
       seg.position.y=2.6+(h-2.4)/2; seg.castShadow=true; seg.receiveShadow=true; g.add(seg);
       const mach=box(12.5,0.7,2.7,STONEDK); mach.castShadow=false; mach.position.y=h-0.9; g.add(mach);

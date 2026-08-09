@@ -411,6 +411,43 @@ function makeNode(type,x,z,amount){
   for(let i=0;i<5;i++)makeNode("food",(Math.random()-0.5)*35,(Math.random()-0.5)*45,950);
 })();
 
+// ================= WHERE THE GROUND ACTUALLY IS, WHICH IS NOT WHERE terrainHeight() SAYS =================
+// v131.33 HOISTED TO FILE SCOPE, and that is the fix for John's "clipping of the generated
+// roads/paths with the building ground sub grades". This lived inside kingsRoad and only the
+// King's Road ribbon ever got the benefit; every town path and every building apron in
+// 03-buildings.js (_drapedPlane) went on pinning itself to terrainHeight(). The note below says
+// the drawn mesh rides up to 0.12 ABOVE that function ACROSS A CREASE — and the creases are
+// precisely where the town-centre and bazaar flats begin, i.e. exactly under the aprons. A decal
+// lifted 0.06 off a surface that is 0.12 higher than it thinks is a decal buried in the ground.
+// It costs nothing to share: no uuid, no random, pure arithmetic on the same lattice.
+// The ribbon was pinned at terrainHeight(x,z)+0.06 and it sat 0.063 UNDER the grass at (±83,10)
+// — raycast down onto both meshes at 5,049 points along the spine and that is the worst of them.
+// The reason is that the DRAWN ground is not terrainHeight(): it is a 150x120 PlaneGeometry
+// sampling it, so between lattice points it interpolates LINEARLY, and terrainHeight() has
+// creases in it where the town-centre and bazaar flats begin. Across a crease the mesh rides up
+// to 0.12 ABOVE the function; elsewhere it sags up to 0.10 below. A constant big enough to clear
+// the first (0.14) floats the road a quarter of a unit off the ground everywhere else, and at
+// the closest zoom a quarter unit is a twenty-pixel lip down both edges.
+// So sample the MESH, not the function: same lattice, same triangulation, same barycentric
+// interpolation r128 will actually run, and then 0.06 is measured against the surface the player
+// sees. THE FOUR NUMBERS BELOW MUST MATCH buildTerrain's PlaneGeometry at the head of this file.
+// If that line moves and this one does not, the symptom is grass growing through the road near
+// the bazaars — which is exactly what this was.
+const _TW=MAP.x*2+110, _TH=MAP.z*2+200, _TSX=150, _TSZ=120;
+const _QX=_TW/_TSX, _QZ=_TH/_TSZ;
+const groundY=(x,z)=>{
+  const gx=Math.min(_TSX-1e-6,Math.max(0,(x+_TW*0.5)/_QX));
+  const gz=Math.min(_TSZ-1e-6,Math.max(0,(z+_TH*0.5)/_QZ));
+  const ix=Math.floor(gx), iz=Math.floor(gz), fx=gx-ix, fz=gz-iz;
+  const X0=-_TW*0.5+ix*_QX, Z0=-_TH*0.5+iz*_QZ;
+  const ha=terrainHeight(X0,Z0),      hb=terrainHeight(X0,Z0+_QZ),
+        hc=terrainHeight(X0+_QX,Z0+_QZ), hd=terrainHeight(X0+_QX,Z0);
+  // r128's PlaneGeometry emits (a,b,d) then (b,c,d) per quad, so the diagonal runs b→d and the
+  // first triangle is the fx+fz<=1 half. Get that backwards and the road lands on the wrong
+  // triangle exactly where the relief is steepest, which is the only place it shows.
+  return (fx+fz<=1) ? ha+(hd-ha)*fx+(hb-ha)*fz
+                    : hc+(hb-hc)*(1-fx)+(hd-hc)*(1-fz);
+};
 // ---------- the Kings Road's course (shared by the road decals AND the bazaars) ----------
 // Mirror-symmetric about x=0: z(t)===z(1-t), so anything placed at t and 1-t is
 // EXACTLY as far from one throne as from the other.
@@ -1480,6 +1517,13 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
     const jr=Math.random();
     const px=x+(Math.random()-0.5)*7, pz=z+(Math.random()-0.5)*7;
     const ry=Math.random()*Math.PI;
+    // v131.32 THE SKIRT, NOT THE AXIS — and AFTER the draws, which is the only reason this is free.
+    // The guard above tests the RING POINT against a flat pad of 10. What lands is this peak, up to
+    // 3.5 units off that point, wearing a flare of 1.2 — a base radius of r*2.2, up to 30.8. Half
+    // the floor of the worst corner camp was inside a mountain (tools/campridge.js). Every
+    // Math.random() for this iteration has now been drawn, so declining to PUSH costs nothing on
+    // the wire; widening the guard above would have moved every resource node in the world.
+    if(nearCamp(px,pz,r*2.2))continue;
     const col=ridgeTint(px,pz,(jr-0.5)*0.06);
     near.push({geo:flare(new THREE.ConeGeometry(r,h,seg,3),h,1.2),matrix:M(px,h*0.42,pz,ry),color:col});
     // v130.2 THE CAPS WERE MUSHROOM LIDS. The cap must INSCRIBE the peak it caps, and r*0.45 does
@@ -1504,6 +1548,10 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
     const jr=Math.random();
     const px=x+(Math.random()-0.5)*10, pz=z+(Math.random()-0.5)*10;
     const ry=Math.random()*Math.PI;
+    // v131.32 same test, this ring's own skirt: flare 1.3, so r*2.3 and up to 46 on the ground.
+    // Recorded as a GAP like the guard above does, so buildRidgePass can close the skyline behind
+    // the camp from further out instead of leaving a notch in it.
+    if(nearCamp(px,pz,r*2.3)){RIDGE_GAPS.push([x,z]);continue;}
     const col=ridgeTint(px,pz,(jr-0.5)*0.05);
     far.push({geo:flare(new THREE.ConeGeometry(r,h,8,3),h,1.3),matrix:M(px,h*0.42,pz,ry),color:col});
     // same overhang arithmetic as the near range: cap base at 0.76h-0.18h = 0.58h, where the rock
@@ -1516,6 +1564,11 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
     const h=4.5+Math.random()*4, r=5+Math.random()*3.5;
     const jr=Math.random();
     const px=x+(Math.random()-0.5)*5, pz=z+(Math.random()-0.5)*5;
+    // v131.32 THE WORST OF THE THREE, because this ring's flare is 2.1 — the note below says so in
+    // as many words ("their flare has to work hardest… the skirt reaches across a skipped point as
+    // well as an adjacent one"). r*3.1 is up to 26.35 on the ground against a guard pad of 8, and
+    // these are the cones a camp actually touches: the foothill line stands closest to the pockets.
+    if(nearCamp(px,pz,r*3.1))continue;
     const col=ridgeTint(px,pz,(jr-0.5)*0.06);
     // the foothills are the sparsest ring (55% of the perimeter survives) and the smallest, so their
     // flare has to work hardest: at 2.1 the skirt reaches across a skipped point as well as an
@@ -1678,35 +1731,10 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
   const SUB=6, M=N*SUB;
   const TILE=19.2, pos=[], uv=[], idx=[];
   const _p=(t)=>{ const q=Math.max(0,Math.min(1,t)); return roadPoint(q); };
-  // ---- WHERE THE GROUND ACTUALLY IS, WHICH IS NOT WHERE terrainHeight() SAYS IT IS ----
-  // The ribbon was pinned at terrainHeight(x,z)+0.06 and it sat 0.063 UNDER the grass at (±83,10)
-  // — raycast down onto both meshes at 5,049 points along the spine and that is the worst of them.
-  // The reason is that the DRAWN ground is not terrainHeight(): it is a 150x120 PlaneGeometry
-  // sampling it, so between lattice points it interpolates LINEARLY, and terrainHeight() has
-  // creases in it where the town-centre and bazaar flats begin. Across a crease the mesh rides up
-  // to 0.12 ABOVE the function; elsewhere it sags up to 0.10 below. A constant big enough to clear
-  // the first (0.14) floats the road a quarter of a unit off the ground everywhere else, and at
-  // the closest zoom a quarter unit is a twenty-pixel lip down both edges.
-  // So sample the MESH, not the function: same lattice, same triangulation, same barycentric
-  // interpolation r128 will actually run, and then 0.06 is measured against the surface the player
-  // sees. THE FOUR NUMBERS BELOW MUST MATCH buildTerrain's PlaneGeometry at the head of this file.
-  // If that line moves and this one does not, the symptom is grass growing through the road near
-  // the bazaars — which is exactly what this was.
-  const _TW=MAP.x*2+110, _TH=MAP.z*2+200, _TSX=150, _TSZ=120;
-  const _QX=_TW/_TSX, _QZ=_TH/_TSZ;
-  const groundY=(x,z)=>{
-    const gx=Math.min(_TSX-1e-6,Math.max(0,(x+_TW*0.5)/_QX));
-    const gz=Math.min(_TSZ-1e-6,Math.max(0,(z+_TH*0.5)/_QZ));
-    const ix=Math.floor(gx), iz=Math.floor(gz), fx=gx-ix, fz=gz-iz;
-    const X0=-_TW*0.5+ix*_QX, Z0=-_TH*0.5+iz*_QZ;
-    const ha=terrainHeight(X0,Z0),      hb=terrainHeight(X0,Z0+_QZ),
-          hc=terrainHeight(X0+_QX,Z0+_QZ), hd=terrainHeight(X0+_QX,Z0);
-    // r128's PlaneGeometry emits (a,b,d) then (b,c,d) per quad, so the diagonal runs b→d and the
-    // first triangle is the fx+fz<=1 half. Get that backwards and the road lands on the wrong
-    // triangle exactly where the relief is steepest, which is the only place it shows.
-    return (fx+fz<=1) ? ha+(hd-ha)*fx+(hb-ha)*fz
-                      : hc+(hb-hc)*(1-fx)+(hd-hc)*(1-fz);
-  };
+  // v131.33 groundY() IS NOW FILE-SCOPE — see the note where it is defined, above buildTerrain's
+  // consumers. It was local to this function, and 03-buildings.js's aprons and town paths went on
+  // drapping themselves to terrainHeight() and clipping through the ground for exactly the reason
+  // this comment block spent fifteen lines explaining.
   let arc=0, pcx=0, pcz=0;
   for(let j=0;j<=M;j++){
     const t=j/M;
@@ -2099,23 +2127,45 @@ const BAZAAR_MAT=toonMat({vertexColors:true});
     for(const px of [-4.6,4.6])put(BOXG(0.38,0.42,7.0),BEAM,_m(px,4.92,0));
 
     // ---- the canopy: a hipped square scaled to a rectangle ----
-    // ConeGeometry(r,h,4) puts its first vertex on +z, so a pi/4 yaw sends the CORNERS to the
-    // diagonals and the flats to the axes: half-width is r/sqrt(2). 8.77 gives 12.40 across, and a
-    // z scale of 0.726 makes it 9.00 deep. The corners land at 7.66 against a 7.4 deck, so the roof
-    // overhangs its own plinth all the way round — §5.5's eave shadow, which is the single strongest
-    // thing separating a roof from what is under it at 46px.
-    put(CONEG(8.77,2.40,4),ROOF,_m(0,6.12,0,0,Math.PI/4,0,1,1,0.726));
-    put(CONEG(8.95,0.34,4),GOLDT,_m(0,5.06,0,0,Math.PI/4,0,1,1,0.726));   // the eave band
-    put(CONEG(8.60,0.30,4),ROOFD,_m(0,5.36,0,0,Math.PI/4,0,1,1,0.726));   // a dark course above it
+    // >>> v131.31 YAW THE GEOMETRY, SCALE THE MESH — AND THAT IS THE THIRD TIME THIS SESSION. <<<
+    // John, on a top-down shot: "bazaar lower roof is in the shape of a diamond and does not line
+    // up with square posts below it." He is right, and the cause is the same one that had the
+    // knight's visor running on its apothem and the Medieval wall's batter lying diagonally across
+    // its own wall: Matrix4.compose builds T·R·S, so a mesh scale is applied in the mesh's OWN axes
+    // first and the rotation then swings it.
+    // Measured (tools/roofphase.js), on what v131.29 actually shipped — mesh yaw pi/4 AND
+    // scale.z 0.726 together:  lean 9.02 degrees, span 12.40 x 12.40.
+    // The squash did not survive the rotation AT ALL. The roof was never 9.0 deep; it was a square
+    // skewed nine degrees off the posts, which is exactly what a top-down shot shows as a diamond.
+    // Yawing the GEOMETRY instead:  lean 0.00 degrees, span 12.40 x 9.00. What was asked for.
+    // HIP4 exists so the two can never be written apart again.
+    const HIP4=(r,h)=>{const g=new THREE.ConeGeometry(r,h,4); g.rotateY(Math.PI/4); return g;};
+    // r128 lays a cone's first radial vertex on +Z, so a raw 4-gon has its CORNERS on the axes —
+    // a diamond, edges 45 degrees out. Yawed, the flats face the axes and the half-width is
+    // r/sqrt(2): 8.77 gives 12.40 across, and z*0.726 makes it 9.00 deep. Corners land at 7.66
+    // against a 7.4 deck, so the roof overhangs its own plinth all the way round — §5.5's eave
+    // shadow, the single strongest thing separating a roof from what is under it at 46px.
+    put(HIP4(8.77,2.40),ROOF,_m(0,6.12,0,0,0,0,1,1,0.726));
+    put(HIP4(8.95,0.34),GOLDT,_m(0,5.06,0,0,0,0,1,1,0.726));   // the eave band
+    put(HIP4(8.60,0.30),ROOFD,_m(0,5.36,0,0,0,0,1,1,0.726));   // a dark course above it
 
     // ---- THE CLERESTORY LANTERN, which is what makes this shape nobody else's ----
-    put(CYLG(2.40,2.58,1.20,8),LANT,_m(0,6.92,0));
+    // AND IT HAD TO COME DOWN WHEN THE ROOF GOT ITS DEPTH BACK. A 12.4-square roof stands 6.39 high
+    // under the drum's rim; a 12.4 x 9.0 one stands only 5.94 there, because the z slope is now
+    // steeper. The old drum sat at 6.32 — fine against the square, a 0.38 GAP straight into the
+    // interior against the rectangle. It now spans 5.75 to 7.35, sealed at the tightest bearing.
+    // The louvres sit at 6.85 for the mirror-image reason: the roof rises to 6.39 under them on the
+    // DIAGONALS even while it is 5.99 on the z flats, so a slot low enough to read from the side
+    // was buried from the corner. 6.46 clears the worst of it.
+    put(CYLG(2.40,2.58,1.60,8),LANT,_m(0,6.55,0));
     for(let i=0;i<8;i++){const a2=i*Math.PI/4;
-      put(BOXG(0.90,0.78,0.16),SLOT,_m(Math.sin(a2)*2.46,6.92,Math.cos(a2)*2.46,0,a2,0));}
-    put(CONEG(3.62,1.30,4),ROOF,_m(0,8.17,0,0,Math.PI/4,0));
-    put(CONEG(3.78,0.26,4),GOLDT,_m(0,7.66,0,0,Math.PI/4,0));
-    put(CYLG(0.15,0.15,0.90,6),GOLDT,_m(0,9.15,0));                        // the finial
-    put(CONEG(0.30,0.52,6),GOLDT,_m(0,9.75,0));
+      put(BOXG(0.90,0.78,0.16),SLOT,_m(Math.sin(a2)*2.46,6.85,Math.cos(a2)*2.46,0,a2,0));}
+    // 4.30 and not 3.62: yawed, a 4-gon's flats sit at r/sqrt(2), so 3.62 gave 2.56 against a drum
+    // of 2.58 — the lantern roof had NEGATIVE overhang and the drum poked out through its own eave.
+    put(HIP4(4.30,1.45),ROOF,_m(0,8.075,0));
+    put(HIP4(4.45,0.26),GOLDT,_m(0,7.48,0));
+    put(CYLG(0.15,0.15,0.90,6),GOLDT,_m(0,9.10,0));                        // the finial
+    put(CONEG(0.30,0.52,6),GOLDT,_m(0,9.70,0));
 
     // ---- four stalls, OUTSIDE the roofline where they can actually be seen ----
     // The canopy reaches z +-4.5, so these stand at +-5.9 in the open. Two face the road, which is
@@ -2218,13 +2268,21 @@ function _appendGeo(mesh,parts){
     // on both, and gets pushed diagonally, which is right — that is where the corner camps are.
     let px=gx+(Math.abs(gx)>=X-1?Math.sign(gx)*OUT:0);
     let pz=gz+(Math.abs(gz)>=Z-1?Math.sign(gz)*OUT:0);
-    let guard=0;
-    while(nearCamp(px,pz,4)&&guard++<6){px*=1.06; pz*=1.06;} // never stand a mountain in a camp's hollow
     const j=hash(gx,gz,1);
     // taller than the ring it stands behind (33–48 against 22–36): it is a third further away and has
     // to clear both the ring's own peaks and the terrain edge to show at all
     const h=33+j*15, r=15+hash(gx,gz,2)*9;
+    // v131.32 THE JITTER MOVES AHEAD OF THE PUSH, AND THE PAD BECOMES THE REAL SKIRT.
+    // This read `while(nearCamp(px,pz,4))` and then jittered by up to 6 AFTERWARDS, so the push
+    // cleared the camp and the jitter walked it back in. And a pad of 4 was never the right number:
+    // this range's flare is 1.9 and r reaches 24, so its skirt is r*2.9 — up to 69.6 on the ground,
+    // seventeen times the pad it was tested against.
+    // Free to fix, unlike the three rings above: this runs BELOW the handback and draws from hash(),
+    // which is positional rather than sequential, so nothing here is on the wire.
     px+=(hash(gx,gz,3)-0.5)*12; pz+=(hash(gx,gz,4)-0.5)*12;
+    let guard=0;
+    while(nearCamp(px,pz,r*2.9)&&guard++<14){px*=1.05; pz*=1.05;} // never stand a mountain in a hollow
+    if(nearCamp(px,pz,r*2.9))continue;   // …and if it will not clear, the pass simply stays open
     parts.push({geo:flare(new THREE.ConeGeometry(r,h,8,3),h,1.9),
                 matrix:M(px,h*0.42,pz,hash(gx,gz,5)*Math.PI),color:facet});
     // a cap only on the tall ones, same inscribing arithmetic as the ring (base 0.58h sits inside

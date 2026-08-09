@@ -334,7 +334,20 @@ function updateUnitCommon(u,dt){
   if(!u.garrison){
     // v131.24 …unless the player is on a wall walkway, which is a floor the terrain knows nothing
     // about. Same exemption shape the garrison already uses, and player-only by the owner's scoping.
-    const _wf=((u.isPlayer||u.remote)&&typeof wallFloorAt==="function")?wallFloorAt(u.root.position.x,u.root.position.z):null;
+    // >>> v131.34 YOU HAVE TO BE ABLE TO REACH A SURFACE TO STAND ON IT. <<<
+    // John: "the ramps on the walls dont even have to be used, you can kind of just walk up to wall
+    // and pop up on to the top of it which is kind of janky."
+    // The COLLIDER has a step tolerance -- 05-combat.js only waives the wall for a body already
+    // within 1.2 of the deck -- and this line, which is what actually MOVES the body, had none. It
+    // took whatever wallFloorAt returned, unconditionally. wallFloorAt returns the deck height 4.0
+    // across the deck's whole XZ footprint, and that footprint runs from z -3.4 to +1.0 while the
+    // wall's collision box is only +-1.30 -- so there is a two-unit strip behind every curtain that
+    // is inside the deck and outside the blocker. Walk into it at ground level and this line
+    // teleported you from 0.14 to 4.00 in one frame. That is the pop, and the ramp was decorative.
+    // Same test as the collider, in the same words, so the two cannot drift: a floor you could not
+    // step onto is not a floor, and you fall through to the terrain instead.
+    let _wf=((u.isPlayer||u.remote)&&typeof wallFloorAt==="function")?wallFloorAt(u.root.position.x,u.root.position.z):null;
+    if(_wf!==null&&!(u.root.position.y>_wf-1.2))_wf=null;   // 05-combat.js:735, verbatim
     u.root.position.y=(_wf!==null)?_wf:terrainHeight(u.root.position.x,u.root.position.z); // hug the hills
   }
   if(u.bar&&!u.isPlayer){ // bars earn their place: only the wounded show one

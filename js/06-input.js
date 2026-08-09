@@ -126,6 +126,30 @@ function devAgeUp(team){
   if(!nxt){msg("Dev: "+TEAMNAME[team]+" is already in the final age.");return;}
   ageUp(team); // v107: ageUp no longer pays (the cost rides startAgeResearch) — the dev cheat stays instant & free
 }
+// v131.33 F2 — AUTO AGE-UP, BOTH TEAMS. A toggle rather than a single step, because getting to
+// Enlightenment to look at one building used to be five presses of F2 and five of F3.
+// BOTH SIDES ON PURPOSE: half of what you are testing at a late age is what the enemy fields and
+// what his units look like, and an Enlightenment player against Stone Age bots tests neither.
+// 3 SECONDS AND NOT INSTANTLY: ageUp() queues a restyle wave that drainVisualQueue works off across
+// several frames, so five age-ups in one frame would be measuring the queue, not the ages.
+// The tick re-checks devMode / gameOver / inMenu every time rather than only at the press — a cheat
+// that keeps running after it has been switched off is worse than no cheat at all.
+let devAutoAge=null;
+function devAutoAgeToggle(){
+  if(devAutoAge){clearInterval(devAutoAge);devAutoAge=null;msg("Dev: auto age-up OFF.","gold");return;}
+  const step=()=>{
+    if(!devMode||(typeof gameOver!=="undefined"&&gameOver)||(typeof inMenu!=="undefined"&&inMenu)){
+      clearInterval(devAutoAge); devAutoAge=null; return;
+    }
+    let moved=false;
+    for(const t of [BLUE,RED]){ if(AGES[teamAge[t]+1]){ ageUp(t); moved=true; } }
+    if(!moved){ clearInterval(devAutoAge); devAutoAge=null;
+      msg("Dev: auto age-up finished — both teams are in the final age.","gold"); }
+  };
+  devAutoAge=setInterval(step,3000);
+  msg("Dev: auto age-up ON — both teams advance one age every 3s. F2 again to stop.","gold");
+  step();
+}
 addEventListener("keydown",e=>{
   const k=e.key.toLowerCase();
   keys[k]=true;
@@ -147,14 +171,19 @@ addEventListener("keydown",e=>{
   if(gameOver)return;
   if(k==="\`"||k==="~"){
     devMode=!devMode;
-    msg(devMode?"🛠 DEV MODE ON — F1 +resources · F2 age BLUE · F3 age RED · F4 heal · F5 force raids · F6 reveal fog"
+    msg(devMode?"🛠 DEV MODE ON — F1 +1000 all · F2 AUTO age-up · F3 age RED · F4 heal · F5 force raids · F6 reveal fog · F7 age BLUE"
                :"Dev mode off.","gold");
+    if(!devMode&&devAutoAge){clearInterval(devAutoAge);devAutoAge=null;}   // leaving dev mode stops it
     return;
   }
   if(devMode){
-    if(k==="f1"){e.preventDefault();stock[BLUE].food+=1000;stock[BLUE].gold+=1000;updateResHud();
-      msg("Dev: +1000 food, +1000 gold.","blue");return;}
-    if(k==="f2"){e.preventDefault();devAgeUp(BLUE);return;}
+    // v131.33 ALL OF THEM. stock is {food, gold, stone, wood} and this named two, so the two you
+    // actually run dry on while testing buildings — wood and stone — were the two it withheld.
+    // Looped over the record's own keys, so a fifth resource is covered the day it is added.
+    if(k==="f1"){e.preventDefault();
+      const got=[]; for(const r in stock[BLUE]){stock[BLUE][r]+=1000;got.push(r);}
+      updateResHud(); msg("Dev: +1000 "+got.join(", +1000 ")+".","blue");return;}
+    if(k==="f2"){e.preventDefault();devAutoAgeToggle();return;}
     if(k==="f3"){e.preventDefault();devAgeUp(RED);return;}
     if(k==="f4"){e.preventDefault();if(player.alive){player.hp=player.maxHp;setBar(player.bar,1);updatePlayerHud();}
       msg("Dev: healed.","blue");return;}
@@ -162,6 +191,9 @@ addEventListener("keydown",e=>{
       msg("Dev: raid timers zeroed — armies march.","warn");return;}
     if(k==="f6"){e.preventDefault();FOW_REVEAL=!FOW_REVEAL;
       msg("Dev: fog of war "+(FOW_REVEAL?"REVEALED":"restored")+".","gold");return;}
+    // v131.33 the single-step BLUE age-up that F2 used to be — kept, so "age one side and look at
+    // the difference" is still two keys away
+    if(k==="f7"){e.preventDefault();devAgeUp(BLUE);return;}
   }
   if(k==="v"&&!menuOpen&&!placing){
     spawnPref=spawnPref==="tc"?"castle":"tc";
