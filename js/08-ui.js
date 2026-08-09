@@ -122,7 +122,9 @@ function drawMinimap(){
       mm.fillStyle="#4e3a26";mm.beginPath();mm.arc(px(st.x),pz(st.z),2.4,0,7);mm.fill();
     }else{
       mm.fillStyle="#4a3a26";
-      mm.beginPath();mm.arc(px(st.x),pz(st.z),3.4,0,7);mm.fill();
+      // v132.7 SCALED, because the camps are no longer all one size. A flat 3.4 drew a 16-radius
+      // interior clearing as though it claimed as much ground as a 26-radius border hollow.
+      mm.beginPath();mm.arc(px(st.x),pz(st.z),3.4*((st.r||CAMP_R)/CAMP_R),0,7);mm.fill();
     }
     if(st.chest){mm.fillStyle=st.chestKind==="food"?"#d23c2f":"#ffd24a";
       mm.fillRect(px(st.x)-(st.boss?5:2),pz(st.z)-2,4,4);}

@@ -14,7 +14,7 @@ const hints=[
   [70, "Six ages: Stone → Bronze → Iron → Classical → Medieval → ENLIGHTENMENT. Reach the last one first and crush them."],
   [64, "A TOWN BOARD stands beside your Town Center — press E there for a QUEST. Each one completed: +1 LEVEL and +1 XP (the hardest pay 2)."],
   [200,"Iron age: the BLACKSMITH (100 wood). Press E there: THREE random buffs on the table — choose ONE per XP (max ×3 of each). DEATH wipes level, XP and buffs!"],
-  [85, "WILD CAMPS lurk in nooks beyond the map's edge — wolves hoard FOOD, barbarians hoard GOLD. Their chests can be STOLEN. Bring 2-3 allies; the packs tear loners apart."],
+  [85, "WILD CAMPS: six lurk in nooks beyond the map's edge, THREE STAND IN THE OPEN FIELD — wolves hoard FOOD, barbarians hoard GOLD. Their chests can be STOLEN. Bring 2-3 allies; the packs tear loners apart."],
   [110,"A wrecked longship rots on the SOUTHERN SHORE. At 15:00 a VIKING RAID lands there — break it with a WAR PARTY and twin chests of 500 food and 500 gold are yours… if nobody steals them first."],
   [95, "The wheel: SPEARS alone stop the horse — cavalry tramples swords, archers and siege. Swords raze buildings and dismantle war engines; arrows bounce off them. Choose your counter."],
   [118,"Melee: hold RMB to block — tap it RIGHT as a blow lands to PARRY and stagger them."],

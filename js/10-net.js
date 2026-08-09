@@ -7,7 +7,21 @@
 
 var NET={
   mode:"solo",          // "solo" | "host" | "guest"
-  PROTO:26,             // bumped whenever the wire format changes OR the generated world does.
+  // v132.0 26 -> 27: the map rework. MAP.x/MAP.z changed, so every node moved. It also paid off the
+  // 696-draw stream debt v131.29 had to carry purely to keep 26 interoperating.
+  // v132.2 27 -> 28. v132.0's plan was ONE bump at the head of the branch, with every later stage
+  // then free to move the world. That plan only holds while nothing has SHIPPED under the old
+  // number, and 27 is committed. MEASURED with tools/nodehash.js rather than reasoned about:
+  //     working tree : 893 nodes (837 wood)  all=a850b8fdec988cda  res=2ac1ea6adf9f4553
+  //     v132.0       : 880 nodes (824 wood)  all=34d24d58499fbac7  res=2ac1ea6adf9f4553
+  // — the re-sited bazaars had already moved the tree stream before the Viking road added a line,
+  // and its clearance moves it again. res holding while all moves is the signature of a change
+  // downstream of placeNodes: the resource indices are the same, the trees are not.
+  // v132.7 28 -> 29: three interior creep camps. Fifteen more creep bodies are minted, so the unit
+  // count and every id after them changes, and the camps' tree clearance moves the node stream.
+  // The three are APPENDED to CREEP_SITES so indices 0-5 and the existing ids hold — but a peer on
+  // 28 has six camps and 15 fewer units, which is a desync, not a degraded experience.
+  PROTO:29,             // bumped whenever the wire format changes OR the generated world does.
                         // v127: 25 → 26. The envelope (stock0/stock1/carry/ares) went from
                         // "every snapshot" to "when it changes, plus the 1Hz keyframe". A v126
                         // guest reads s.stock0.f with no guard, so an absent field would write

@@ -690,6 +690,14 @@ function validFor(type,x,z,team){
   }
   if(Math.abs(x)>MAP.x-3||Math.abs(z)>MAP.z-3)return false;
   const r=BLD[type].r;
+  // v132.7 THE WILDS ARE NOT A BUILDING PLOT. This never came up because all six camps were border
+  // pockets and the line above already refuses them — they are past |x| > MAP.x-3. The three
+  // interior camps stand on ordinary buildable ground, and creeps target UNITS, never buildings,
+  // and do not steer around them: a house dropped in a camp would be un-attackable AND un-blockable
+  // and would settle the fight for the treasure before it started. Placement only — the footprint
+  // is not otherwise special, and nothing stops you building right up against the rim.
+  if(typeof CREEP_SITES!=="undefined")
+    for(const C of CREEP_SITES)if(dist2(x,z,C.x,C.z)<Math.pow(C.r+r+2,2))return false;
   // v88: NOTHING may bury a Town Board — players AND the AI validate through here,
   // so the quest board keeps a clear yard on every side (it vanished under an
   // Iron-age building in John's game; boards aren't in `buildings`, so the

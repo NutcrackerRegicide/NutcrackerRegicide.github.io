@@ -47,6 +47,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "laneTarget,laneFor,assignLane,LANE_Z,LANE_TURNIN,LANE_EDGE,HOLD_TOUR,HOLD_QUIET,HOLD_WATCH,bandHoldPoint,OXSCALE,"+
   "buildBodyFor,fireAimedShot,FARM_PASSIVE,setAiming:v=>{aiming=v;},"+
   "makeTree,depleteNode,clearFootprint,TREE_SCALE,TREE_GEOS,STUMP_GEOS,TREE_STANDS,TREE_CLEAR_BASE,TREE_CLEAR_ROAD,roadPoint,"+
+  "vikingPoint,BAZAAR_SITES,TREE_CLEAR_VIKING,CREEP_SITES,CREEP_R_INNER,"+
   "setHideD,getHideD:()=>HIDE_D,getMouseLocked:()=>mouseLocked,"+
   // v124: the draw, the rail's gating predicates, the analog move vector and the epithet roller
   "DRAW_CLASSES,DRAW_FULL,drawScale,isDrawClass,drawLevel,tickDraw,drawFill,fireAimedFor,"+
@@ -186,20 +187,35 @@ function dist2h(ax,az,bx,bz){const dx=ax-bx,dz=az-bz;return dx*dx+dz*dz;}
 function warTicks(n){ // tick n frames while refusing to let a stray regicide disarm the harness
   for(let i=0;i<n;i++){global.__G.setGameOver(false);tick();}
 }
-check("100 army units + 36 camp creeps spawned (5 packs of 5 + the shore's 11)",
-  units.filter(u=>u.team<2).length===100&&units.filter(u=>u.team===2).length===36);
+// v132.7 51, not 36: three interior camps at CREEP_N=5 apiece. Written as the ARITHMETIC rather
+// than as the number, so the day a tenth camp appears this check moves with it instead of failing.
+check("100 army units + "+(units.filter(u=>u.team===2).length)+" camp creeps (5 a camp + the shore's 11)",
+  units.filter(u=>u.team<2).length===100&&
+  units.filter(u=>u.team===2).length===
+    (global.__G.CREEP_SITES.filter(c=>!c.boss).length*5)+11);
 check("teams start lean (150f/50g/0s)",stock[0].food<=200&&stock[0].gold<=100&&(stock[0].stone||0)===0);
 check("2 town centers",buildings.filter(b=>b.type==="towncenter").length===2);
 check("neutral bazaars placed (3)",typeof neutralMarkets!=="undefined"&&neutralMarkets.length===3);
-// v78: every bazaar sits ON the Kings Road, and the set is mirror-balanced between the thrones
+// v78/v132.1: the bazaars sit on TWO roads now — the Grand on the Kings Road, one per team on that
+// team's branch of the Viking road — and the set is still mirror-balanced between the thrones.
+// WHAT THIS USED TO BE was a hand-copied roadZ(t): the King's Road's spine, typed out a second time
+// in a second file. That is the drift tools/mapconst.js exists to catch, and it went stale here the
+// moment two of the three bazaars left the road. Read the definitions the world is BUILT from.
 {
-  const TP=global.__G.TCPOS;
-  const roadZ=t=>Math.sin(t*Math.PI)*16+Math.sin(t*Math.PI*3)*4;
-  const onRoad=neutralMarkets.every(m=>{
-    const t=(m.x-TP[0][0])/(TP[1][0]-TP[0][0]);
-    return t>0.05&&t<0.95&&Math.abs(m.z-(roadZ(t)+3.2))<0.01;
-  });
-  check("all three bazaars sit along the Kings Road",onRoad);
+  const TP=global.__G.TCPOS, SITES=global.__G.BAZAAR_SITES;
+  const near=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z)<0.01;
+  check("every bazaar stands where BAZAAR_SITES says it does",
+    SITES.length===3&&SITES.every(Sq=>{const q=Sq.p();return neutralMarkets.some(m=>near(m,q));}));
+  {
+    const g=SITES.find(Sq=>Sq.grand), p=global.__G.roadPoint(0.5);
+    check("the Grand Bazaar is the one on the Kings Road",
+      !!g&&near(g.p(),{x:p.x,z:p.z+3.2}));
+  }
+  {
+    const vk=SITES.filter(Sq=>Sq.team!==undefined);
+    check("each team bazaar sits on its own branch of the Viking road",
+      vk.length===2&&vk.every(Sq=>near(Sq.p(),global.__G.vikingPoint(Sq.team,0.42))));
+  }
   const dTo=(tc)=>neutralMarkets.map(m=>Math.hypot(m.x-tc[0],m.z-tc[1])).sort((a,b)=>a-b);
   const d0=dTo(TP[0]), d1=dTo(TP[1]);
   check("bazaar distances mirror between the thrones ("+d0.map(d=>d.toFixed(1)).join("/")+")",
@@ -390,22 +406,99 @@ check("rBlock: the physical footprint is its own field, and falls back to r wher
 // of every type, DRIVE A REAL UNIT INTO IT with the game's own moveUnit, and assert that from where
 // it is actually stopped it can still swing a hammer, land a sword, and stand where a bot builder
 // is told to stand. This is the check that would have caught all three.
+// v131.2 — AND THIS CHECK MUST READ THE SHIPPED EXPRESSION, NOT RE-TYPE IT.
+// The first draft of the block below hand-computed `bSurf(d)+2.6` and `bSurf(d)+0.9`, i.e. it
+// asserted the formula I MEANT to ship. The game shipped `d.r+2.6` and `d.r+0.9`. So this test sat
+// green through an entire release in which age-up, the class menu, the forge, the trader's sale,
+// every castle deposit and four of the six buildable types were unreachable, and the owner found
+// all of it by playing. A test that re-implements the thing it is testing cannot fail with it.
+// So: LIFT THE EXPRESSION OUT OF THE SOURCE FILE and evaluate that. If the source drifts, this
+// drifts with it; if the expression can no longer be found, the check FAILS rather than passing
+// quietly, because a reach test that cannot locate its own subject has stopped being a test.
+// Read from `after` up to `close` at paren depth 0 — so bSurf(b.def)+2.6 survives intact and the
+// nested ) does not end the expression early.
+function liftExpr(file,anchor,close){
+  const src=fs.readFileSync(path.join(__dirname,"..","js",file),"utf8");
+  const at=src.indexOf(anchor); if(at<0)return null;
+  let depth=0;
+  for(let i=at+anchor.length;i<src.length;i++){
+    const c=src[i];
+    if(c==="(")depth++;
+    else if(c===")"){if(depth===0)return src.slice(at+anchor.length,i).trim(); depth--;}
+    else if(c===close&&depth===0)return src.slice(at+anchor.length,i).trim();
+    else if(c==="\n")return null;                 // never run past the line we anchored on
+  }
+  return null;
+}
 {
-  const bad=[], G=global.__G, bS=G.bSurf;
+  const bad=[], missing=[], G=global.__G;
+  // the hammer (06-input.js:338) and the bot builder's stand point (07-ai.js:930), as shipped
+  const hammerSrc=liftExpr("06-input.js","const reach=",";");
+  const standSrc =liftExpr("07-ai.js","const standX=s.x+rdx/rl*(",",");
+  if(!hammerSrc)missing.push("06-input.js build reach");
+  if(!standSrc) missing.push("07-ai.js builder stand point");
+  const hammerOf=hammerSrc?new Function("b","bSurf","BLD","return "+hammerSrc):null;
+  const standOf =standSrc ?new Function("s","bSurf","BLD","return "+standSrc) :null;
   for(const type of Object.keys(BLD)){
     const d=BLD[type];
     if(d.wall||d.flat)continue;
     const b=G.makeBuilding(0,type,-150,-105,true);
     const u=G.makeUnit(0,"villager",-110,-105,{name:"Reacher"});
     for(let i=0;i<600;i++)G.moveUnit(u,-1,0,1/30);      // walk straight at it until the wall stops us
-    const stop=Math.hypot(u.root.position.x-b.x,u.root.position.z-b.z), surf=bS(d);
-    if(stop>surf+2.6)bad.push(type+" hammer "+stop.toFixed(1)+">"+(surf+2.6).toFixed(1));  // 06-input.js:338
+    const stop=Math.hypot(u.root.position.x-b.x,u.root.position.z-b.z), surf=G.bSurf(d);
+    if(hammerOf){const reach=hammerOf({def:d},G.bSurf,BLD);
+      // strict `<`, evaluated the way the game evaluates it — a guard tower once failed this by 9e-16
+      if(!(stop*stop<reach*reach))bad.push(type+" hammer "+stop.toFixed(3)+" !< "+reach.toFixed(3));}
     if(stop-surf>=CLS.villager.rng+0.6)bad.push(type+" melee gap "+(stop-surf).toFixed(1)); // 05-combat.js:502
-    if(stop-(surf+0.9)>1.3)bad.push(type+" bot-stand "+(stop-surf-0.9).toFixed(1)+">1.3");  // 07-ai.js:930
+    if(standOf){const stand=standOf({def:d},G.bSurf,BLD);
+      if(stop-stand>1.3)bad.push(type+" bot-stand "+(stop-stand).toFixed(3)+">1.3");}        // 07-ai.js:930
     b.alive=false; u.alive=false;
   }
+  check("the reach checks found the expressions they test ("+
+        (missing.length?"MISSING: "+missing.join(" · "):"build reach and builder's stand both lifted from source")+")",
+        missing.length===0);
   check("a body stopped by the wall can still reach the building ("+
         (bad.length?bad.join(" · "):"hammer, sword and builder's stand all clear")+")",bad.length===0);
+}
+// AND THE GATES THAT AIM AT A POINT OFF THE CENTRE, which the drive above cannot see: a hauler
+// banking a load, a citizen arming up, and the player advancing the age. Each walks to a point
+// `off` from the centre and fires within `stop`, so a body held on the ring at rBlock+0.7 can only
+// ever get `ring - |off|` close. These are pure arithmetic and they are where the v131 split
+// actually broke: the hauler needed 9 and the best reachable was 9.698, which is why 48 villagers
+// stood in an arc round the town centre and nothing was ever banked.
+{
+  const G=global.__G, bad=[], missing=[];
+  // Lifted from source for the same reason as the drive above: the FIRST version of this very check
+  // called G.bStand(...) itself and therefore passed clean against the broken tree, because it was
+  // asserting the formula rather than the shipped literal. Read what shipped.
+  const lift=(what,file,anchor,close,args)=>{
+    const e=liftExpr(file,anchor,close);
+    if(!e){missing.push(what);return null;}
+    return {expr:e,fn:new Function(...args,"bSurf","bStand","BLD","Math","return "+e)};
+  };
+  const haul =lift("hauler drop-off stop","07-ai.js","if(moveToward(u,dp.x+2.5,dp.z+2,dt,",")",["dp"]);
+  const arm  =lift("citizen arm-up stop", "07-ai.js","if(moveToward(u,bar.x+3,bar.z+3,dt,",")",["bar"]);
+  const ageUp=lift("age-up radius","06-input.js",
+    "dist2(player.root.position.x,player.root.position.z,tc.x,tc.z)>",")",["tc"]);
+  const gate=(name,lifted,bind,off,squared)=>{
+    if(!lifted)return;
+    const def=bind.def, ring=def.rBlock+0.7, best=ring-off;
+    const stop=lifted.fn(bind,G.bSurf,G.bStand,BLD,Math);
+    const ok=squared?best*best<=stop:best<=stop;
+    if(!ok)bad.push(name+" needs <="+(squared?Math.sqrt(stop):stop).toFixed(3)+
+                    ", best reachable "+best.toFixed(3)+"  ["+lifted.expr+"]");
+  };
+  const H=Math.hypot(2.5,2);                                   // 07-ai.js:969's drop point offset
+  gate("hauler banks at a town centre",haul,{def:BLD.towncenter,type:"towncenter"}, H,false);
+  gate("hauler banks at a castle",     haul,{def:BLD.castle,     type:"castle"},     H,false);
+  gate("hauler banks at a storage pit",haul,{def:BLD.storage_pit,type:"storage_pit"},H,false);
+  gate("citizen arms up at a barracks",arm, {def:BLD.barracks},   Math.hypot(3,3),false); // 07-ai.js:917
+  gate("player advances the age",      ageUp,{def:BLD.towncenter},0,true);                // 06-input.js:981
+  check("the off-centre gates found the expressions they test ("+
+        (missing.length?"MISSING: "+missing.join(" · "):"hauler, arm-up and age-up all lifted from source")+")",
+        missing.length===0);
+  check("the gates that aim off-centre are physically satisfiable ("+
+        (bad.length?bad.join(" · "):"hauler, citizen and age-up all reachable")+")",bad.length===0);
 }
 check("scales: farm 0.6375, pit fills its footprint at 0.95, watch tower 0.75",
   global.__G.BSCALE.farm===0.6375&&global.__G.BSCALE.storage_pit===0.95&&global.__G.BSCALE.watch_tower===0.75);
@@ -1074,10 +1167,29 @@ const NET=global.__G.NET;
 global.__G.setGameOver(false); // an accidental regicide in a prior staged fight must not mute this section
 {
   const G=global.__G, CS=G.campStates, MAPh=G.MAP, CR=G.CAMP_R;
-  check("six creep camps ring the world (normal 5 bodies, the shore 11)",
-    CS.length===6&&CS.filter(s=>!s.boss).every(s=>s.creeps.length===5)&&CS.find(s=>s.boss).creeps.length===11);
-  check("camps bump OUT past the border; 4 corners + 2 long-edge midpoints",
-    CS.every(s=>Math.abs(s.x)>MAPh.x||Math.abs(s.z)>MAPh.z)&&CS.filter(s=>s.x===0).length===2);
+  // v132.7 THE SPLIT, ASSERTED AS TWO FACTS INSTEAD OF ONE STALE ONE. What used to be here —
+  // "every camp is past the border" — was asked of campStates, which is now every camp creeps live
+  // in, and three of those stand in the open field by design. The invariant that still has to hold,
+  // and that nothing else checks, is that CAMPS did not absorb them: it is the array
+  // inCampGround() punches holes in the invisible wall from and nearCamp() keeps the mountain ring
+  // out of, so an interior camp leaking in would push peaks away from map centre where there are
+  // none and make walkable() true on ground that already was. Both failures are silent.
+  check(CS.length+" creep camps: the border pockets plus the interior clearings (5 bodies each, the shore 11)",
+    CS.length===G.CREEP_SITES.length&&
+    CS.filter(s=>!s.boss).every(s=>s.creeps.length===5)&&CS.find(s=>s.boss).creeps.length===11);
+  check("CAMPS is STILL nothing but border pockets — 4 corners + 2 long-edge midpoints",
+    G.CREEP_SITES.filter(c=>!c.inner).length===6&&
+    G.CREEP_SITES.filter(c=>!c.inner).every(c=>Math.abs(c.x)>MAPh.x||Math.abs(c.z)>MAPh.z)&&
+    G.CREEP_SITES.filter(c=>!c.inner&&c.x===0).length===2);
+  check("…and the interior camps are all INSIDE the map, mirrored about x=0",
+    G.CREEP_SITES.filter(c=>c.inner).length===3&&
+    G.CREEP_SITES.filter(c=>c.inner).every(c=>Math.abs(c.x)+c.r<MAPh.x&&Math.abs(c.z)+c.r<MAPh.z)&&
+    G.CREEP_SITES.filter(c=>c.inner).every(c=>
+      c.x===0||G.CREEP_SITES.some(o=>o.inner&&o.x===-c.x&&o.z===c.z)));
+  // the pockets and the clearings are different SIZES, and the leash and aggro both derive from it
+  check("an interior camp is a clearing ("+G.CREEP_R_INNER+"), not a hollow ("+CR+")",
+    G.CREEP_R_INNER<CR&&CS.filter((s,i)=>G.CREEP_SITES[i].inner).every(s=>s.r===G.CREEP_R_INNER&&
+      Math.abs(s.aggro-(G.CREEP_R_INNER-2.5))<1e-9));
   // campaign attrition is real: passing armies can thin a pack, and a wiped camp sits `waiting`.
   // The strict 4-5 roll is asserted on a FRESH wave below, where it's deterministic.
   check("each NORMAL camp holds a sane pack (≤5 alive; attrition & wipe cycles allowed)",
@@ -2575,7 +2687,10 @@ global.__G.setGameOver(false);
     NET.mode="host";
     const s=NET.packSnap();
     check("v126 wire: every snapshot carries `ht`, the host's own monotonic clock",typeof s.ht==="number");
-    check("v127 wire: PROTO is 26 — the envelope delta OMITS fields, which an older peer misreads",NET.PROTO===26);
+    // v132.0 26 -> 27 with the map rework: MAP.x/MAP.z moved, so every node moved, and the netcode
+  // indexes nodes positionally. The assertion is that the number MOVED WITH THE WORLD, which is the
+  // thing a peer actually needs — a stale literal here is how two builds shake hands and disagree.
+  check("v132 wire: PROTO is 29 — the envelope delta OMITS fields, which an older peer misreads",NET.PROTO===29);
     // the version stamp is READ from the page, not frozen in the recorder. Every log John
     // field-tested on v125.1 said ver:"v98", because that literal was written in v98 and never
     // touched again — a flight recorder you have to take somebody's word about.
@@ -2979,8 +3094,8 @@ global.__G.setGameOver(false);
   const w=G.NET.packWorld(1);
   let snapAres=null;
   try{G.NET._lastRow=null;const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
-  check("v115/v127 net: PROTO 26 (the envelope delta omits fields) and `ares` still rides both payloads",
-    G.NET.PROTO===26&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
+  check("v115/v132 net: PROTO 29 (the envelope delta omits fields) and `ares` still rides both payloads",
+    G.NET.PROTO===29&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
     Array.isArray(snapAres)&&Math.abs(snapAres[0]-42.5)<0.06);
   G.ageResT[0]=0;
 

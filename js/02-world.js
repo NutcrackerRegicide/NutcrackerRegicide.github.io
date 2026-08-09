@@ -205,7 +205,13 @@ Math.random=mulberry32(0x20260710);
 /* REGICIDE PVP — 02-world.js */
 // ---------- ground & scenery ----------
 (function buildTerrain(){
-  const geo=new THREE.PlaneGeometry(MAP.x*2+110,MAP.z*2+200,150,120); // v82: reaches under the deepened camp hollows + the Viking bay
+  // v132.0 155x135, NOT 150x120. The lattice is a COUNT and the plane is MAP-relative, so the
+  // resize stretched every quad: 3.56 x 3.75 world units became 3.67 x 4.20, i.e. 12% coarser
+  // terrain facets in z for free. 155x135 puts them back at 3.55 x 3.73. One mesh, no extra draw
+  // calls, +16% terrain vertices.
+  // THESE TWO NUMBERS ARE ALSO IN groundY() AND MUST MATCH IT. That is not a convention, it is the
+  // apron-clipping defect of v131.33 — tools/mapconst.js fails if they ever disagree again.
+  const geo=new THREE.PlaneGeometry(MAP.x*2+110,MAP.z*2+200,155,135); // v82: reaches under the deepened camp hollows + the Viking bay
   const pa=geo.attributes.position;
   for(let i=0;i<pa.count;i++){
     // plane is XY; after rotation.x=-90°, local +z becomes world up and local y becomes -world z
@@ -433,7 +439,7 @@ function makeNode(type,x,z,amount){
 // sees. THE FOUR NUMBERS BELOW MUST MATCH buildTerrain's PlaneGeometry at the head of this file.
 // If that line moves and this one does not, the symptom is grass growing through the road near
 // the bazaars — which is exactly what this was.
-const _TW=MAP.x*2+110, _TH=MAP.z*2+200, _TSX=150, _TSZ=120;
+const _TW=MAP.x*2+110, _TH=MAP.z*2+200, _TSX=155, _TSZ=135;   // v132.0 — MUST match buildTerrain
 const _QX=_TW/_TSX, _QZ=_TH/_TSZ;
 const groundY=(x,z)=>{
   const gx=Math.min(_TSX-1e-6,Math.max(0,(x+_TW*0.5)/_QX));
@@ -448,18 +454,10 @@ const groundY=(x,z)=>{
   return (fx+fz<=1) ? ha+(hd-ha)*fx+(hb-ha)*fz
                     : hc+(hb-hc)*(1-fx)+(hd-hc)*(1-fz);
 };
-// ---------- the Kings Road's course (shared by the road decals AND the bazaars) ----------
-// Mirror-symmetric about x=0: z(t)===z(1-t), so anything placed at t and 1-t is
-// EXACTLY as far from one throne as from the other.
-function roadPoint(t){
-  const A=TCPOS[0],B=TCPOS[1];
-  return {x:A[0]+(B[0]-A[0])*t,
-          z:A[1]+(B[1]-A[1])*t+Math.sin(t*Math.PI)*16+Math.sin(t*Math.PI*3)*4};
-}
 // ---------- neutral trade bazaars ----------
-// v78: all three sit ALONG the Kings Road — a near stall for each team and the center
-// prize — nudged just off the ruts so the traffic rolls past the stalls.
-const BAZAAR_T=[0.28,0.5,0.72]; // road fractions: mirrored pair + dead center (the balance dial)
+// v132.1 roadPoint(), vikingPoint() and BAZAAR_SITES moved to 00-data.js, ahead of 01-engine, so
+// terrainHeight() can derive its plaza flats from the same list this places from. See the note
+// there. BAZAAR_T is gone: the sites are no longer all fractions of one road.
 // v131.29 THE BAZAARS ARE PLACED HERE AND BUILT BELOW THE HANDBACK, and the split is not tidiness.
 // r128 mints a uuid in the constructor of BufferGeometry, Material AND Object3D, and generateUUID
 // draws FOUR Math.random()s — measured in this build by tools/streamdebt.js, not assumed. So
@@ -470,28 +468,22 @@ const BAZAAR_T=[0.28,0.5,0.72]; // road fractions: mirrored pair + dead center (
 // Measured the hard way: merging the three bazaars in place took the world from 736 nodes to 661.
 // Same seed, different forest.
 const NEUTRAL_MARKET_SITES=[];
-// THE DEBT. The old builder constructed 1 Group + 19 Meshes + 19 geometries + 19 materials per
-// bazaar — 232 draws, 696 across the three — and every one of them was part of the sequence. The
-// geometry now lives below the handback where it is free, so those draws have to be spent anyway or
-// the world moves. tools/streamdebt.js measures the number by reconstructing the old builder part
-// for part; tools/nodehash.js is the guard and must still read
-//     all=a0e4532bfa20051c   res=2ac1ea6adf9f4553
-// THIS IS A DEBT, NOT A DESIGN. It exists only to keep PROTO 26 interoperating across a change to a
-// prop nobody can attack, and it should be deleted the next time PROTO bumps for a reason of its own.
-const BAZAAR_STREAM_DEBT=696;
+// v132.1 THE STREAM DEBT IS GONE. v131.29 spent 696 Math.random()s here on nothing — reproducing
+// the uuid budget of the bazaar meshes it had just merged away — purely so PROTO 26 kept
+// interoperating across a change to a prop nobody can attack. Its own comment said to delete it the
+// next time PROTO bumped for a reason of its own. This is that time.
 (function placeNeutralMarkets(){
-  for(const t of BAZAAR_T){
-    const rp=roadPoint(t), x=rp.x, z=rp.z+3.2;
-    NEUTRAL_MARKET_SITES.push([x,z]);
+  for(const B of BAZAAR_SITES){
+    const q=B.p(), x=q.x, z=q.z;
+    NEUTRAL_MARKET_SITES.push({x,z,scale:B.scale,grand:!!B.grand});
     // v131.1 …AND THE THREE BAZAARS WERE THE LAST STATIC THING ON THE MAP STANDING ON CLEAN LAWN.
     // The foot scales with the plinth: 5.3 was 1.14x a 4.65 mean radius, and the new deck is 7.4, so
     // 8.4 keeps the same RIM — a tight band at the foot plus the down-sun tail — rather than the
     // 1.8x a small shrub wants, which on a disc this size would paint a stain across the meadow.
     // Numbers into an array carry no uuid, so this stays inside the window for free (§G.4).
-    PROP_FEET.push([x,z,8.4]);
+    PROP_FEET.push([x,z,8.4*B.scale]);
     neutralMarkets.push({x,z});
   }
-  for(let i=0;i<BAZAAR_STREAM_DEBT;i++)Math.random();   // see above: pay what the old meshes cost
 })();
 
 // ==================== v130 W1: THE FOLIAGE SHADING KIT ====================
@@ -674,16 +666,37 @@ const FOL={
 // The pond table is hoisted out of ponds() below rather than copied, so the two cannot drift.
 const PONDS=[[-105,82,6.5],[98,-88,7],[-24,-104,5.5]];
 const _FOL_ROAD=[]; for(let i=0;i<=40;i++)_FOL_ROAD.push(roadPoint(i/40));
+// v132.2 …and the Viking track, both branches.
+// v132.3 60 SAMPLES, NOT 34, AND THE RADIUS IS THE SMALLER HALF OF THE FIX. At 34 the samples were
+// 6.8 units apart, so between two of them a 6.0 keep-off pinches to sqrt(6^2-3.4^2) = 4.9 and the
+// clear margin outside the road collapsed to 1.4 — less than the 1.85 a contact-shadow pool reaches
+// behind its prop, which is §8.7's artefact (a lawn-green pool on brown earth). Measured, not
+// predicted: tools/vikingroad.js found it at (-18, -137). Raising the radius alone would have
+// papered over a sampling hole that reopens the next time the spine gets longer.
+// 60 samples is 3.9 apart, so 6.4 pinches to 6.31 — 3.06 of margin against the King's Road's 2.8.
+const _FOL_VIKING=[];
+for(const _vt of [0,1])for(let i=0;i<=59;i++)_FOL_VIKING.push(vikingPoint(_vt,i/59));
 function foliageClear(x,z){
   // dist2() lives in 04-units.js, which loads AFTER this file, and separate <script> tags do not
   // hoist across each other — calling it here throws at load and kills the whole IIFE silently,
   // which is a mistake this file has already made once and left a comment about.
   for(const t of TCPOS){const dx=x-t[0],dz=z-t[1];if(dx*dx+dz*dz<34*34)return false;}
   for(const r of _FOL_ROAD){const dx=x-r.x,dz=z-r.z;if(dx*dx+dz*dz<9*9)return false;}
+  // v132.2/.3 6.4 for the Viking track against 9.0 for the King's Road — it is half the width and
+  // the woods are SUPPOSED to crowd it. The number that matters is not this one but the margin it
+  // leaves OUTSIDE the dirt once the sampling pinch above is accounted for: 6.31 - 3.25 = 3.06,
+  // against the King's Road's measured 2.8, and against the 1.85 a contact-shadow pool reaches
+  // behind its prop. No lawn-green pool lands on brown earth. tools/vikingroad.js check 5.
+  for(const r of _FOL_VIKING){const dx=x-r.x,dz=z-r.z;if(dx*dx+dz*dz<6.4*6.4)return false;}
   // the bazaar plazas: the v131.29 deck is 7.4 and its sunk step 8.6, so 10.5 keeps greenery off
   // the flagstones AND off the rim the contact shadow paints
   for(const m of neutralMarkets){const dx=x-m.x,dz=z-m.z;if(dx*dx+dz*dz<10.5*10.5)return false;}
   for(const p of PONDS){const dx=x-p[0],dz=z-p[1],rr=p[2]+2.4;if(dx*dx+dz*dz<rr*rr)return false;}
+  // v132.7 …and the creep camps, for the same reason the plazas are here: the trampled disc is a
+  // hard-worn surface and undergrowth standing in it is §8.7's artefact, exactly as it was when
+  // ferns grew through the bazaar flagstones before v131.30. C.r, so the greenery starts at the rim
+  // of the dirt rather than on it.
+  for(const C of CREEP_SITES){const dx=x-C.x,dz=z-C.z;if(dx*dx+dz*dz<C.r*C.r)return false;}
   return true;
 }
 // ---------- and the runtime half: a building placed at minute nine clears its own ground ----------
@@ -724,7 +737,11 @@ function clearFoliageAt(x,z,r){
   // moves if the CALL COUNT moves. Retinting is free (the constants inside an existing expression
   // are not the stream); adding a jitter would not be. Four tones in, four tones out.
   const tones=[FOL.a,FOL.b,FOL.c,FOL.ab];
-  const PATCHES=310;
+  // v132.0 DENSITY, NOT COUNT. Every foliage layer scatters a FIXED number over a MAP-relative
+  // extent, so a 26% bigger map is a 26% emptier one. 310 was art-directed against 424x250; this is
+  // the same density on 440x304. It is a change to the CALL COUNT inside the seeded window and so
+  // normally forbidden (§10.7) — free here only because PROTO is bumping in this same commit.
+  const PATCHES=391;
   for(let p=0;p<PATCHES;p++){
     const cx=(Math.random()*2-1)*MAP.x, cz=(Math.random()*2-1)*MAP.z;
     const blades=6+((Math.random()*7)|0);
@@ -1272,6 +1289,14 @@ const TREE_CLEAR_BASE=52;   // both town-centre yards — room for a full build-
 const TREE_CLEAR_ROAD=21;   // the King's Road corridor stays marchable
 const TREE_CLEAR_BAZAAR=15; // trade plazas
 const TREE_CLEAR_NODE=8;    // don't bury the stone/gold/berry nodes
+// v132.2 THE VIKING TRACK, AND IT IS TIGHT ON PURPOSE. tools/vikingsurvey.js found trees standing
+// 1.9 units off the spine — in the middle of the road — so this is not optional. But 21 like the
+// King's Road would drive a 42-wide avenue through the southern woods and turn a track into a
+// second highway. Canopies are ~7.5 across, so at 12 the trunks are well clear while the branches
+// reach to ~4.5 off the spine and overhang a path whose edge is at 3.12: a shaded track through
+// real woods. It also keeps the corridor buildable — a live wood node refuses any building within
+// r+3, which is the functional reason clear lanes exist at all.
+const TREE_CLEAR_VIKING=12;
 // dist2() lives in 04-units.js, which loads AFTER this file — separate <script> tags don't
 // share hoisting, so world generation needs its own squared-distance helper.
 const _d2=(ax,az,bx,bz)=>{const dx=ax-bx,dz=az-bz;return dx*dx+dz*dz;};
@@ -1284,9 +1309,16 @@ const _d2=(ax,az,bx,bz)=>{const dx=ax-bx,dz=az-bz;return dx*dx+dz*dz;};
 const TREE_STANDS=[];
 (function plantForests(){
   const ROADPTS=[]; for(let i=0;i<=60;i++)ROADPTS.push(roadPoint(i/60));
+  const VIKPTS=[]; for(const vt of [0,1])for(let i=0;i<=40;i++)VIKPTS.push(vikingPoint(vt,i/40));
   const clearOf=(x,z)=>{
     for(const t of TCPOS)if(_d2(x,z,t[0],t[1])<TREE_CLEAR_BASE*TREE_CLEAR_BASE)return false;
     for(const p of ROADPTS)if(_d2(x,z,p.x,p.z)<TREE_CLEAR_ROAD*TREE_CLEAR_ROAD)return false;
+    for(const p of VIKPTS)if(_d2(x,z,p.x,p.z)<TREE_CLEAR_VIKING*TREE_CLEAR_VIKING)return false;
+    // v132.7 THE CREEP CAMPS. Never needed before: all six pockets sit past the border and this
+    // function only ever scatters inside the map, so they were clear for free. The three interior
+    // camps are not, and a wolf den buried in forest is unreadable AND unfightable. r+4 puts the
+    // treeline just outside the trampled disc, which is what a clearing looks like.
+    for(const C of CREEP_SITES)if(_d2(x,z,C.x,C.z)<(C.r+4)*(C.r+4))return false;
     for(const m of neutralMarkets)if(_d2(x,z,m.x,m.z)<TREE_CLEAR_BAZAAR*TREE_CLEAR_BAZAAR)return false;
     for(const n of nodes)if(n.type!=="wood"&&_d2(x,z,n.x,n.z)<TREE_CLEAR_NODE*TREE_CLEAR_NODE)return false;
     return true;
@@ -1300,7 +1332,16 @@ const TREE_STANDS=[];
   stand(64,46,30); stand(120,88,26); stand(18,-88,29);
   // ...and the rest of the wild wood wherever it fits, no two stands sitting on top of each other
   let guard=0;
-  while(TREE_STANDS.length<30&&guard++<6000){
+  // v132.0 FEWER STANDS ON A BIGGER MAP, WHICH IS THE OPPOSITE OF THE OBVIOUS MOVE.
+  // Measured across the resize: total wood coverage was IDENTICAL (0.584 -> 0.580) and the meadows
+  // STILL went from 22/105 clear probes to 20/127, right onto smoketest's 0.15 floor. The forest
+  // did not grow; it FRAGMENTED — 22 stands became 26, so the same wood spread over 26% more ground
+  // as more, smaller woods, and the open country broke into gaps too small to read as meadow. That
+  // is precisely what the "meadows are real" assertion is for.
+  // Raising the radii instead was tried and is worse (17/19/12 of 127): bigger discs at the same
+  // count is simply more coverage. Gap SIZE is a function of stand COUNT at fixed coverage, so the
+  // count is the lever. 24 lets the clash test settle back around the 22 the old map carried.
+  while(TREE_STANDS.length<24&&guard++<6000){
     const x=6+Math.random()*(MAP.x-36), z=(Math.random()*2-1)*(MAP.z-28), r=23+Math.random()*21;
     if(!clearOf(x,z))continue;
     let clash=false;
@@ -1825,6 +1866,155 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
   rmesh.castShadow=false; rmesh.receiveShadow=true;   // a decal IS the ground, §3.8
   scene.add(rmesh);
 })();
+// ==================== v132.2 THE VIKING ROAD: two branches, one mesh, one draw call ====================
+// A narrow dirt track from each throne out to the mouth of the Viking bay, through that team's own
+// bazaar at t=0.42. The spine is vikingPoint() in 00-data.js and is READ here and never touched —
+// it is shared with the bazaar sites, the terrain flats under their plazas, the tree clearance and
+// the foliage exclusion, and tools/mapconst.js exists to catch anybody who copies it instead.
+//
+// WHY IT IS NOT kingsRoad WITH A SMALLER NUMBER: a cart road has two wheel ruts because a cart has
+// two wheels. People walk in single file, so a footpath has ONE trodden hollow and no shoulder, and
+// its value runs the other way — palest in the bare middle, darkening outward into a shaded margin.
+// See tools/patch-vikingribbon.js for the survey those choices were made against.
+//
+// NO Math.random IN HERE (§10.7). The half-width breathes on sines of t and each edge wanders on
+// sines of its OWN world position — the same trick kingsRoad uses for its edges, and better than a
+// random because it is continuous along the road instead of per-cross-section.
+(function vikingRoad(){
+  // v132.4 SUB 6 -> 10. Not needed for the tearing bug above; it is margin over the terrain (chord
+  // sag at the worst crease was 0.0118 against the King's Road's 0.0287) AND it pays off a Nyquist
+  // debt: the finest edge-wander term has a 1.54-unit period and cross-sections were 0.96 apart, so
+  // that term was aliasing rather than nibbling the edge. kingsRoad's own note records falling into
+  // exactly this at SUB=4; I copied its 6 without re-deriving it for a different wander.
+  const N=40, SUB=10, M=N*SUB, TILE=11.5, HW0=2.55;
+  const _ss=(a,b,v)=>{const t=Math.max(0,Math.min(1,(v-a)/(b-a)));return t*t*(3-2*t);};
+
+  // Authored as sRGB bytes AS THEY SHOULD COME OFF THE COMPOSER on sunlit ground, then divided
+  // through the SAME measured pipeline gain kingsRoad uses — same sun, same ramp, same grit map,
+  // same grade. If any of those move, both roads are re-measured together with tools/roadshot.js.
+  // ORDER MATTERS AND IT IS THE OPPOSITE OF THE KING'S ROAD: bare compacted earth in the middle,
+  // shaded litter at the margin. Two roads whose profiles run opposite ways cannot be confused.
+  // v132.5 MEASURED DOWN, AND WARMED. The first cut metered at 0.579 in-frame against a 0.320 lawn
+  // — 1.81x, where the King's Road runs 1.25x — so the track was the brightest thing in the frame
+  // after the sky and pulled the eye straight down its length. And at blue 0.625 of red against the
+  // King's crown's 0.538 it read as ASH through the neutral grit map, not earth: gravel beside a
+  // bazaar apron that was visibly warmer than the road leaving it. Saturation still RISES with
+  // darkness (b/r 0.578 / 0.552 / 0.548), which is what earth does. tools/vikingshot.js is the
+  // meter; the boundary step it reports (0.020 against the King's Road's 0.068) is what the margin
+  // stop is protecting and is why that one barely moves.
+  const _TGT=[[128,106,74],[116,94,64],[104,83,57]];   // trodden centre / flank / shaded margin
+  const _RGAIN=[0.87,0.71,0.56];
+  const _s2l=v=>{v/=255;return v<=0.04045?v/12.92:Math.pow((v+0.055)/1.055,2.4);};
+  const STOP=_TGT.map(c=>[_s2l(c[0])/_RGAIN[0],_s2l(c[1])/_RGAIN[1],_s2l(c[2])/_RGAIN[2]]);
+
+  const _c=[0,0,0];
+  const pathTint=(s,x,z)=>{
+    const a=Math.abs(s);
+    // ONE hollow. No rut pair, no wandering gauge, no shoulder — all three of those are cart-road
+    // features and putting them on a footpath is what would make this read as a narrow King's Road.
+    const bare=1-_ss(0.10,0.58,a);      // the trodden strip, worn to dry earth
+    const margin=_ss(0.46,0.92,a);      // grass litter and canopy shade creeping back in
+    // wear at periods 21.7 / 8.8 / 4.4 units — nothing sharing a factor with the 11.5 tile, so the
+    // map and the vertex layer cannot phase-lock and draw a rhythm along the path.
+    const wear=0.17*Math.sin(x*0.29+z*0.19)
+              +0.11*Math.sin(x*0.71-z*0.44)
+              +0.06*Math.sin(x*1.43+z*0.93);
+    // …and banded to five levels over the 0..2 span, like every other surface in this world (§3.7).
+    const t=Math.max(0,Math.min(2,0.72-0.62*bare+1.16*margin+wear));
+    const q=Math.round(t*2)/2;
+    const i=q<1?0:1, f=q<1?q:q-1;
+    // dry/damp rather than light/dark, the same axis the meadow and the King's Road use
+    const dry=Math.max(0,wear), damp=Math.max(0,-wear);
+    const gr=[1+dry*0.10-damp*0.05, 1+dry*0.03-damp*0.03, 1-dry*0.16+damp*0.12];
+    for(let k=0;k<3;k++)_c[k]=(STOP[i][k]+(STOP[i+1][k]-STOP[i][k])*f)*gr[k];
+    return _c;
+  };
+
+  // 17 columns against the King's Road's 27: half the width and no rut pair to resolve, so the
+  // resolution goes where this profile actually bends — around a=0.5, where bare hands over to
+  // margin. Sampling this at two vertices is the bug v131.15 found in the road: a cross-section
+  // needs vertices to live in.
+  const S=[-1,-0.94,-0.86,-0.76,-0.64,-0.50,-0.34,-0.17,0,
+            0.17,0.34,0.50,0.64,0.76,0.86,0.94,1], K=S.length;
+  const pos=[], uv=[], idx=[];
+  for(const team of [0,1]){
+    const base=pos.length/3;                    // both branches share one buffer -> one draw call
+    let arc=0, pcx=0, pcz=0;
+    for(let j=0;j<=M;j++){
+      const t=j/M;
+      const e=0.0012;                           // tangent from a central difference on the spine
+      const p0=vikingPoint(team,Math.max(0,t-e)), p1=vikingPoint(team,Math.min(1,t+e));
+      let tx=p1.x-p0.x, tz=p1.z-p0.z;
+      const tl=Math.hypot(tx,tz)||1; tx/=tl; tz/=tl;
+      const nx=-tz, nz=tx;                      // the across-track normal
+      const c=vikingPoint(team,t);
+      if(j)arc+=Math.hypot(c.x-pcx,c.z-pcz);    // cumulative arc length, for v
+      pcx=c.x; pcz=c.z;
+      // THE TAPER. raidShore's sand disc is r51 at (0,-196) and this ends at (0,-150), so only the
+      // last 5 units are covered by beach. Without a taper the track stops dead on the grass just
+      // short of the strand. 21 units of fraying to 30% reads as a path dying into loose sand.
+      const tap=1-0.70*_ss(0.90,1.00,t);
+      // v132.3 +-0.22, not +-0.48. RELATIVE wander is what has to be held against the King's Road,
+      // not absolute: scaling its numbers down by a third while halving the width they perturb took
+      // the breathing from 17% of the half-width to 27% and the road came out lumpy. Measured
+      // max/min was 2.46 against the King's Road's 1.53; this is 1.76.
+      const hw=HW0+0.14*Math.sin(t*17.3+team*2.1)+0.08*Math.sin(t*41.7-team*1.3);
+      const w=[0,0];
+      for(let k=0;k<2;k++){
+        const sgn=k?1:-1;
+        const ex=c.x+nx*sgn*hw, ez=c.z+nz*sgn*hw;      // the nominal edge, then perturb it
+        // each side driven off ITS OWN world position, or both edges move together and the ribbon
+        // merely snakes. +-0.67 on 2.45 — 27%, against the King's Road's 17%. A track has no edge.
+        w[k]=Math.max(0.25,(hw+0.24*Math.sin(ex*0.77+ez*0.53)
+                              +0.15*Math.sin(ex*1.61-ez*1.07)
+                              +0.09*Math.sin(ex*3.30+ez*2.40))*tap);
+      }
+      for(let k=0;k<K;k++){
+        const s=S[k], ww=s<0?w[0]:w[1];
+        const px=c.x+nx*s*ww, pz=c.z+nz*s*ww;
+        // +0.035, UNDER the King's Road's +0.06 — see the junction note in the patch header. The
+        // beach at +0.05 is over both, which is why the far end needs no seam work.
+        pos.push(px,groundY(px,pz)+0.035,pz);
+        uv.push(0.5+s*0.5, arc/TILE);           // u edge-locked across, v on arc length
+      }
+    }
+    for(let j=0;j<M;j++)for(let k=0;k<K-1;k++){
+      const a=base+j*K+k;
+      idx.push(a,a+1,a+K, a+1,a+K+1,a+K);       // winding gives +Y; the material is FrontSide
+    }
+  }
+  const vgeo=new THREE.BufferGeometry();
+  vgeo.setAttribute("position",new THREE.Float32BufferAttribute(pos,3));
+  vgeo.setAttribute("uv",new THREE.Float32BufferAttribute(uv,2));
+  vgeo.setIndex(idx);
+  const V=pos.length/3, col=new Float32Array(V*3);
+  // v%K is safe across the two branches: each contributes exactly (M+1)*K vertices, a whole
+  // multiple of K, so column k of branch 1 is still column k.
+  for(let v=0;v<V;v++){
+    const t=pathTint(S[v%K],pos[v*3],pos[v*3+2]);
+    col[v*3]=t[0]; col[v*3+1]=t[1]; col[v*3+2]=t[2];
+  }
+  vgeo.setAttribute("color",new THREE.BufferAttribute(col,3));
+  vgeo.computeVertexNormals();
+  // THE SAME TEXTURE OBJECT the King's Road minted. texturedMat caches on kind+hex, so this is the
+  // one already uploaded with mipmaps, NearestFilter magnification and full anisotropy — and
+  // sharing it means the two roads cannot drift apart in filtering, which is a real hazard given
+  // how long it took to work out that the near road's softness was in the swatch and not the mode.
+  // Tiling lives in the UVs, not in .repeat, so a shared map can carry two different tile sizes.
+  const _vtex=texturedMat("dirt",0xCFCFCF).map;
+  // v132.4 NO polygonOffset. IT TORE THE ROAD OPEN — see _viking/_poly-cmp.png. The factor term is
+  // proportional to the polygon's DEPTH SLOPE, and a ribbon draped over terrain tilts with every
+  // facet under it, so the steeper facets were pushed back further than the 0.035 they float above
+  // the ground and the TERRAIN won the depth test. It rendered as a rope ladder: a regular lattice
+  // of lawn-green wedges cut across the track, which is the terrain's own facets showing through.
+  // It was brought in to lose a depth tie to the King's Road at the junction and it went and fought
+  // the surface the road lies ON. The height split does that job by itself: +0.035 against the
+  // King's Road's +0.06 is 0.025 of separation, measured at 47/47 sample points across the shared
+  // stretch, against ~1e-4 of depth resolution at the 20-40 units a town junction is seen from.
+  const vmesh=new THREE.Mesh(vgeo,_fogClamp(toonMat({map:_vtex,vertexColors:true}),GROUND_FOG));
+  vmesh.castShadow=false; vmesh.receiveShadow=true;   // a decal IS the ground, §3.8
+  scene.add(vmesh);
+})();
 (function ponds(){ // still water, sandy rims, reeds and cattails
   for(const [px,pz,pr] of PONDS){   // v131.30 hoisted above plantGrass so foliageClear sees it too
     const y=terrainHeight(px,pz);
@@ -1930,9 +2120,14 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
     scene.add(moss); worldDeco.push(moss);
   }
 })();
-// ---------- creep camp grounds (v77): six wild nooks bumped out past the border ----------
+// ---------- creep camp grounds (v77): nine wild camps — six nooks past the border, three in the field ----------
+// v132.7 CREEP_SITES. Everything below already scales off C.r (the trampled disc at r-1.5, the bone
+// scatter at r*0.7, the palisade arc at r-0.8), so an interior clearing dresses itself. The arc's
+// "outward" is atan2(C.x, C.z) — a direction from map centre — which for a pocket points at the
+// mountains it is carved into and for a clearing simply picks a side for the windbreak. That reads
+// as a camp either way; it is the one thing here that means slightly less in the open field.
 (function creepCampGrounds(){
-  for(const C of CAMPS){
+  for(const C of CREEP_SITES){
     if(C.boss)continue; // the raid shore gets its own scene below
     // worn earth: a big trampled dirt disc, then a darker inner ring
     scene.add(drapedDecal(C.r-1.5,16,0x8a7454,C.x,C.z,0.05,"hide"));
@@ -2108,7 +2303,8 @@ const BAZAAR_MAT=toonMat({vertexColors:true});
         ROOF=0xB4543A, ROOFD=0x7E3624, GOLDT=0xCFB53B, LANT=0xD8D2AC, SLOT=0x2A2018,
         AWNA=0x8E1F1F, AWNB=0xC9863C, CRATE=0xB08A5A, BARREL=0x7A5A34, SACK=0xC9B78A,
         AMPH=0xA8623A, CLOTHA=0x3A5A7A, ROPE=0x9A8A6A;
-  for(const [x,z] of NEUTRAL_MARKET_SITES){
+  for(const S of NEUTRAL_MARKET_SITES){
+    const x=S.x, z=S.z, SC=S.scale||1;
     const BP=[];
     const put=(geo,color,mtx)=>BP.push({geo,matrix:mtx,color});
 
@@ -2164,8 +2360,10 @@ const BAZAAR_MAT=toonMat({vertexColors:true});
     // of 2.58 — the lantern roof had NEGATIVE overhang and the drum poked out through its own eave.
     put(HIP4(4.30,1.45),ROOF,_m(0,8.075,0));
     put(HIP4(4.45,0.26),GOLDT,_m(0,7.48,0));
-    put(CYLG(0.15,0.15,0.90,6),GOLDT,_m(0,9.10,0));                        // the finial
-    put(CONEG(0.30,0.52,6),GOLDT,_m(0,9.70,0));
+    if(!S.grand){                                                          // the finial…
+      put(CYLG(0.15,0.15,0.90,6),GOLDT,_m(0,9.10,0));
+      put(CONEG(0.30,0.52,6),GOLDT,_m(0,9.70,0));
+    }                        // …which the Grand Bazaar replaces with a whole second stage, below
 
     // ---- four stalls, OUTSIDE the roofline where they can actually be seen ----
     // The canopy reaches z +-4.5, so these stand at +-5.9 in the open. Two face the road, which is
@@ -2206,8 +2404,22 @@ const BAZAAR_MAT=toonMat({vertexColors:true});
       put(BOXG(0.10,0.62,0.94),(sx2>0)?AWNB:AWNA,_m(sx2*5.4,5.10,sz2*4.6+0.5));
     }
 
+    // v132.1 THE GRAND BAZAAR GETS A SECOND LANTERN STAGE, not just a bigger one. Scaling alone
+    // reads as the same building standing closer; a third roofline reads as a different building,
+    // and §5.5's "each type owns a unique top profile" applies to the map's centrepiece more than
+    // to anything else on it. Sits on the first lantern's own roof, inset, with its own louvres.
+    if(S.grand){
+      put(CYLG(1.44,1.55,0.86,8),LANT,_m(0,9.02,0));
+      for(let i=0;i<8;i++){const a2=i*Math.PI/4+Math.PI/8;
+        put(BOXG(0.54,0.50,0.14),SLOT,_m(Math.sin(a2)*1.48,9.02,Math.cos(a2)*1.48,0,a2,0));}
+      put(HIP4(2.62,0.92),ROOF,_m(0,9.91,0));
+      put(HIP4(2.74,0.20),GOLDT,_m(0,9.55,0));
+      put(CYLG(0.13,0.13,0.74,6),GOLDT,_m(0,10.66,0));
+      put(CONEG(0.26,0.46,6),GOLDT,_m(0,11.18,0));
+    }
     const bz=new THREE.Mesh(_mergeColored(BP),BAZAAR_MAT);
     bz.castShadow=true; bz.receiveShadow=true;
+    bz.scale.setScalar(SC);   // uniform, so the merged buffer needs no second authoring pass
     bz.position.set(x,terrainHeight(x,z),z); scene.add(bz);
   }
 })();
@@ -2405,7 +2617,7 @@ function _appendGeo(mesh,parts){
     // they rendered WHITE, at every hex. Back to §2.3 undergrowth.a/b/c plus two in-betweens.
     const TONES=[FOL.a,FOL.b,FOL.c,FOL.ab,FOL.ac];
     const blades=[];
-    for(let p=0;p<900;p++){
+    for(let p=0;p<1136;p++){
       const c=spot(6); if(!c)continue;
       const n=7+((R()*10)|0);
       const tone=TONES[(R()*TONES.length)|0];
@@ -2443,7 +2655,7 @@ function _appendGeo(mesh,parts){
   // ---- 2. CLOVER MATS: flat rosettes that fill the ground plane between the blades ----
   {
     const pts=[];
-    for(let p=0;p<420;p++){
+    for(let p=0;p<530;p++){
       const c=spot(5); if(!c)continue;
       const n=5+((R()*7)|0);
       for(let b=0;b<n;b++){const a=R()*Math.PI*2,r=R()*1.7;pts.push([c[0]+Math.cos(a)*r,c[1]+Math.sin(a)*r]);}
@@ -2463,7 +2675,7 @@ function _appendGeo(mesh,parts){
   // ---- 3. BUSHES: rounded low-poly shrubs, the mid-height layer the map never had ----
   {
     const pts=[];
-    for(let p=0;p<210;p++){
+    for(let p=0;p<265;p++){
       const c=spot(10); if(!c)continue;
       const n=1+((R()*3)|0);
       for(let b=0;b<n;b++){const a=R()*Math.PI*2,r=R()*2.6;pts.push([c[0]+Math.cos(a)*r,c[1]+Math.sin(a)*r]);}
@@ -2490,7 +2702,7 @@ function _appendGeo(mesh,parts){
   // ---- 4. FERNS: tall thin fans that break the silhouette at the forest edge ----
   {
     const pts=[];
-    for(let p=0;p<260;p++){
+    for(let p=0;p<328;p++){
       const c=spot(6); if(!c)continue;
       const n=3+((R()*4)|0);
       for(let b=0;b<n;b++){const a=R()*Math.PI*2,r=R()*1.5;pts.push([c[0]+Math.cos(a)*r,c[1]+Math.sin(a)*r]);}
@@ -2526,7 +2738,7 @@ function _appendGeo(mesh,parts){
     // blossoms carry it, with the softer violet and amber for variety.
     const TONES=[FOL.warm,FOL.cool,FOL.violet,FOL.amber];
     const pts=[];
-    for(let p=0;p<70;p++){
+    for(let p=0;p<88;p++){
       const c=spot(8); if(!c)continue;
       const tone=TONES[(R()*TONES.length)|0];
       const n=9+((R()*14)|0);

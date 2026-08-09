@@ -745,7 +745,13 @@ const ageResT=[0,0,0];  // remaining research seconds per team ([2] wilds: alway
 // units trained in later ages are stronger; Enlightenment adds a capstone
 function ageBuff(team){return 1+0.06*teamAge[team]+(teamAge[team]>=5?0.15:0);} // Enlightenment curbstomps
 
-const MAP={x:212,z:125};                // half-extents (+25% in v34)
+// v132.0 DEPTH HEAVILY, WIDTH SLIGHTLY (John's ruling). 424x250 -> 440x304, +26.2% of area, and
+// TCPOS stays at (+-175, 0) so base-to-base is still exactly 350 — raid timers, unit speed and
+// trade-cart round trips are all tuned against that number and a spacing problem is no reason to
+// disturb them. The extra 8 of half-width is building room BEHIND each base; the depth is for the
+// Viking road, which has to climb out to the camp and back while the King's Road and three interior
+// camps share the other half. See claude/REGICIDE-MAP-REWORK.md.
+const MAP={x:220,z:152};                // half-extents (+25% in v34)
 const TCPOS=[[-175,0],[175,0]];        // blue, red town centers
 
 // ---------- neutral creep camps (v77) ----------
@@ -774,6 +780,40 @@ function inCampGround(x,z){ // is this spot on a camp pocket's ground?
   for(const C of CAMPS){const dx=x-C.x,dz=z-C.z;if(dx*dx+dz*dz<C.r*C.r)return true;}
   return false;
 }
+// ==================== v132.7 CAMPS IS THE BORDER POCKETS. CREEP_SITES IS WHERE CREEPS LIVE. ====================
+// They were one array because for fifty versions every camp was both. John's three new ones are in
+// the OPEN INTERIOR — contested ground you cross, not a safe pocket you farm — and the moment those
+// exist the two meanings come apart:
+//   CAMPS       inCampGround() (the holes in the invisible wall), nearCamp() (keep the mountain ring
+//               out of the hollows), the bay flat, raidShore. Every one of those is a question about
+//               ground OUTSIDE the border, and none of them is about creeps. An interior camp in
+//               here would make nearCamp push mountains away from map centre, where there are none.
+//   CREEP_SITES 07-ai.js's spawn loop, creepCampGrounds' scenery, the tree clearance, the foliage
+//               exclusion, validFor.
+// THE THREE ARE APPENDED, AND THAT IS LOAD-BEARING: campStates[i] is indexed by chest events
+// ({t:"chest", i:st.i}) and by the late joiner's w.camps[], and each camp mints CREEP_N unit bodies
+// in sequence, so unit ids depend on this order. Appending leaves 0-5 and every existing id alone.
+//
+// RADIUS 16 AGAINST THE POCKETS' 26 — a clearing, not a hollow carved into a mountain range. It also
+// sets the fight, because 07-ai.js derives both numbers from r: the hard leash at r-1.2 = 14.8 and
+// the aggro ring at r-2.5 = 13.5, which sits just inside the 14.5 trampled disc. Stepping onto the
+// dirt is what wakes them; marching past on a road 30-47 away is not.
+//
+// THE SITES ARE MEASURED, NOT TYPED — tools/campsite.js, which walks the whole field against the
+// roads, the thrones, the plazas, the ponds, the border pockets and the ground itself:
+//                     to King's Rd   to Viking   ground spread
+//     (0, 55)            43.0          147.9        1.12        its own mirror
+//     (+-79, -33)        47.3           29.7        1.45 / 1.46 a mirrored pair
+// MIRRORED ABOUT x=0, which is the ROADS' convention (roadPoint: "z(t) === z(1-t)") and NOT the
+// 180-degree one TREE_STANDS uses. Both live in this world; they are not interchangeable. And the
+// pair was validated on BOTH halves because the terrain is noise and noise does not mirror — 1.45
+// against 1.46 is the measured result of asking rather than assuming.
+const CREEP_R_INNER=16;
+const CREEP_SITES=CAMPS.concat([
+  {x: 0,z: 55,r:CREEP_R_INNER,inner:true},   // north of the Grand Bazaar, on the centre line
+  {x: 79,z:-33,r:CREEP_R_INNER,inner:true},  // the wedge between the Kings Road and the red branch
+  {x:-79,z:-33,r:CREEP_R_INNER,inner:true},  // …and its mirror, on the blue side
+]);
 // v83: the invisible wall sits at the MOUNTAINS, not the map line — a walkable apron
 // rings the whole field (the ground between the border and the peaks' feet), and the
 // camp pockets open straight off it. No more bumping into thin air on open grass.
@@ -919,4 +959,34 @@ const MODEL_MANIFEST={}; // imported models retired — characters use generated
 // ---------- trade ----------
 // neutral bazaars: near / center / deep — risk scales with distance, gold scales harder
 const neutralMarkets=[]; // populated by world gen: {x,z}
+// ==================== v132.1 THE TWO ROUTES, AND THE ONE LIST OF BAZAAR SITES ====================
+// These live in 00-data rather than 02-world for one reason: 01-engine's terrainHeight() has to
+// FLATTEN the ground under every plaza, and it used to do that from three hand-typed coordinates
+// that were the old bazaar positions. That is the drift tools/mapconst.js exists to catch. Defined
+// ahead of both consumers, they cannot disagree.
+// roadPoint is mirror-symmetric about x=0 — z(t) === z(1-t) — so anything placed at t and 1-t is
+// EXACTLY as far from one throne as from the other. Keep it that way.
+function roadPoint(t){
+  const A=TCPOS[0],B=TCPOS[1];
+  return {x:A[0]+(B[0]-A[0])*t,
+          z:A[1]+(B[1]-A[1])*t+Math.sin(t*Math.PI)*16+Math.sin(t*Math.PI*3)*4};
+}
+// THE VIKING ROAD: one branch per team, throne -> the boss pocket's MOUTH. The bay is centred
+// (0, -196) with r 52 so it spans z -248..-144, while the walkable border is |z| <= MAP.z+9; -150
+// is inside the mouth and outside the boss's own ground. The bow is what stops it reading as a
+// ruler: it swings away from the King's Road on the way out.
+const VIKING_END={x:0,z:-150};
+function vikingPoint(team,t){
+  const A=TCPOS[team], B=VIKING_END;
+  const bow=Math.sin(t*Math.PI)*(team===0?-26:26);   // mirrored, so neither team's path is shorter
+  return {x:A[0]+(B.x-A[0])*t+bow*0.35,
+          z:A[1]+(B.z-A[1])*t+Math.sin(t*Math.PI)*18};
+}
+// The three sites, and everything downstream reads THIS. `plaza` is the plinth's outer step, which
+// is what the terrain has to be level across and what the foliage has to keep off.
+const BAZAAR_SITES=[
+  {what:"grand", grand:true,  scale:1.32, plaza:11.4, p:()=>{const q=roadPoint(0.5);   return {x:q.x,z:q.z+3.2};}},
+  {what:"blue",  team:0,      scale:1.00, plaza:8.6,  p:()=>{const q=vikingPoint(0,0.42); return {x:q.x,z:q.z};}},
+  {what:"red",   team:1,      scale:1.00, plaza:8.6,  p:()=>{const q=vikingPoint(1,0.42); return {x:q.x,z:q.z};}},
+];
 function tradeGold(d){return Math.round(0.35*d+0.002*d*d);} // superlinear: risk pays a premium

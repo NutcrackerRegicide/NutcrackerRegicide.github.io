@@ -39,13 +39,17 @@ kings[RED]=makeUnit(RED,"king",TCPOS[1][0]-8,12,{isKing:true,name:"King Vargus",
 spawnTeam(BLUE,48,0);   // + you + King Osric = 50
 spawnTeam(RED,49,31);   // + King Vargus = 50
 
-// ---------- THE WILDS: six creep camps ring the world's edge (v77) ----------
+// ---------- THE WILDS: nine creep camps — six ring the world's edge, three stand in the field ----------
+// v132.7 CREEP_SITES, not CAMPS: this loop wants everywhere creeps LIVE, which is no longer the same
+// question as where the border pockets are. See the note at CREEP_SITES in 00-data.js. Nothing else
+// in here changes — st.r, st.aggro and the hard leash were already derived from the site's own
+// radius, so a 16-radius clearing works out of the box and a 26-radius hollow is unaffected.
 // Each camp always creates CREEP_N unit bodies so unit ids stay deterministic across
 // host/guest; a 4-pack simply leaves the fifth dead. Pack type is rolled per machine
 // and reconciled by applyWorld/snapshots — the HOST's roll is the truth.
 const campStates=[];
-for(let ci=0;ci<CAMPS.length;ci++){
-  const C=CAMPS[ci];
+for(let ci=0;ci<CREEP_SITES.length;ci++){
+  const C=CREEP_SITES[ci];
   if(C.boss){ // THE SOUTHERN SHORE: starts as an empty wreck — the raid lands at 15:00
     const st={i:ci,x:C.x,z:C.z,r:C.r,aggro:C.r-2,boss:true,kind:"viking",
               waiting:true,respawnAt:BOSS_RESPAWN,chest:null,chestKind:null,chestB:null,chestKindB:null,creeps:[]};

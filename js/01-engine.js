@@ -1438,6 +1438,10 @@ function plainMat(hex){
 }
 
 // ---------- gentle terrain: rolling hills, deterministic, flat where you build ----------
+// v132.1 COMPUTED ONCE. terrainHeight() runs per terrain vertex, per decal vertex and per unit per
+// frame; calling roadPoint/vikingPoint inside it would put two sine chains on the hottest path in
+// the game. The sites are static, so the table is built at load and the flats read it.
+const BAZAAR_FLATS=BAZAAR_SITES.map(B=>{const q=B.p();return [q.x,q.z,B.plaza+1.8];});
 function terrainHeight(x,z){
   let h=Math.sin(x*0.045)*Math.cos(z*0.06)*1.3
        +Math.sin(x*0.013+z*0.021)*1.9
@@ -1449,10 +1453,19 @@ function terrainHeight(x,z){
   };
   let m=1;
   m=Math.min(m,flat(TCPOS[0][0],TCPOS[0][1],28,24));
+  // (BAZAAR_FLATS is computed once, below this function — see the note there)
   m=Math.min(m,flat(TCPOS[1][0],TCPOS[1][1],28,24));
   // v78: the bazaars live ON the Kings Road now — flats track roadPoint(0.28/0.5/0.72)+3.2z (see 02-world BAZAAR_T)
-  m=Math.min(m,flat(-77,17.46,10,12)); m=Math.min(m,flat(77,17.46,10,12)); m=Math.min(m,flat(0,15.2,10,12));
+  // v132.1 DERIVED, NOT TYPED. These were three hand-written coordinates that happened to be the
+  // old bazaar positions — the exact drift tools/mapconst.js exists to catch, and the reason it
+  // exists at all. Each site carries its own plaza radius now, so the Grand Bazaar's larger plinth
+  // gets a larger flat without anyone remembering to widen it.
+  for(const B of BAZAAR_FLATS)m=Math.min(m,flat(B[0],B[1],B[2],12));
   m=Math.min(m,flat(-105,82,9,10)); m=Math.min(m,flat(98,-88,9.5,10)); m=Math.min(m,flat(-24,-104,8,10)); // ponds sit level
-  m=Math.min(m,flat(0,-186,72,24)); // v82: the southern BAY — the whole doubled beach and its ocean lie dead level
+  // v132.0 DERIVED, NOT TYPED. This was a hand-written (0,-186) against a boss bay that actually
+  // sits at -(MAP.z + BOSS_R - 8) — -169 before the resize and -196 after it. Ten units of drift,
+  // and the symptom is the whole doubled beach on a slope. CAMPS is the source; read it.
+  {const _bay=(typeof CAMPS!=="undefined")&&CAMPS.find(c=>c.boss);
+   if(_bay)m=Math.min(m,flat(_bay.x,_bay.z+17,72,24));} // the whole doubled beach and its ocean lie dead level
   return h*m;
 }
