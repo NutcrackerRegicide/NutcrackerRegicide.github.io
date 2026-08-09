@@ -335,7 +335,27 @@ function ncHeadMat(){
 // instead of through it. Butt lands at y≈1.1, muzzle at y≈4.2 — clear of the health bar at 5.3 (§5.4).
 // It lives here and not as two literals because animateUnit re-asserts the carry pose every frame
 // it is not aiming; the pair drifting apart would show up as a gun that snaps on the first frame.
-const NC_MUSKET_CARRY={x:0.14,y:-0.5,z:0.16,rx:-1.4282};
+// v131.11 …AND THE FIST WAS NEVER ON IT. The hand is endCap's sphere, r=0.12 at faR-local
+// (0,-0.54,0); in the GUN's own frame it sat at (-0.14,+0.153,-0.062) — 0.14 inboard of the
+// stock's centreline and 0.153 ABOVE it — so the closest approach was sqrt(0.09² + 0.078²) =
+// 0.119 against a fist radius of 0.12: 0.001 of bite on one corner of the lock and daylight
+// everywhere else. Cancel the 0.153 along the gun's own +Y, which is (0,0.14195,-0.98987) in the
+// forearm's frame: 0.153*(0,0.14195,-0.98987) = (0,+0.022,-0.151), i.e. y -0.5 -> -0.478 and
+// z 0.16 -> 0.009, and the fist closes on the small of the stock with 0.038 of bite.
+// X STAYS 0.14 BECAUSE THE SLEEVE IS WHY IT EXISTS — except 0.14 never actually cleared it. The
+// team cuff is r 0.20 on the arm's axis across world y 1.74-2.10 and the barrel is r 0.05, so the
+// barrel needs 0.25 of separation and had 0.216: 4.7% of the gun measured INSIDE the arm on the
+// build this replaces. Seating it makes that 11.8%, because the seat spends the forward offset
+// that was half-saving it.
+// SO THE GUN LEANS OUT, which is weaponGrip's own doctrine three hundred lines up — "butt in,
+// head out … which is also how a real shouldered pike rides" — and how a shouldered musket rides
+// too. ry=0.12 swings the muzzle 0.11 outboard by the time it reaches the cuff. Measured over the
+// whole gun: inside the arm 4.7% -> 0.8%, fist bite 0.001 -> 0.038, muzzle world x 0.915 -> 1.139
+// and butt 0.755 -> 0.678. The ranger's rifle rides this same const and moves the same way — it
+// was floating 0.009 CLEAR of its fist and 5.9% inside its own sleeve, and measures 0.034 of bite
+// and 0.8% after. Both build sites and animateUnit's re-assert must pass ry or the gun snaps on
+// frame 1; all three are patched with this.
+const NC_MUSKET_CARRY={x:0.14,y:-0.478,z:0.009,rx:-1.4282,ry:0.12};
 // …AND THE PIKE LINE WAS NEVER VERTICAL EITHER. The round-2 defect list held the pike up as the
 // example the musket should copy; it is not one. weaponGrip's -1.35 puts the shaft's +Y stack axis
 // at (0, 0.043, 0.999) in world — 87° over, i.e. a 3.3-long shaft carried flat across six classes,
@@ -3492,6 +3512,23 @@ function _buildBodyRaw(u){
       // prop happens to shade one crop; a club parked over the ribs to keep a torso mean down is
       // the tool measuring the prop, which is the thing agecheck.js:230 is already complaining about.
       const CG=weaponGrip(R.faR,NC_PIKE_CARRY,0.3,0.22); // shouldered vertical (§6.5) — see the const
+      // >>> v131.11 AND IT HUNG IN FRONT OF AN EMPTY FIST. John filed this one twice, front AND
+      // side, which is the tell that the error is in z and not in x. <<<
+      // weaponGrip parks the group at faR-local (0,-0.52,z); the HAND is endCap's sphere, r=0.12
+      // at faR-local (0,-0.54,0). Both hang off faR, so the offset between them is identical in
+      // every pose. At z=0.30 the haft's axis passes 0.284 from the hand's centre and the haft is
+      // 0.088 of radius there: 0.284 - 0.088 - 0.12 = 0.076 of AIR, measured 0.084 across the
+      // 7-gon's facets. Gate A12 cannot see this: it measures inside the GROUP's frame, where y=0
+      // is "the fist" by assertion rather than by geometry.
+      // THE SEAT IS A PERPENDICULAR MOVE, so the club never slides along its own length and §B.1's
+      // silhouette survives. Stack axis (0.2182,0.9399,0.2627), hand at axial -0.098, perpendicular
+      // part of the offset (-0.0213,-0.0717,0.2744). Take 0.648 of that off the position and 0.10
+      // of it is left: the haft's axis then sits 0.10 from the hand's centre — INSIDE a 0.12 fist —
+      // and the 0.10 that stays is what keeps the haft out of the sleeve cuff (r 0.20 on the arm's
+      // axis, world y 1.74-2.10). Dead centre buried 4.3% of the club in that cuff; 0.10 out leaves
+      // 0.6%. The greenstone still rides above the shoulder line at 2.04 — measured, world y tops
+      // out at 2.494 against 2.506 as built and x reaches 1.335 against 1.321.
+      CG.position.set(0.014,-0.474,0.122); // (0,-0.52,0.30) - 0.648*(-0.0213,-0.0717,0.2744)
       const haft=noShadow(cyl(0.06,0.09,1.20,0x7a5230,7)); haft.position.y=0.42; CG.add(haft);
       const headC=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.33,0.33,0.52,8),plainMat(0x5F7355)));
       headC.scale.z=0.80; headC.position.y=1.20; CG.add(headC);   // §B.1's pierced greenstone, z 0.80
@@ -3930,7 +3967,7 @@ function _buildBodyRaw(u){
       const plumeS=noShadow(cone(0.078,0.5,tc,5)); plumeS.position.set(0.24,NC_HATY+0.62,0.06); plumeS.rotation.z=-0.35; R.head.add(plumeS);
       // the ranger's rifle — plain iron and walnut; R.musketG wires the shouldered aim for free
       const MG=new THREE.Group(); MG.position.set(NC_MUSKET_CARRY.x,NC_MUSKET_CARRY.y,NC_MUSKET_CARRY.z);
-      MG.rotation.x=NC_MUSKET_CARRY.rx;   // shouldered, not slung across the body — see the const
+      MG.rotation.set(NC_MUSKET_CARRY.rx,NC_MUSKET_CARRY.ry,0);   // shouldered and canted out — see the const
       const butt=noShadow(box(0.12,0.18,0.46,0x4a3826)); butt.position.set(0,-0.06,-0.34); butt.rotation.x=0.35; MG.add(butt);
       const breech=noShadow(box(0.09,0.13,0.3,0x352a1c)); breech.position.set(0,0,-0.04); MG.add(breech);
       const foreW=noShadow(box(0.08,0.09,1.0,0x4a3826)); foreW.position.set(0,-0.03,0.55); MG.add(foreW);
@@ -4079,7 +4116,7 @@ function _buildBodyRaw(u){
     cordT.position.y=NC_HATY+0.40; R.head.add(cordT); // the dress cord, under A1's crop line
     // the FULL MUSKET: one gun, one group — animateUnit pitches R.musketG when shouldered
     const MG=new THREE.Group(); MG.position.set(NC_MUSKET_CARRY.x,NC_MUSKET_CARRY.y,NC_MUSKET_CARRY.z);
-    MG.rotation.x=NC_MUSKET_CARRY.rx;     // vertical at the shoulder (§6.5) — see the const
+    MG.rotation.set(NC_MUSKET_CARRY.rx,NC_MUSKET_CARRY.ry,0);     // vertical at the shoulder (§6.5), canted out — see the const
     const butt=noShadow(box(0.13,0.2,0.5,0x6b4a2b)); butt.position.set(0,-0.06,-0.38); butt.rotation.x=0.35; MG.add(butt);
     const breech=noShadow(box(0.1,0.15,0.34,0x4a3826)); breech.position.set(0,0,-0.05); MG.add(breech);
     const lock=noShadow(box(0.05,0.11,0.18,0xd9a92e)); lock.position.set(0.07,0,-0.02); MG.add(lock);
@@ -4178,7 +4215,25 @@ function _buildBodyRaw(u){
       const plumeD=noShadow(cone(0.08,0.6,tc,5)); plumeD.position.set(0.45,1.5,0); plumeD.rotation.z=-0.5; R.hat.add(plumeD);
       // the SABER: a curved blade of two angled segments
       const SB=weaponGrip(R.faR,-1.3,0.35);
+      // >>> v131.11 THE SABER FLOATED 0.165 ABOVE AN EMPTY FIST AND HAD NO HANDLE. <<<
+      // In the saber's own frame the hand's centre (endCap, r=0.12 at faR-local (0,-0.54,0)) sat
+      // at (0,-0.332,0.113): a third of a unit BELOW the lowest thing on the weapon and 0.113 off
+      // its axis. Gate A12 passed it because the guard is a torus of ring 0.12 + tube 0.03 at
+      // y=0.08, so its geometry spans y -0.07..0.23 and "spans y=0" — that is the ring's WIDTH,
+      // not a grip. Below the guard there was nothing at all: no grip, no pommel. Exactly the hole
+      // patch-hilts.js closed on heavycav, legionaire and vanguard; this was the fourth sword.
+      // HILT FIRST, THEN SEAT IT. The grip is 0.20 centred at -0.11 (spans -0.21..-0.01, biting
+      // 0.06 into the guard's -0.07) and the pommel is r 0.075 at -0.235 (spans -0.31..-0.16,
+      // biting 0.05 into the grip): one continuous object, no daylight along the stack. A fist
+      // belongs at the grip's CENTRE, so the group goes to hand + 0.11 along the stack axis —
+      // (0,-0.54,0) + 0.11*(0,-0.2675,0.9636) = (0,-0.569,0.106).
+      // Measured: fist-to-saber 0.165 of air -> 0.080 of bite. The blade drops 0.123 (world y
+      // 2.705-2.994 -> 2.582-2.871) and comes back 0.216 (tip 1.946 -> 1.729), which puts 0.45% of
+      // the tip through the horse's mane — a graze it was avoiding only by floating.
+      SB.position.set(0,-0.569,0.106);
       const guard=noShadow(new THREE.Mesh(new THREE.TorusGeometry(0.12,0.03,4,8),plainMat(0xd9a92e))); guard.position.y=0.08; SB.add(guard);
+      const gripD=noShadow(cyl(0.05,0.055,0.20,0x4a3826,6)); gripD.position.y=-0.11; SB.add(gripD);
+      const pomD=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.075,6,5),plainMat(0xd9a92e))); pomD.position.y=-0.235; SB.add(pomD);
       const bl1=noShadow(box(0.05,0.85,0.14,0xc2c8d0)); bl1.position.y=0.55; SB.add(bl1);
       const bl2=noShadow(box(0.05,0.6,0.13,0xc2c8d0)); bl2.position.set(0,1.14,0.09); bl2.rotation.x=0.3; SB.add(bl2);
       // the PISTOL rides the off hand — six shots, then the saber talks
@@ -4202,6 +4257,18 @@ function _buildBodyRaw(u){
       const j2=noShadow(box(0.2,0.95,0.05,0x6b4a2b)); j2.rotation.z=-0.55; j2.position.set(0,0.6,0.44); R.torso.add(j2);
     }
     const SPs=weaponGrip(R.faR,-1.25,0.35);
+    // v131.11 "VERY CLOSE BUT SLIGHTLY OFF" IS EXACTLY RIGHT, AND IT IS 0.129. The hand's centre
+    // (endCap, r=0.12 at faR-local (0,-0.54,0)) sits at (0,-0.326,0.129) in the spear's own frame:
+    // the shaft's axis passes 0.129 from it while the shaft is 0.059 of radius there, so its near
+    // face is 0.070 from the centre — 0.050 INSIDE the fist — and its far face is 0.188, i.e.
+    // 0.068 OUTSIDE it. The spear grazes the edge of the hand instead of running through it, which
+    // is the whole of what John saw and why he called it close.
+    // A pure perpendicular seat, so nothing slides along the shaft and the reach is untouched:
+    // subtract the perpendicular part (0,0.1227,0.0408) from (0,-0.52,0.35). Measured, the world z
+    // extent holds at -0.0045..3.1956 against -0.0042..3.1958 and the spear drops 0.129 in y;
+    // fist daylight -0.049 -> -0.067 with nothing inside torso, arm or horse either side. Covers
+    // elitescout, which shares this branch and measures identically.
+    SPs.position.set(0,-0.643,0.309);
     const shaftS=noShadow(cyl(0.05,0.06,2.8,0x8a6a3f,6)); shaftS.position.y=0.9; SPs.add(shaftS);
     const tipS=noShadow(cone(0.11,0.4,0x8d949c,4)); tipS.position.y=2.5; SPs.add(tipS);
     if(CLS[u.cls].tier>=4){const banner=noShadow(box(0.7,0.5,0.06,tc)); banner.position.set(0,1.9,0.1); SPs.add(banner);}
@@ -4896,7 +4963,7 @@ function animateUnit(u,dt){
         MG.rotation.set(1.55+((typeof camPitch!=="undefined"?camPitch:0.55)-0.55)*0.7,0,0);
       }else{ // shouldered arms — the same pose the rig is built in, so nothing snaps on frame 1
         MG.position.set(NC_MUSKET_CARRY.x,NC_MUSKET_CARRY.y,NC_MUSKET_CARRY.z);
-        MG.rotation.set(NC_MUSKET_CARRY.rx,0,0);
+        MG.rotation.set(NC_MUSKET_CARRY.rx,NC_MUSKET_CARRY.ry,0); // ry as well, or the gun snaps on frame 1
       }
     }
     R.torso.position.y=u.rigBaseY+bob;

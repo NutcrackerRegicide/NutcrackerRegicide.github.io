@@ -1273,6 +1273,89 @@ function texturedMat(kind,hex){
     for(let i=0;i<7;i++){const x=(Math.random()*s)|0,y=(Math.random()*s)|0;    // seeded, see cloth
       c.fillRect(x,y,2,2);c.fillRect(x+1,y+1,2,2);}           // dapples
   },key);
+  else if(kind==="dirt")t=_tex(64,(c,s)=>{
+    // ================= v131.15: THE ROAD'S GRAIN, AND IT IS NOT THE ROAD'S COLOUR =================
+    // This is the ONE swatch in this factory that is deliberately neutral, and the caller passes it
+    // a grey. 02-world's kingsRoad multiplies this map by a per-vertex albedo, so a brown map on a
+    // brown vertex colour SQUARES the hue: v131.14 authored #8A7150 (blue at 0.58 of red) and the
+    // composer handed back (103,70,36) — blue at 0.35 of red, a terracotta ribbon rather than
+    // earth, and a good third darker than §2.2 asks for. Two browns multiplied is not a browner
+    // brown, it is a different material. So the road's colour lives in the vertex layer and this
+    // draws MODULATION around 1.0. Anything hued in here comes straight back as saturation.
+    //
+    // THE TONE IS VALUE NOISE, AND IT IS ISOTROPIC IN TEXEL SPACE ON PURPOSE. Two cuts got this
+    // wrong before it worked, and both failures are visible in _roadshot if you go looking:
+    //   · AXIS-ALIGNED RECTANGLES. 30 blocks of 5-15 x 9-26 texels for "broad tone" — and you can
+    //     see every one of them. Dirt has no straight edges at any scale; a rectangle is a quilt
+    //     patch, which is the exact artefact this swatch exists to avoid.
+    //   · STREAKS DRAWN ALONG v. kingsRoad maps u across the track and v on arc length at 2:1, so
+    //     the mapping ALREADY stretches everything twice as long in the direction of travel — and
+    //     at a grazing vantage the anisotropic filter then averages along that same axis. A
+    //     v-aligned streak gets stretched, then smeared, and the near road came back reading as
+    //     brushed wood grain (03-close, measured and looked at). A round blob smeared along v is
+    //     still a blob. LET THE UVs DO THE STRETCHING AND DRAW THE MATERIAL.
+    // So: four octaves of value noise on lattices of 16/8/4/2 texels — 2.4 / 1.2 / 0.6 / 0.3 world
+    // units across the track, twice that along it — hashed MODULO the lattice period, which is
+    // what makes the field tile exactly with no seam and no wrap-clipping.
+    //
+    // AND THE TIERS ARE MEANT TO DIE IN MIP ORDER — the 16-texel octave is what is still there at
+    // the far vantage, the 4- and 8-texel ones carry the mid-field, and the grit below is only
+    // there from about ten metres in. kingsRoad puts this swatch on the same footing grassTex is
+    // already on (01-engine.js:605 — mipmaps, trilinear minification, NEAREST magnification, full
+    // anisotropy), which is what the road lies on and therefore what it has to match. v131.14 was
+    // NOT on that footing: 680 of its 1024 texels at four values ±0.13, point-sampled with no
+    // mipmaps at all, so a metre away it was a chequerboard of 12px squares (the blocky quilt
+    // v130.2 tore the previous texture out for) and at range it was un-mippable aliasing noise.
+    const smt=v=>v*v*(3-2*v);
+    // periodic hash: the lattice wraps at p cells, so octave() is exactly periodic over the swatch
+    const hsh=(a,b,p)=>{ let h=(Math.imul(((a%p)+p)%p+1,0x9E3779B1)^Math.imul(((b%p)+p)%p+1,0x85EBCA6B))>>>0;
+      h=Math.imul(h^(h>>>15),0x2C1B3C6D)>>>0; h=Math.imul(h^(h>>>13),0x297A2D39)>>>0;
+      return ((h>>>9)&0xffff)/65535; };
+    const oct=(x,y,cell)=>{ const p=s/cell, gx=x/cell, gy=y/cell;
+      const ix=Math.floor(gx), iy=Math.floor(gy), fx=smt(gx-ix), fy=smt(gy-iy);
+      const a=hsh(ix,iy,p), b=hsh(ix+1,iy,p), d=hsh(ix,iy+1,p), e=hsh(ix+1,iy+1,p);
+      return (a+(b-a)*fx)*(1-fy)+(d+(e-d)*fx)*fy; };
+    // 24 pre-mixed steps rather than a _shade() per texel: 4096 THREE.Color round-trips is real
+    // time at boot, for a difference of three sRGB levels between neighbouring steps.
+    const RAMP=[]; for(let i=0;i<24;i++)RAMP.push(_shade(hex,(i/23-0.5)*0.38));
+    // THE FIFTH OCTAVE IS A PER-TEXEL HASH, AND IT IS THE ONE THAT ANSWERS "the road needs texture".
+    // Four octaves of smoothly interpolated noise have NOTHING at the single-texel scale — the
+    // finest lattice was two texels through a smoothstep, which is a soft bump — so the road came
+    // back reading as suede: correct in form, no material. At weight 0.26 against a 0.38 ramp the
+    // per-texel term spans 0.19 in lightness here, which is ~48 levels on the swatch and lands as
+    // about ±0.045 of screen value once it multiplies through the vertex albedo.
+    // It is NOT a return to v131.14's sandpaper, and the difference is worth being precise about
+    // because "raise the grain" is exactly how that failure was reached: v131.14 was ±0.13 in
+    // lightness at 66% coverage, point-sampled, with NO mipmaps, multiplying a brown map into a
+    // brown vertex colour. Four independent reasons it read as static; this shares none of them,
+    // and it sits on top of four smooth octaves rather than being the whole signal.
+    // TWO THINGS TRIED HERE AND DROPPED, so nobody spends the round again:
+    //   · quantising the field to seven hard levels for §3.7's terminator. Visible in the swatch,
+    //     changes NOTHING in the frame — the field's own steps were never what was missing.
+    //   · chasing the softness through the filter: mipmaps off, and NearestMipmapLinear, both
+    //     rendered pixel-for-pixel the same as trilinear at every vantage. The softness was the
+    //     content, which is what this octave is.
+    for(let y=0;y<s;y++)for(let x=0;x<s;x++){
+      const n=0.22*oct(x+0.5,y+0.5,16)+0.24*oct(x+0.5,y+0.5,8)
+             +0.22*oct(x+0.5,y+0.5,4)+0.12*oct(x+0.5,y+0.5,2)+0.26*hsh(x,y,s);
+      c.fillStyle=RAMP[Math.max(0,Math.min(23,Math.round(((n-0.5)*1.9+0.5)*23)))];
+      c.fillRect(x,y,1,1);
+    }
+    // …and then the things that are OBJECTS rather than tone. These are the only marks in here with
+    // a hard edge and they are the first tier to go as the road recedes, which is correct: you
+    // should be able to pick out grit underfoot and nothing but ground colour at fifty metres.
+    // WRAP-SAFE: stamped nine times at ±s so nothing is clipped at the border (u sits exactly on
+    // 0..1 across the ribbon, so the u=0 column is filtered against the u=1 column every frame).
+    const R=(x,y,w,h,f)=>{c.fillStyle=f;
+      for(let dx=-1;dx<2;dx++)for(let dy=-1;dy<2;dy++)c.fillRect(x+dx*s,y+dy*s,w,h);};
+    // these read as Math.random() and are not — _tex has swapped the casino for a seeded stream for
+    // the duration of this callback, so the swatch is the same bytes in every process (§H A9).
+    const rnd=(a,b)=>a+Math.random()*(b-a), ri=(a,b)=>a+((Math.random()*(b-a+1))|0);
+    for(let i=0;i<340;i++)R(ri(0,s),ri(0,s),1,1,_shade(hex,rnd(0,1)<0.75?-0.115:0.050));  // grit
+    for(let i=0;i<34;i++)R(ri(0,s),ri(0,s),1,2,_shade(hex,rnd(0,1)<0.65?-0.135:0.085));   // scuffs
+    for(let i=0;i<14;i++)R(ri(0,s),ri(0,s),2,2,_shade(hex,0.062));   // loose stone, catching light…
+    for(let i=0;i<7;i++)R(ri(0,s),ri(0,s),2,2,_shade(hex,-0.165));   // …and the odd bedded-in one
+  },key);
   else t=_tex(16,(c,s)=>{ // robe: undyed weave
     _blocks(c,s,["#e8e2d0","#ded8c4","#efe9d8"]);
     c.fillStyle="#cfc9b6"; for(let y=3;y<s;y+=5)c.fillRect(0,y,s,1);

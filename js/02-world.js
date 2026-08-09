@@ -1494,121 +1494,180 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
   }
 })();
 (function kingsRoad(){ // a winding dirt road from throne to throne — the "hold the road" band's home
-  // v130.1 THE ROAD WAS NEVER A ROAD. 53 discs of radius 2.1–2.9 laid 6.73 units apart cannot
-  // touch each other: the widest possible pair still leaves 0.9 units of grass between them, so
-  // every render containing the road showed a chain of separate brown lozenges marching away from
-  // the camera. That is F10, an automatic fail, and it has been in every shot since v34.
-  // The arithmetic is the whole fix: consecutive discs overlap when the radius clears half the
-  // spacing, 3.37. At 4.2–5.4 they overlap by 1.5–3 units and weld into one continuous ribbon with
-  // a scalloped edge, which is what a rutted cart track looks like from above anyway.
-  // N STAYS AT 52 AND THE CALL COUNT STAYS AT ONE PER SEGMENT (§10.7): the seeded window places
-  // nodes[] positionally and the netcode indexes them, so a single extra Math.random() here moves
-  // every node index on the wire. Radius coefficients inside an existing expression are free;
-  // segment count is not a random at all.
-  // Colours to §2.2 road.base / road.dark — the old pair was a pale sandy tan that sat brighter
-  // than the grass, so the road read as a light stripe instead of a worn-in dark one.
-  const N=52;
-  // RUTS, not noise. The modulation is addressed by where the ground is, but a wash of blobs would
-  // still be a brown amoeba with a pattern on it — what makes a dirt track read as a TRACK is two
-  // wheel ruts running down it. roadPoint() is invertible (x is linear in t), so a vertex can ask
-  // what the centreline's z is at its own x and get its offset ACROSS the track for free; the ruts
-  // then follow every bend in the road rather than cutting across it. Two dark bands at ±2.35 on a
-  // ~9.6-unit ribbon, plus a slow longitudinal wear so no two stretches are the same.
-  // v130.4 AND IT WAS STILL THE LARGEST DEAD AREA IN THE FRAME, because the modulation was right and
-  // the RANGE was nothing. Sampled across the near road in 05-lowsun: modal (143,113,68), per-channel
-  // standard deviation 7.1 / 13.5 / 3.6 over 62,900 pixels — flatter than the lawn beside it, and in
-  // a greyscale copy of 02-town the road and the grass are the same object. Two arithmetic reasons:
-  //   · §2.2's road.base and road.dark are SIX POINTS OF VALUE APART (0.40 / 0.34), so a mix of the
-  //     two spans a range narrower than the noise in the grass texture. A rut is not a lighter dirt,
-  //     it is dirt in its own shade, so the ramp gets a third stop — §2.2's dirt.shadow at 0.28, the
-  //     hex this palette already keeps for earth that never sees the sun. Base→dark→deep is a 12
-  //     point spread and it reads at play distance.
-  //   · The old ramp never REACHED either end: t swung 0.26–0.78, so the crown was a 74% mix and the
-  //     rut cores an 22% one. Eleven levels of red, on a surface 200 pixels across. Now the crown
-  //     sits at the top stop and the rut cores land in the third one.
-  // THE VERGE IS THE OTHER HALF, and it is the answer to the scalloped edge as well. The outer ~1.8
-  // units of the ribbon now darken into the third stop, so where the road meets grass there are two
-  // steps rather than one hard line, and the eye stops tracing the disc arcs (a second inset PASS of
-  // dark discs would have done the same thing for 53 more geometries and an inner boundary that
-  // misregisters on every bend — this follows the true edge of the union for free).
-  // ONE THING THIS DELIBERATELY DOES NOT DO: tint by DISC INDEX. §2.2 calls road.dark "alternating
-  // segment" and alternating consecutive discs is the obvious reading, but a per-disc constant is a
-  // hard colour discontinuity along a disc's own rim, which is precisely the lily-pad artefact v130.2
-  // spent a round removing. The alternation is bought from three coprime sines of world position
-  // instead: same read down the length of the road, no seam anywhere for the eye to catch.
-  // v130.5 THE HEXES ARE PRE-DIVIDED BY WHAT THE FRAME DOES TO THEM, the same correction and for the
-  // same reason as the terrain's vertex gain above. Eyedropper the shipped road and the crown stop
-  // measured (152,119,74) against the authored #8A7150 = (138,113,80): red +10%, green +5%, blue
-  // −7.5%. That ratio is the sun tint times the grade pass's 0.97 on blue, both of which live in
-  // other files and are right for everything else in the frame — so the road cannot be fixed by
-  // arguing with them, only by authoring the value that comes OUT the far end. These three are
-  // §2.2's road.base / road.dark / dirt.shadow divided by that measured gain, so the render lands
-  // on (138,113,80) / (116,96,63) / (87,68,51) instead of 13 blue short of all three. Re-measure
-  // before touching them: they are a correction, not a palette, and if the grade moves they move.
-  const _rA=new THREE.Color(0x7D6B56), _rB=new THREE.Color(0x695B44), _rC=new THREE.Color(0x4F4137);
-  const _rc=new THREE.Color();
-  const _A=TCPOS[0], _B=TCPOS[1];
-  const _ss=(a,b,v)=>{const t=Math.max(0,Math.min(1,(v-a)/(b-a)));return t*t*(3-2*t);};
-  // v130.5 AND THE BANDING WAS BEING EATEN BY ITS OWN NOISE. The snap to fifths was doing exactly
-  // what the comment claimed; what it snapped was a signal the `wear` term had already scrambled.
-  // The three sines summed to ±0.58 against a stop spacing of 0.40, so which of the five stops a
-  // vertex landed on was decided by the noise and not by where it sat across the track: the crown
-  // wandered over stops 0–2 and the rut cores over 1.2–2.0, and 57,000 road pixels came back with
-  // a modal of 16% and a per-channel std of 12/10/6 — a smooth vignette, measured and rendered.
-  // Three changes and the first is the one that matters:
-  //   · THE NOISE GOES UNDER HALF A STOP (±0.23). It still breaks the tone across disc boundaries,
-  //     which is its whole job, but it can no longer move a vertex more than one stop, so the rut
-  //     decides the band and the wear only decides which side of an edge a given patch falls on.
-  //   · FOUR STOPS, NOT SIX. Two thirds of a t-unit apart instead of two fifths, which is 12–18
-  //     screen levels between neighbours rather than 8. A band edge you have to look for is a
-  //     gradient with extra steps.
-  //   · THE RUT IS A RUT, NOT A TROUGH. exp(-d²·2.6) instead of 1.15 halves the wheel track's width
-  //     to ~0.9 units, so the dark core is a band the width of a cart wheel and the ground between
-  //     the two of them comes back up to the crown stop — which is the read that says "two wheels
-  //     went down here" rather than "the middle of this is darker".
-  const roadTint=(x,y,z)=>{
-    const u=Math.max(0,Math.min(1,(x-_A[0])/(_B[0]-_A[0])));
-    const zc=_A[1]+(_B[1]-_A[1])*u+Math.sin(u*Math.PI)*16+Math.sin(u*Math.PI*3)*4;
-    const off=Math.abs(z-zc);                       // distance ACROSS the track
-    const d=off-2.30, rut=Math.exp(-d*d*2.6);       // the two wheel ruts, at a wheel's width
-    const verge=_ss(3.1,4.6,off)*1.10;              // worn earth at the edges, into the third stop
-    const wear=0.10*Math.sin(x*0.21+z*0.13)         // three coprime sines: the "alternating segment"
-              +0.08*Math.sin(x*0.52-z*0.37)         // read, addressed by world position so it crosses
-              +0.05*Math.sin(x*1.07+z*0.61);        // disc boundaries instead of drawing them
-    // …AND THEN IT IS BANDED, which is the difference between a road and a stain. Everything else in
-    // this world takes its shape from a hard terminator (§3.7 — the ramp exists to stop values from
-    // sliding), so the road takes one too: snapping t to thirds puts the whole swing into three
-    // edges instead of spending it on a gradient. It cannot be sharper than the mesh — a vertex
-    // colour interpolates, so an edge is one cell wide — which is what the ring bump below is for.
-    // 1.75, not 1.35: at 1.35 the deepest stop was authored and never reached — t topped out at 1.63
-    // against the 1.667 the fourth stop starts at, so dirt.shadow sat in the file doing nothing and
-    // the road's whole value range was two stops wide (p1→p99 luminance 0.106, measured). At 1.75 the
-    // core of each wheel track drops into it for the ~0.35 units where the rut is deepest — a thin
-    // darkest line down the middle of a broader dark band, which is what a wheel actually leaves.
-    const t=Math.max(0,Math.min(2,0.05+1.75*rut+verge+wear));
-    const q=Math.round(t*1.5)/1.5;
-    return (q<=1?_rc.copy(_rA).lerp(_rB,q):_rc.copy(_rB).lerp(_rC,q-1)).getHex();
-  };
-  // v131.13 ONE RIBBON, NOT 53 DISCS. See the note at the head of this function: five passes
-  // improved the discs and none of them could stop a union of circles from having a scalloped
-  // outline, because the scallops ARE the circles. A swept quad strip has no disc boundaries in it
-  // at all, and it costs ONE mesh either way — this still lands in ROAD_PARTS and is welded below.
+  // ============ THE HISTORY, BECAUSE IT IS A MAP OF WHERE NOT TO GO AGAIN ============
+  // v34–v131.12  53 OVERLAPPING DISCS. The outline of a union of circles is scalloped BY
+  //              CONSTRUCTION, so five separate passes (v130.1–v130.5) tinted, inset, banded and
+  //              edge-darkened them and the owner still read "a bunch of circles". Nothing that
+  //              keeps the discs can fix that; the geometry was the bug.
+  // v131.13      A SWEPT QUAD STRIP on the same spine — mitred per cross-section, draped to
+  //              terrain, one mesh. The circles went and they are not coming back.
+  // v131.14      arc-length UVs and a grit map, so the ribbon could carry a texture at all.
+  // v131.15      …and then somebody put a colour meter on it. TWO BUGS, BOTH ARITHMETIC:
   //
-  // THE RANDOM BUDGET IS UNCHANGED AND THAT IS LOAD-BEARING. §10.7: the seeded window places
-  // nodes[] positionally and the netcode indexes them, so one extra Math.random() in this function
-  // moves every resource node on the wire. The half-width is drawn from exactly the same
-  // `4.55+Math.random()*0.55`, once per cross-section, in the same order — 53 calls, as before.
-  // The node hash (tools/townages.js) must read 3ad55989 after this change or it is wrong.
-  const HW=[], CEN=[];
-  for(let i=0;i<=N;i++){
-    HW.push(4.55+Math.random()*0.55);            // the ONE random per segment — do not add another
-    CEN.push(roadPoint(i/N));                    // the ONE course — the bazaars sit on the same curve
-  }
-  // Subdivide BETWEEN the cross-sections so the ribbon drapes over terrain relief instead of
-  // spanning it: the spine samples are ~6.7 units apart and the terrain moves inside that.
-  const SUB=4, M=N*SUB;
-  const pos=[], idx=[];
+  //   1. THE RIBBON HAD TWO VERTICES PER CROSS-SECTION, SO IT HAD NO CROSS-SECTION.
+  //      roadTint computed wheel ruts at ±2.30, a verge and a longitudinal wear — and it was
+  //      sampled at the two EDGE vertices and nowhere else. Both of those sit at |off| ≈ 4.8,
+  //      deep inside the verge term, so every vertex on the road got the same answer and the
+  //      whole interior was a linear blend between two identical colours. Measured off 02-over:
+  //      the mean luminance of 55 column bands ACROSS the track came back
+  //         .34 .31 .30 .28 .28 .28 .29 .28 … .28 .29 .28 .29 .31 .31 .30
+  //      — dead flat, pinned at the DARKEST of the three stops, for the entire width. The ruts,
+  //      the crown, the banding and half the palette were computed, discarded and never rendered
+  //      once. That is why it read as a chocolate bar with sandpaper on it. Form in a vertex
+  //      layer needs vertices to live in: hence the 27 columns below.
+  //
+  //   2. A BROWN MAP TIMES A BROWN VERTEX COLOUR SQUARES THE HUE. The map was minted from
+  //      #8A7150 (blue at 0.58 of red) and multiplied by vertex colours in the same family; the
+  //      composer handed back (103,70,36), blue at 0.35 of red, at luminance 0.284 against grass
+  //      at 0.522. Terracotta mud, not earth. The `dirt` swatch in 01-engine.js is now neutral
+  //      and the road's colour lives HERE, in one place, authored as what the frame should show.
+  //
+  // THREE THINGS THAT ARE NOT NEGOTIABLE AND ARE EASY TO BREAK BY ACCIDENT:
+  //   · THE RANDOM BUDGET (§10.7). The seeded window places nodes[] positionally and the netcode
+  //     indexes them, so ONE extra or missing Math.random() in this function moves every resource
+  //     node on the wire. This makes exactly N+1 = 53 calls, one half-width per cross-section —
+  //     and every THREE constructor draws FOUR MORE for its uuid, so the count of
+  //     BufferGeometry / Material / Mesh / Texture objects in here is on the wire too: one each,
+  //     plus the two texturedMat mints. THREE.Color, BufferAttribute and typed arrays are free.
+  //     tools/townages.js must print node hash 3ad55989 after any edit here.
+  //   · THE SPINE. roadPoint() is shared with the neutral bazaars, the tree-clearing corridor and
+  //     the AI's road band. It is read here and never touched.
+  //   · ONE MESH. It is 8,451 vertices now instead of 418 and it is still ONE draw call; that
+  //     trade is the whole design. 16k triangles is less than four trees.
+  const N=52;
+  const _ss=(a,b,v)=>{const t=Math.max(0,Math.min(1,(v-a)/(b-a)));return t*t*(3-2*t);};
+
+  // ---------------- WHAT THE FRAME SHOULD SHOW, AND THE PIPELINE IN THE WAY ----------------
+  // Authored as sRGB bytes AS THEY SHOULD COME OFF THE COMPOSER on sunlit road — not as they go
+  // into the material. Between here and the frame stand the warm sun (#fff1d2), the toon ramp,
+  // the neutral grit map and the grade's cut on blue; their product is _RGAIN, measured, and the
+  // stops are divided through it. Re-measure with tools/roadshot.js if any of those move — it
+  // prints the per-column profile these three are chosen against. They are a correction, not a
+  // palette, and the palette is the _TGT row above them.
+  //
+  // THE ORDER OF THE THREE IS THE CORRECTION v130.4 GOT BACKWARDS. It made the VERGE the darkest
+  // stop, on the theory that a dark rim hid the disc scallops. It did not, and it cost twice:
+  //   · it inverted the material — dust and dry gravel get thrown OFF the wheels to the sides of
+  //     a track; the damp compacted earth is in the ruts. A track with dark edges and a pale
+  //     middle is a ditch.
+  //   · it put the biggest value step in the frame exactly on the boundary with the grass, which
+  //     is precisely what reads as a CUT LINE. The road now meets the lawn at its palest (0.47
+  //     against grass at 0.52, a step you have to look for) and darkens inward, so all of its
+  //     contrast is spent in the middle where the wheels are and none of it on the outline.
+  // The spread is 0.47 → 0.30, three times what shipped, and §2.2's road.base still sits in the
+  // middle of it as the crown.
+  // SATURATION RISES WITH DARKNESS, which is what earth actually does — dry dust at the verge is
+  // pale and washed out, the compacted damp floor of a rut is a deep warm brown. Blue/red runs
+  // 0.59 / 0.53 / 0.49 across the three. A road whose three stops are the same hue at three
+  // brightnesses is a painted stripe with a gradient on it.
+  const _TGT=[[149,125,89],[132,105,71],[95,72,47]];   // shoulder / crown / rut core
+  const _RGAIN=[0.87,0.71,0.56];
+  const _s2l=v=>{v/=255;return v<=0.04045?v/12.92:Math.pow((v+0.055)/1.055,2.4);};
+  const STOP=_TGT.map(c=>[_s2l(c[0])/_RGAIN[0],_s2l(c[1])/_RGAIN[1],_s2l(c[2])/_RGAIN[2]]);
+
+  // ---------------- THE CROSS-SECTION: this is what makes it a TRACK and not a stripe ----------
+  // `s` is the signed position across the ribbon, -1 at one edge to +1 at the other. It is passed
+  // in rather than derived: v130.4 recovered it by inverting roadPoint (x is linear in t, so the
+  // centreline's z is knowable from a vertex's own x), which was clever and is now unnecessary —
+  // the sweep below knows exactly where each vertex sits across the track, so ask it.
+  const _c=[0,0,0];
+  const roadTint=(s,x,z)=>{
+    const a=Math.abs(s);
+    // THE GAUGE WANDERS. Two ruts at a fixed fraction of the width read as painted lane markings;
+    // a cart's axle is fixed but the driver is not, and over tens of units the pair drifts. Long
+    // periods only (153 and 68 units) so the wander is something you notice after following the
+    // road, not a wiggle.
+    const rc=0.50+0.055*Math.sin(x*0.041+z*0.017)+0.030*Math.sin(x*0.093-z*0.052);
+    const d=(a-rc)*4.85;                                   // back into world units
+    const rut=Math.exp(-d*d*3.40);                         // ~1.1 units wide: one cart wheel
+    // THE FOUR TERMS HAVE TO BE LAID OUT IN THE RIGHT ORDER ACROSS THE TRACK, and the first cut of
+    // this was not — its shoulder ramp started at a=0.30, i.e. INSIDE the rut, so the two terms
+    // cancelled over the rut's inner flank and the band immediately OUTSIDE each rut came out
+    // lighter than the crown between them. Rendered, that is a road with one broad dark stripe up
+    // the middle and pale sides: "a dark middle", which is the exact failure a rutted track is
+    // supposed to avoid. The crown must be its own term, ending BEFORE the rut begins, and the
+    // shoulder must start AFTER it ends. Outward from the centreline the road now goes
+    //   crown (0.435 V) → rut (0.29) → back up (0.45) → shoulder, the palest (0.48) → rim (0.43)
+    // which is two dark lines on a light field, seen from any distance that resolves them.
+    const crown=1-_ss(0.06,0.40,a);                        // the high dry middle, between the wheels
+    const shoulder=_ss(0.63,0.87,a);                       // dust and gravel thrown off the wheels
+    // THE RIM IS THE SMALLEST TERM IN HERE AND IT WAS THE EASIEST TO OVERDO. It exists so the
+    // ribbon SITS on the ground rather than on top of it — a worn edge throws a little shadow and
+    // collects grass litter — but at 0.80 it drew a continuous dark contour round the whole road,
+    // which is the outline the last six versions were trying to stop the eye from tracing. 0.52
+    // is a fringe you read as contact and cannot follow.
+    const rim=_ss(0.87,1.0,a);
+    // LONG WEAR, addressed by world position, at periods 30 / 12 / 5.9 units. Nothing here shares
+    // a factor with the texture's 19.2-unit tile, so the two layers cannot phase-lock and draw a
+    // rhythm — which is the whole answer to "is there a findable repeat along its length": the
+    // repeat exists in the map and is smothered by a layer that does not repeat at all.
+    const wear=0.16*Math.sin(x*0.21+z*0.13)
+              +0.11*Math.sin(x*0.52-z*0.37)
+              +0.06*Math.sin(x*1.07+z*0.61);
+    // …AND THEN IT IS BANDED, because everything else in this world takes its shape from a hard
+    // terminator (§3.7 — the ramp exists to stop values sliding). Five levels over the 0..2 span.
+    // A vertex colour interpolates, so a band edge is one cell wide — 1.1 units along the road and
+    // 0.3–0.6 across it, which is a crisp step at range and a short ramp underfoot. That is the
+    // right way round: the banding is a distance read.
+    const t=Math.max(0,Math.min(2,1.10-0.48*crown+0.86*rut-1.03*shoulder+0.52*rim+wear));
+    const q=Math.round(t*2)/2;
+    const i=q<1?0:1, f=q<1?q:q-1;
+    // DRY AND DAMP, NOT LIGHT AND DARK. The same axis the meadow uses (see meadowPatch): a patch
+    // that is only darker is a stain, a patch that is warmer AND yellower is drier ground. Half
+    // the reason the old road read as one material was that its only variable was value.
+    const dry=Math.max(0,wear), damp=Math.max(0,-wear);
+    const gr=[1+dry*0.10-damp*0.05, 1+dry*0.03-damp*0.03, 1-dry*0.16+damp*0.12];
+    for(let k=0;k<3;k++)_c[k]=(STOP[i][k]+(STOP[i+1][k]-STOP[i][k])*f)*gr[k];
+    return _c;
+  };
+
+  const HW=[];
+  for(let i=0;i<=N;i++)HW.push(4.55+Math.random()*0.55);  // the ONE random per section — see §10.7 above
+
+  // THE COLUMNS. Not uniform: the wheel rut is a ~1.1-unit gaussian centred 2.4 units off the
+  // spine and WANDERING ±0.4 either way, so the band a=0.36..0.73 needs a sample every ~0.3 world
+  // units and everything else can have one every ~0.6. A uniform 27 would smear the rut and spend
+  // its resolution on a flat crown; this is the same vertex count with the resolution put where
+  // the form is.
+  const S=[-1,-0.95,-0.88,-0.80,-0.73,-0.66,-0.60,-0.54,-0.48,-0.42,-0.36,-0.26,-0.14,0,
+            0.14,0.26,0.36,0.42,0.48,0.54,0.60,0.66,0.73,0.80,0.88,0.95,1], K=S.length;
+  // SUB=6, not 4. The edge wobble's finest term has a 2.2-unit period and the old 4 put cross-
+  // sections 1.7 units apart — under Nyquist, so that term was not drawing a nibbled edge, it was
+  // aliasing into a sampling-rate zigzag. 1.13 units resolves it, and it drapes the ribbon over
+  // terrain relief the ~6.7-unit spine samples span straight across.
+  const SUB=6, M=N*SUB;
+  const TILE=19.2, pos=[], uv=[], idx=[];
   const _p=(t)=>{ const q=Math.max(0,Math.min(1,t)); return roadPoint(q); };
+  // ---- WHERE THE GROUND ACTUALLY IS, WHICH IS NOT WHERE terrainHeight() SAYS IT IS ----
+  // The ribbon was pinned at terrainHeight(x,z)+0.06 and it sat 0.063 UNDER the grass at (±83,10)
+  // — raycast down onto both meshes at 5,049 points along the spine and that is the worst of them.
+  // The reason is that the DRAWN ground is not terrainHeight(): it is a 150x120 PlaneGeometry
+  // sampling it, so between lattice points it interpolates LINEARLY, and terrainHeight() has
+  // creases in it where the town-centre and bazaar flats begin. Across a crease the mesh rides up
+  // to 0.12 ABOVE the function; elsewhere it sags up to 0.10 below. A constant big enough to clear
+  // the first (0.14) floats the road a quarter of a unit off the ground everywhere else, and at
+  // the closest zoom a quarter unit is a twenty-pixel lip down both edges.
+  // So sample the MESH, not the function: same lattice, same triangulation, same barycentric
+  // interpolation r128 will actually run, and then 0.06 is measured against the surface the player
+  // sees. THE FOUR NUMBERS BELOW MUST MATCH buildTerrain's PlaneGeometry at the head of this file.
+  // If that line moves and this one does not, the symptom is grass growing through the road near
+  // the bazaars — which is exactly what this was.
+  const _TW=MAP.x*2+110, _TH=MAP.z*2+200, _TSX=150, _TSZ=120;
+  const _QX=_TW/_TSX, _QZ=_TH/_TSZ;
+  const groundY=(x,z)=>{
+    const gx=Math.min(_TSX-1e-6,Math.max(0,(x+_TW*0.5)/_QX));
+    const gz=Math.min(_TSZ-1e-6,Math.max(0,(z+_TH*0.5)/_QZ));
+    const ix=Math.floor(gx), iz=Math.floor(gz), fx=gx-ix, fz=gz-iz;
+    const X0=-_TW*0.5+ix*_QX, Z0=-_TH*0.5+iz*_QZ;
+    const ha=terrainHeight(X0,Z0),      hb=terrainHeight(X0,Z0+_QZ),
+          hc=terrainHeight(X0+_QX,Z0+_QZ), hd=terrainHeight(X0+_QX,Z0);
+    // r128's PlaneGeometry emits (a,b,d) then (b,c,d) per quad, so the diagonal runs b→d and the
+    // first triangle is the fx+fz<=1 half. Get that backwards and the road lands on the wrong
+    // triangle exactly where the relief is steepest, which is the only place it shows.
+    return (fx+fz<=1) ? ha+(hd-ha)*fx+(hb-ha)*fz
+                      : hc+(hb-hc)*(1-fx)+(hd-hc)*(1-fz);
+  };
+  let arc=0, pcx=0, pcz=0;
   for(let j=0;j<=M;j++){
     const t=j/M;
     // the tangent, from a short central difference on the real spine
@@ -1617,37 +1676,86 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
     const tl=Math.hypot(tx,tz)||1; tx/=tl; tz/=tl;
     const nx=-tz, nz=tx;                          // the across-track normal
     const c=_p(t);
+    if(j)arc+=Math.hypot(c.x-pcx,c.z-pcz);        // cumulative arc length, for v
+    pcx=c.x; pcz=c.z;
     // half-width lerped between the two nearest sampled cross-sections, so the edge keeps the
     // same gentle breathing the discs had without any of them being individually legible
     const f=t*N, i0=Math.min(N,Math.floor(f)), i1=Math.min(N,i0+1), fr=f-i0;
-    let hw=HW[i0]+(HW[i1]-HW[i0])*fr;
-    // …AND THE VERGE IS WHERE A RIBBON CAN GO WRONG IN THE OTHER DIRECTION. The first cut used a
-    // single small wobble on the half-width and came back as a brown strip with two straight
-    // parallel edges — which fixes "a bunch of circles" and replaces it with "a paved road", on a
-    // dirt cart track. What a worn verge actually is: the edge wanders because the traffic did.
-    // So each side is hashed off ITS OWN world position (not the spine's, or both edges would
-    // wander in lockstep and the ribbon would just snake), three coprime sines, ±0.82 on a ~4.8
-    // half-width = ±17%. Deterministic by construction — no Math.random here, §10.7.
-    for(const sgn of [-1,1]){
-      const ex=c.x+nx*sgn*hw, ez=c.z+nz*sgn*hw;      // the nominal edge, then perturb it
-      const wob=0.42*Math.sin(ex*0.63+ez*0.41)
-               +0.26*Math.sin(ex*1.31-ez*0.87)
-               +0.14*Math.sin(ex*2.90+ez*2.10);
-      const w=hw+wob;
-      const px=c.x+nx*sgn*w, pz=c.z+nz*sgn*w;
-      pos.push(px,terrainHeight(px,pz)+0.06,pz);
+    const hw=HW[i0]+(HW[i1]-HW[i0])*fr;
+    // …AND THE EDGE IS WHERE A RIBBON GOES WRONG IN THE OTHER DIRECTION. The first cut of v131.13
+    // used one small wobble on the half-width and came back as a brown strip with two straight
+    // parallel edges — which fixes "a bunch of circles" and ships "a paved road" instead, on a
+    // dirt cart track. A worn verge wanders because the traffic did. Each side is driven off ITS
+    // OWN world position (not the spine's, or both edges move in lockstep and the ribbon merely
+    // snakes), three coprime sines, ±0.82 on a ~4.8 half-width. No Math.random, §10.7.
+    const w=[0,0];
+    for(let k=0;k<2;k++){
+      const sgn=k?1:-1;
+      const ex=c.x+nx*sgn*hw, ez=c.z+nz*sgn*hw;   // the nominal edge, then perturb it
+      w[k]=hw+0.42*Math.sin(ex*0.63+ez*0.41)
+             +0.26*Math.sin(ex*1.31-ez*0.87)
+             +0.14*Math.sin(ex*2.90+ez*2.10);
+    }
+    // THE INTERIOR COLUMNS ARE LAID BETWEEN THE TWO WANDERING EDGES, not on the nominal width, so
+    // the ruts and the grain breathe WITH the edge instead of sliding under it.
+    for(let k=0;k<K;k++){
+      const s=S[k], ww=s<0?w[0]:w[1];
+      const px=c.x+nx*s*ww, pz=c.z+nz*s*ww;
+      pos.push(px,groundY(px,pz)+0.06,pz);
+      // u ACROSS (0..1, edge-locked) and v on ARC LENGTH. Both matter:
+      //   · edge-locked u means the grain never stretches sideways however the width breathes, and
+      //     it puts the swatch's u=0 and u=1 columns exactly on the road's two edges — which is
+      //     why `dirt` is drawn wrap-safe on both axes.
+      //   · arc length means the tile is fixed in WORLD space and never restarts at a cross-
+      //     section. v130.2 tore the previous texture out because a 16px swatch that restarted at
+      //     every disc centre drew the outline of every disc; a parameterisation that never resets
+      //     cannot do that.
+      // TILE 19.2 against a ~9.6 width is a deliberate 2:1 stretch ALONG the road — see `dirt`.
+      uv.push(0.5+s*0.5, arc/TILE);
     }
   }
-  for(let j=0;j<M;j++){
-    const o=j*2;
-    idx.push(o,o+1,o+2, o+1,o+3,o+2);
+  for(let j=0;j<M;j++)for(let k=0;k<K-1;k++){
+    const a=j*K+k;
+    idx.push(a,a+1,a+K, a+1,a+K+1,a+K);          // winding gives +Y; the material is FrontSide
   }
   const rgeo=new THREE.BufferGeometry();
   rgeo.setAttribute("position",new THREE.Float32BufferAttribute(pos,3));
+  rgeo.setAttribute("uv",new THREE.Float32BufferAttribute(uv,2));
   rgeo.setIndex(idx);
+  // MAP FOR GRAIN, VERTEX COLOUR FOR FORM — the split v131.14 named and could not honour, because
+  // it had nowhere to put the form. The colours go in as LINEAR factors: r128 uses a colour
+  // attribute raw, with no sRGB decode, which is exactly the space _RGAIN was measured in.
+  const V=(M+1)*K, col=new Float32Array(V*3);
+  for(let v=0;v<V;v++){
+    const t=roadTint(S[v%K],pos[v*3],pos[v*3+2]);
+    col[v*3]=t[0]; col[v*3+1]=t[1]; col[v*3+2]=t[2];
+  }
+  rgeo.setAttribute("color",new THREE.BufferAttribute(col,3));
   rgeo.computeVertexNormals();
-  // identity matrix: the ribbon is already authored in world coordinates
-  ROAD_PARTS.push({geo:rgeo,matrix:new THREE.Matrix4(),color:roadTint});
+  // ITS OWN MESH, so it can have a map at all: ROAD_PARTS is welded into one vertex-coloured
+  // material shared with the ground patches, and a map there would drag every grass patch onto the
+  // road's grain. +1 draw call, and weldGroundDecals skips an empty ROAD_PARTS by itself.
+  //
+  // FILTERING: THE SAME FOUR LINES grassTex GETS, and for the same reason. _tex mints everything
+  // point-sampled with no mipmaps because everything else it makes is a 16–64px swatch wrapped
+  // round a prop 40–200 screen pixels tall, where there is no real minification and point sampling
+  // IS the look. The ground is the exception the engine already carries (01-engine.js:605) — a
+  // 534x450 plane seen from a metre to two hundred has minification and magnification in the same
+  // frame — and the road is 355 units of exactly the same problem lying on top of it. Matching the
+  // surface it is a decal on is not a special case; NOT matching it was.
+  // WORTH KNOWING BEFORE YOU REACH FOR THIS DIAL: the near road looked soft for three renders and
+  // none of the three filter modes changed it (mipmaps off, NearestMipmapLinear, trilinear — all
+  // pixel-identical at every vantage). The softness was in `dirt`, not here. See the note there.
+  const _rtex=texturedMat("dirt",0xCFCFCF).map;
+  _rtex.wrapS=_rtex.wrapT=THREE.RepeatWrapping;
+  _rtex.magFilter=THREE.NearestFilter; _rtex.minFilter=THREE.LinearMipmapLinearFilter;
+  _rtex.generateMipmaps=true;
+  _rtex.anisotropy=(typeof renderer!=="undefined"&&renderer.capabilities)?
+    renderer.capabilities.getMaxAnisotropy():1;   // it is seen at 5° of grazing; take all of it
+  _rtex.needsUpdate=true;                         // it was uploaded point-sampled; re-upload with mips
+  const rmesh=new THREE.Mesh(rgeo,_fogClamp(toonMat({map:_rtex,vertexColors:true}),GROUND_FOG));
+  rmesh.castShadow=false; rmesh.receiveShadow=true;   // a decal IS the ground, §3.8
+  scene.add(rmesh);
 })();
 (function ponds(){ // still water, sandy rims, reeds and cattails
   for(const [px,pz,pr] of [[-105,82,6.5],[98,-88,7],[-24,-104,5.5]]){

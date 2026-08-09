@@ -1174,7 +1174,35 @@ function buildingMesh(type,team,age,hx,hz){
       for(const sx of [-1,1])for(const sz of [-1,1]){
         const post=new THREE.Mesh(new THREE.BoxGeometry(0.5,6.4,0.5),texturedMat("wood",P.timber));
         post.position.set(sx*7.45,3.9,-2.2+sz*5.15); g.add(post);}
-      ageRoof(g,2,15.4,10.4,7.1,type,{tc,long:"x"});
+      // ANOTHER ageRoof AT THE GROUP ORIGIN. ageRoof draws at the origin of the group it is
+      // handed, and this one was handed `g` while the hall it roofs stands at z=-2.2 — so the roof
+      // was built 2.2 FORWARD of its own walls. Same fault and same fix as the Iron house's three
+      // courtyard roofs, the storage pit's huts in ages 0/2/3, the barracks' centurion block and
+      // the market's court soffits: translate, THEN roof.
+      // long:"x" makes the SPAN the 10.4 depth, so §5.5's 14% eave is 10.4*0.14 = 1.456 and the
+      // eave line falls 5.2+1.456 = 6.656 either side of the ridge. Against a hall running
+      // z -7.4..+3.0 that was an overhang of MINUS 0.744 at the BACK — the rear wall and the
+      // glazed band (z -7.5..+3.1) stood PROUD of the roof, so that elevation had none of the hard
+      // shadow band §5.5 calls the single highest-value readability trick — and +3.656 at the
+      // FRONT, 2.5x the authored figure. The front is where the hero prop is: at the lamassu
+      // head's rear face, z=5.55, the slab occupied y 6.655..7.140 while the head runs 5.0..7.2
+      // over x 2.65..4.55, and it crossed that unbroken out to z=6.804 — the roof plate ended
+      // INSIDE the guardian's head, with the polos cap's rear rim (y 7.05, z 5.35..5.71) in the
+      // slab and the cap standing on top of the roof. §F.3: the LAMASSU IS THE SILHOUETTE,
+      // "flanking the doorway" — not wearing the roof.
+      // On the hall's own z the roof lands at -2.2 +/- 6.656 = -8.856..+4.456: 1.456 of eave past
+      // BOTH wall faces, and 0.746 of daylight between the outermost drawn slab corner
+      // (-2.2+6.804 = 4.604) and the nearest lamassu part, the cap's rear rim at z=5.35. The ridge
+      // does not move — 10.352 before and after — so §H/A5's silhouette ladder is untouched, and
+      // nothing GROUNDED moves, so 00-data's measured fx/fz (11.88/11.90) still hold.
+      // NOT "or be larger", John's other remedy: to reach z=-7.4 from a ridge stuck at 0 the span
+      // has to go 10.4 -> 14.8, and ageRoof derives EVERYTHING from the span — apex 3.002 -> 4.272,
+      // ridge 10.35 -> 11.62, eave 1.456 -> 2.072, front eave line out to z=9.47, i.e. 6.47 past
+      // the front wall (4.4x the authored overhang). It still buries the lamassu, and it STILL
+      // leaves the ridge 2.2 off the hall's centre. A bigger one is an off-centre roof with more
+      // to be off by.
+      const rsub=new THREE.Group(); rsub.position.set(0,0,-2.2); g.add(rsub);   // the hall's own z
+      ageRoof(rsub,2,15.4,10.4,7.1,type,{tc,long:"x"});
       // the glazed-brick band: the one saturated course on an otherwise grey building
       const band=box(15.6,0.7,10.6,0x3A5A7A); band.castShadow=false; band.position.set(0,6.6,-2.2); g.add(band);
       // THE PAIR OF LAMASSU. Colossal, human-headed, winged, flanking the doorway — carved out of
@@ -1224,7 +1252,22 @@ function buildingMesh(type,team,age,hx,hz){
       ageRoof(g,3,9.8,13.2,11.7,type,{long:"x"});
       // the APSE, semicircular, closing the far end
       const apse=new THREE.Mesh(new THREE.CylinderGeometry(4.4,4.6,5.2,12,1,false,0,Math.PI),aWall(3));
-      apse.rotation.y=Math.PI; apse.position.set(0,3.6,-6.2); apse.castShadow=true; g.add(apse);
+      // THE SAME ONE-TOKEN YAW BUG AS THE MEDIEVAL CHURCH'S APSE, one age down. thetaLength=PI
+      // is r128's +X half and rotation.y=a slides it to [a, PI+a]; at PI the drum was the -X
+      // half, measured x[-4.60,0.00] y[1.00,6.20] z[-10.80,-1.60] -- inside the 16.4 aisle, so
+      // like the church it never showed on the flank, only as a rear-LEFT quarter with its open
+      // theta cut on the centreline x=0. The SEMI-DOME above it never had the bug: a phiLength=PI
+      // sphere spans the +Z half (SphereGeometry.js:68/70, x=-r*cos(phi)*sin(theta),
+      // z=r*sin(phi)*sin(theta)), so its rotation.y=PI already put it over the REAR -- which is
+      // exactly why the cap read as a dome hanging past the aisle roof with nothing under half of
+      // it. PI/2 puts the drum at [PI/2, 3PI/2] = the -Z half: measured x[-4.60,4.60]
+      // y[1.00,6.20] z[-10.80,-6.20] under the cap's x[-4.70,4.70] z[-10.90,-6.20] -- concentric,
+      // dome equator y=6.2 on the drum top 3.6+5.2/2 = 6.2, and 4.7 over 4.4 = the 0.3 oversail a
+      // roof should have. The cut plane z=-6.2 stands 0.2 PROUD of the aisle's rear face at -6.0
+      // rather than flush in it, so it is occluded rather than sealed: the aisle body (top y=5.6)
+      // and its roof hide the mouth from +Z, checked in a front elevation. acap's own
+      // rotation.y=PI on the next line stays as it is.
+      apse.rotation.y=Math.PI/2; apse.position.set(0,3.6,-6.2); apse.castShadow=true; g.add(apse);
       const acap=new THREE.Mesh(new THREE.SphereGeometry(4.7,12,5,0,Math.PI,0,Math.PI/2),
         texturedMat(P.roofPat,P.roof));
       acap.rotation.y=Math.PI; acap.castShadow=true; acap.position.set(0,6.2,-6.2); g.add(acap);
@@ -1367,9 +1410,23 @@ function buildingMesh(type,team,age,hx,hz){
         ageRoof(rsub,2,rw,rd,4.0,type,{tc:(rz<0?tc:undefined),long:rw>rd?"x":"z",eave:0.10});
       }
       const yard=box(4.4,0.24,4.4,_dk(P.stone,0.14)); yard.castShadow=false; yard.position.set(0,0.72,0.9); g.add(yard);
-      for(const sx of [-1,1]){                          // the exposed frame on the blank street wall
+      // THE EXPOSED FRAME ON THE BLANK STREET WALL — and it was never on the street wall. At
+      // z=-1.25 the post is inside the solid (the street range covers z<=-1.2, the wing covers
+      // z>=-1.3), and the one face of it that ISN'T buried lands on |x| = 3.2 + 0.4/2 = 3.4 —
+      // the SAME plane as the street range's side face (0 + 6.8/2 = 3.4) AND the wing's side
+      // face (2.3 + 2.2/2 = 3.4). Three co-facing quads on one plane is not interpenetration,
+      // it is z-fighting: 0.4 x 3.4 = 1.36 of timber strobing against mudbrick down each side
+      // elevation. Put it where the comment always said it goes, ON the blank street face, the
+      // plane z = -2.3 - 2.2/2 = -3.4, biting a quarter of its own depth in the way the age-3
+      // pilaster does (0.06 of 0.24):
+      //   z = -3.4 - 0.4/2 + 0.1 = -3.5  -> spans -3.7..-3.3, 0.3 proud, and the rail at -3.45
+      //                                     now reads as let in between the two posts
+      // and inset one full post width from the corner so no face touches |x| = 3.4:
+      //   x = +/-(3.4 - 0.4) = +/-3.0    -> spans 2.8..3.2, clear of the wall's side plane
+      // 3.4 tall centred at 2.3 is unchanged: footing top 0.6 to wall head 4.0, eave over it.
+      for(const sx of [-1,1]){
         const post=new THREE.Mesh(new THREE.BoxGeometry(0.4,3.4,0.4),texturedMat("wood",P.timber));
-        post.position.set(sx*3.2,2.3,-1.25); g.add(post);}
+        post.position.set(sx*3.0,2.3,-3.5); g.add(post);}
       const rail=box(6.9,0.3,0.2,P.timber); rail.castShadow=false; rail.position.set(0,3.4,-3.45); g.add(rail);
       const door=box(1.5,2.2,0.2,P.dark); door.castShadow=false; door.position.set(2.3,1.7,3.16); g.add(door);
       const sh=cyl(0.55,0.55,0.13,tc,9); sh.rotation.x=Math.PI/2; sh.castShadow=false;
@@ -1889,12 +1946,35 @@ function buildingMesh(type,team,age,hx,hz){
       if(age===3){const gal=box(10.0,0.4,2.6,P.roof); gal.castShadow=true; gal.rotation.x=0.14;
         gal.position.set(0,3.4,6.4); g.add(gal);}
     }
-    const target=cyl(1.7,1.7,0.3,MARBLE,12); target.rotation.x=Math.PI/2; target.castShadow=false; target.position.set(0,3.8,4.6); g.add(target);
-    const ring=cyl(1.2,1.2,0.34,0x27406e,12); ring.rotation.x=Math.PI/2; ring.castShadow=false; ring.position.set(0,3.8,4.61); g.add(ring);
-    const bull=cyl(0.66,0.66,0.38,0xc23a3a,12); bull.rotation.x=Math.PI/2; bull.castShadow=false; bull.position.set(0,3.8,4.62); g.add(bull);
-    for(const [ax,ay] of [[-0.3,4.2],[0.4,3.6],[0.1,3.9]]){ // arrows stuck in the target
-      const ar=cyl(0.06,0.06,1.3,PLANK,4); ar.rotation.x=Math.PI/2-0.15; ar.castShadow=false; ar.position.set(ax,ay,5.3); g.add(ar);
-      const fl=box(0.18,0.18,0.26,MARBLE); fl.castShadow=false; fl.position.set(ax,ay+0.1,5.95); g.add(fl);
+    // THE ROUNDEL GOES DOWNRANGE — +3.70 ON Z, AND NOTHING ELSE MOVES. Bolted to the shed's face at
+    // z 4.6 it stood behind the Classical covered gallery, which is authored across the whole yard
+    // in front of it: box(10,0.4,2.6) at (0,3.4,6.4) tipped 0.14 occupies y 3.021..3.779 over
+    // z 5.085..7.715, so the gallery roof cut the roundel through the bull at every camera and the
+    // MIDDLE ARROW drove through the slab — a triangle-level HIT, not an AABB overlap: the ay 3.6
+    // shaft crosses the slab's wall-side face at slab-normal -0.010 and leaves through the top face,
+    // its fletching sitting ON the roof, 0.261 of minimum translation. The other two shafts clear,
+    // but by 0.332 and 0.035. Age 5 is worse than age 3 and the same root cause: the musketry cover
+    // box(8,0.34,2.4) at (2.0,3.2,5.6) tipped 0.12 slices straight THROUGH the discs, 0.362 deep.
+    // NO HEIGHT ON THE WALL FIXES IT: the roundel is 3.400 across and the slab leaves 5.800-3.779 =
+    // 2.021 of air above it and 3.021 below it. Nor can the roundel rise, because 3.8 is itself
+    // derived — 5.800 (the ages 0-2 eave soffit) - 1.700 - 0.300. Off the wall there is room, and
+    // downrange is also where a target belongs: the age-3 gallery stands at z 6.4 and the age-5
+    // firing bench at z 5.9, so at 4.6 the roundel sat BEHIND both shooting positions. The
+    // gallery's downrange corner is 6.4 + 0.2*sin(0.14) + 1.3*cos(0.14) = 7.715, the roundel's
+    // rearmost surface is the bull's back face at z-0.17, and 8.30 - 0.17 - 7.715 = 0.415 of
+    // daylight. Everything stuck in the target moves by the same +3.70. Measured clear at all six
+    // ages: 0.415 to the gallery, 0.387 to the butt frames it now stands in front of, 1.089 to the
+    // Medieval turf mound, 0.811 to the Enlightenment backstop and 1.318 to the musketry cover.
+    // The frontmost part is a fletching at 9.78, inside the fz 11.91 footprint, so it lands nowhere
+    // a body could stand, and its underside at 2.10 is above footprint.js's 1.1 knee, so fz is
+    // unchanged. COST, ACCEPTED: there is no wall behind the roundel now — at ages 1-4 the straw-
+    // butt frames stand 0.387 back and read as its rack, and at ages 0 and 5 nothing does.
+    const target=cyl(1.7,1.7,0.3,MARBLE,12); target.rotation.x=Math.PI/2; target.castShadow=false; target.position.set(0,3.8,8.3); g.add(target);
+    const ring=cyl(1.2,1.2,0.34,0x27406e,12); ring.rotation.x=Math.PI/2; ring.castShadow=false; ring.position.set(0,3.8,8.31); g.add(ring);
+    const bull=cyl(0.66,0.66,0.38,0xc23a3a,12); bull.rotation.x=Math.PI/2; bull.castShadow=false; bull.position.set(0,3.8,8.32); g.add(bull);
+    for(const [ax,ay] of [[-0.3,4.2],[0.4,3.6],[0.1,3.9]]){ // arrows stuck in the target: 5.3+3.70
+      const ar=cyl(0.06,0.06,1.3,PLANK,4); ar.rotation.x=Math.PI/2-0.15; ar.castShadow=false; ar.position.set(ax,ay,9.0); g.add(ar);
+      const fl=box(0.18,0.18,0.26,MARBLE); fl.castShadow=false; fl.position.set(ax,ay+0.1,9.65); g.add(fl);
     }
     const hay=new THREE.Mesh(new THREE.BoxGeometry(2.6,2,1.8),plainMat(0xCBB060));
     hay.position.set(-4.4,1,5); hay.rotation.y=0.3; g.add(hay);
@@ -2037,8 +2117,13 @@ function buildingMesh(type,team,age,hx,hz){
       const gun=cyl(0.42,0.5,2.6,0x8A6A3A,8); gun.rotation.x=-0.42; gun.castShadow=false;
       gun.position.set(0,H+1.9,1.4); g.add(gun);                      // the gun on its platform
       const carr=box(1.5,0.6,2.0,P.timber); carr.castShadow=false; carr.position.set(0,H+1.1,0.9); g.add(carr);
-      const mast=cyl(0.11,0.13,4.4,PLANK,5); mast.castShadow=false; mast.position.set(-3.0,H+2.6,-2.2); g.add(mast);
-      const sig=box(1.2,0.7,0.08,tc); sig.castShadow=false; sig.position.set(-2.4,H+4.2,-2.2); g.add(sig);
+      // THE SIGNAL MAST STANDS ON THE GUN PLATFORM. Its foot was H+2.6-4.4/2 = H+0.4 while the
+      // deck slab's top is H+0.25, so it hovered 0.15 above the platform it signals from — measured
+      // on the UNMERGED factory as 0.149 down to the 10.14 x 0.5 x 10.14 deck, 0.000 after. A part
+      // of height h resting on a surface at s has its centre at s+h/2 = H+0.25+2.2. The flag is
+      // rigged to the mast, so it drops by the same 0.15 and keeps its authored hang.
+      const mast=cyl(0.11,0.13,4.4,PLANK,5); mast.castShadow=false; mast.position.set(-3.0,H+0.25+2.2,-2.2); g.add(mast);
+      const sig=box(1.2,0.7,0.08,tc); sig.castShadow=false; sig.position.set(-2.4,H+4.05,-2.2); g.add(sig);
     }else{
       // AGES:492 says the Iron cap is "flat, crenellated"; AGES:531 says the Medieval peel tower
       // is "crenellated, NO PITCH". Both shipped as gables. The 62-degree Medieval gable hung its
@@ -2061,9 +2146,35 @@ function buildingMesh(type,team,age,hx,hz){
         g.children[i].traverse(o=>{o.userData.noWeld=true; o.userData.isCap=true;});
       // the beacon: a brazier at the ages that signalled with fire, a basket at the iron age
       if(age<=2){brazier(g,deckR*0.62,-deckR*0.62);}
-      flagPole(g,0,top,0,2.4,tc,1.7,1);
+      // THE POLE STANDS ON THE CAP SLAB, NOT ON THE COPING OF THE CAP'S OWN PARAPET. ageRoof's
+      // `flat` branch returns yBase+bh+0.4+ph, the top of the parapet RAIL, and that rail only runs
+      // round the rim at +-(w/2+e-0.2) = +-4.48. At (0,0), where this pole is planted, the surface
+      // is the deck slab at yBase+bh+0.4 — ph = max(0.7, w*0.09) = 0.702 lower. Measured on the
+      // UNMERGED factory: 0.702 of air under the foot at every flat-cap age (1, 2, 4), 0.000 after.
+      // Age 3's hip returns its APEX, which IS the surface at (0,0) and measured 0.004 before and
+      // after, so the correction is gated on the form that has a parapet.
+      flagPole(g,0,capForm==="flat"?top-Math.max(0.7,(deckR*2)*0.09):top,0,2.4,tc,1.7,1);
     }
-    const banW=box(1.7,2.6,0.1,tc); banW.castShadow=false; banW.position.set(0,H*0.80,deckR*0.55+2.0); g.add(banW);
+    // THE BANNER CLADS THE FRONT PARAPET — WHICH IS WHERE ITS z ALWAYS PUT IT. The front rail is
+    // box(deckR*2, rh, 0.45) at z=deckR, so its outer face is deckR+0.225, and a 0.1 cloth whose
+    // centre is deckR+0.245 beds 0.03 into it — within the 0.03-0.11 every other wall-mounted
+    // banner in this file sits at, and erring INTO the masonry so there is no hairline. At deckR
+    // 3.9 that is 4.145: EXACTLY the old deckR*0.55+2.0. The z was the parapet's; the y never was.
+    // At H*0.80 the cloth measured 1.888 clear of the battered drum at age 1 and 1.931 clear of the
+    // peel tower at age 4 — the two worst stand-offs of any banner in the game — and at ages 2-3 it
+    // hung in OPEN AIR: that frame is four 1.1 legs at x=+-2.6 and the cloth only spans x=+-0.85,
+    // so a -z ray from it hits nothing at any depth. At age 5 its foot was 0.15 INSIDE the martello
+    // drum and its head 0.16 clear of it, because the drum is battered and the old expression only
+    // equals deckR+0.245 at deckR 3.9 — the martello's deck is 5.2. It also covered the martello's
+    // first-floor door, which AGES:556 makes the entrance.
+    // So: the cloth is the parapet's outer face in team colour. Foot on the deck slab at H+0.25,
+    // head at the coping H+0.25+rh, and the height has to BE rh or it floats off one end. That
+    // also lands its head exactly on the crenellation sill (H+2.8-0.45 = H+2.35), so it never
+    // rises into the embrasures a garrisoned sentry shoots through, and it clears the climb —
+    // the rungs at z=2.85 that AGES:492/531 calls the occupiable read are no longer behind it.
+    const banH=walled?2.1:1.7;                 // = the `rh` the parapet rail is built with, above
+    const banW=box(1.7,banH,0.1,tc); banW.castShadow=false;
+    banW.position.set(0,H+0.25+banH/2,deckR+0.245); g.add(banW);
   }else if(type==="wood_wall"||type==="stone_wall"||type==="fort_wall"){
     // ============ THE WALL LADDER IS THREE RUNGS, NOT FIVE — OWNER RULING, AGES §0a.1 ============
     // "stone_wall and stone_gate are FULLY REPLACED by fort_wall / fort_gate. They do not persist,
@@ -2276,10 +2387,24 @@ function buildingMesh(type,team,age,hx,hz){
         grv.position.set(s*2.6,(h-2.4)/2,1.55); g.add(grv);}          // the portcullis grooves
       for(let i=0;i<9;i++){const bar=box(0.22,3.0,0.16,STONEDK); bar.castShadow=false;
         bar.position.set(-2.4+i*0.6,h-3.6,1.5); g.add(bar);}          // the raised portcullis
-      const draw=box(3.6,0.34,4.8,0x5A4630); draw.rotation.x=-0.28; draw.castShadow=false;
-      draw.position.set(0,1.4,3.6); g.add(draw);
-      for(const s of [-1,1]){const ch=cyl(0.07,0.07,4.6,STONEDK,4); ch.rotation.x=0.5; ch.castShadow=false;
-        ch.position.set(s*1.7,4.1,2.4); g.add(ch);}                   // the chains
+      // §F.5's drawbridge, DOWN. rotation.x=-0.28 left the leaf's far underside at 1.90 and its
+      // near underside at 0.57 with nothing under either — John's "sits partially up". A leaf lying
+      // flat: 0.34 thick resting on grade puts its centre at 0.34/2=0.17, and the hinge belongs on
+      // the face of the portcullis grooves, z=1.55+0.5/2=1.80, so the centre is 1.80+4.8/2=4.20,
+      // the lifting end is z=6.60 and the deck top is 0.17+0.17=0.34.
+      const draw=box(3.6,0.34,4.8,0x5A4630); draw.castShadow=false;
+      draw.position.set(0,0.17,4.20); g.add(draw);
+      // THE CHAINS, and now both ends land on something. Top: the head of the passage, i.e. the
+      // vault's bottom-front edge — y=9.2-2.4/2=8.00, z=0+3.2/2=1.60. Bottom: the leaf's lifting
+      // end — y=0.34, z=6.60. dy=8.00-0.34=7.66 and dz=6.60-1.60=5.00, so the chain is
+      // sqrt(7.66^2+5.00^2)=9.147 long — 9.15 here, and the 0.003 of overshoot is bite, not gap —
+      // centred at ((8.00+0.34)/2,(1.60+6.60)/2)=(4.17,4.10) and tilted -atan2(5.00,7.66)=-0.5783,
+      // NEGATIVE because +rotation.x carries the cylinder's +Y end toward +Z and the head end has
+      // to lean back toward the gate. x=+/-1.7 is 0.1 inside the leaf's 3.6/2 edge and clear of the
+      // grooves at +/-2.6. Was a 4.6 stick from (y2.08,z1.30) to (y6.12,z3.50): neither end touched
+      // the gate or the leaf.
+      for(const s of [-1,1]){const ch=cyl(0.07,0.07,9.15,STONEDK,4); ch.rotation.x=-0.5783; ch.castShadow=false;
+        ch.position.set(s*1.7,4.17,4.10); g.add(ch);}                 // the chains
       const ban=box(1.8,1.2,0.09,tc); ban.castShadow=false; ban.position.set(0,h+0.4,1.7); g.add(ban);
     }
   }else if(type==="castle"){
@@ -2301,12 +2426,36 @@ function buildingMesh(type,team,age,hx,hz){
       const ward=cyl(17.0,17.6,1.0,_dk(P.stone,0.12),16); ward.castShadow=false; ward.position.y=0.5; g.add(ward);
       // THE OUTER RING, low
       for(let i=0;i<8;i++){const a=i*Math.PI/4+Math.PI/8;
+        // JOHN, on two screenshots: "medieval castle walls at odd angles same with head stone
+        // pieces". The yaw was -a and it has to be +a. This ring places at (sin a, cos a)*15.4, so
+        // its outward radial is (sin a, 0, cos a); three.js Ry(t) sends local +Z to (sin t, 0, cos t)
+        // (measured live: Ry(0.7) -> (0.64422, 0.76484) == (sin .7, cos .7)). The slab's 1.8 is its
+        // THICKNESS and must lie on that radial, so yaw = a. Proof the -a was a typo and not a
+        // choice: the merlon row below is already laid out along (cos a, -sin a), which
+        // IS Ry(+a) applied to local +X. The positions used +a and only the rotations used -a.
+        // At -a every face stood -2a out, folded to +/-45 on all EIGHT by the box's own 180-degree
+        // symmetry (22.5 -> -45, 67.5 -> -135 == +45, and so on round the ring). Not one face was
+        // square: the outer ring drew as a pinwheel, and four of the eight joints — the four
+        // carrying the mural towers — opened a 4.92 gap, so it was not a curtain at all.
+        // The head stones were on the TRUE tangent while their slab was 45 degrees off it, so the
+        // end merlon's centre sat 4.8*sin(2a) out of the wall's own mid-plane; 2a is an odd
+        // multiple of 45 on every one of the eight, so that is 4.8*0.7071 = 3.39 everywhere. The
+        // wall is 1.8 thick and the merlon 1.8 deep, so 3.39 - 0.9 - 0.9 = 1.59 of open air between
+        // the merlon and the face it crowns — daylight, not an AABB overlap.
+        // Both go to +a together. Measured on the patched file: face error 0.000 deg on all eight,
+        // merlon skew 0.000, off-plane 0.000, every joint gap 0.00. The slab corner radius drops
+        // 21.26 -> 17.66 = hypot(15.4+0.9, 6.8), which is the number 00-data.js's own castle note
+        // has always quoted ("16.3 to the outer face, 17.66 at the corners") — the data file was
+        // already documenting the square wall while the render drew the pinwheel. It also stops the
+        // curtain lying across its own moat: 21.26 was 0.76 past the moat's outer edge of 20.5.
+        // Nothing vertical moves: top 27.00 and bbox 41.00 x 44.26 (moat and drawbridge) identical
+        // before and after, so the 24.6-vs-9.4 age inversion above is untouched.
         const seg=new THREE.Mesh(new THREE.BoxGeometry(13.6,6.4,1.8),texturedMat("metal",P.stone));
-        seg.position.set(Math.sin(a)*15.4,3.2,Math.cos(a)*15.4); seg.rotation.y=-a;
+        seg.position.set(Math.sin(a)*15.4,3.2,Math.cos(a)*15.4); seg.rotation.y=a;
         seg.castShadow=true; seg.receiveShadow=true; g.add(seg);
         for(let m=0;m<5;m++){const cr=box(1.2,1.2,1.8,P.stone); cr.castShadow=false;
           cr.position.set(Math.sin(a)*15.4+Math.cos(a)*(-4.8+m*2.4),6.8,Math.cos(a)*15.4-Math.sin(a)*(-4.8+m*2.4));
-          cr.rotation.y=-a; g.add(cr);}
+          cr.rotation.y=a; g.add(cr);}
       }
       for(let i=0;i<4;i++){const a=i*Math.PI/2+Math.PI/4;   // round mural towers at the ANGLES
         const tw=new THREE.Mesh(new THREE.CylinderGeometry(2.6,3.0,9.0,10),texturedMat("metal",P.stone));
@@ -2337,8 +2486,15 @@ function buildingMesh(type,team,age,hx,hz){
         const dr=new THREE.Mesh(new THREE.CylinderGeometry(2.6,3.0,15.0,10),texturedMat("metal",P.stone));
         dr.position.set(s*4.0,7.5,15.6); dr.castShadow=true; dr.receiveShadow=true; g.add(dr);
         for(let i=0;i<7;i++){const a=i*Math.PI/3.4-0.6;
+          // Same sign error on the gatehouse head stones, same derivation: the merlon sits at
+          // (sin a, cos a)*2.7 off the drum's axis, so its 1.0 depth is the radial one and its yaw
+          // must be +a, not -a. At -a the seven ran -2a out and folded to a scatter of +68.8,
+          // -37.1, +37.0, -68.9, +5.2, +79.3 and -26.5 degrees around ONE drum head — 1.1 x 1.0 in
+          // plan is near-square, so a 45-degree merlon presents (1.1+1.0)/sqrt(2) = 1.49 instead of
+          // 1.1 and the ring reads as head stones of different sizes at different angles. That is
+          // John's second shot. At +a all fourteen measure 0.000.
           const mer=box(1.1,1.3,1.0,P.stone); mer.castShadow=false;
-          mer.position.set(s*4.0+Math.sin(a)*2.7,15.6,15.6+Math.cos(a)*2.7); mer.rotation.y=-a; g.add(mer);}
+          mer.position.set(s*4.0+Math.sin(a)*2.7,15.6,15.6+Math.cos(a)*2.7); mer.rotation.y=a; g.add(mer);}
         for(const sy of [5.6,10.4]){const lo=box(0.26,1.2,0.22,P.dark); lo.castShadow=false;
           lo.position.set(s*4.0,sy,18.4); g.add(lo);}
       }
@@ -2348,8 +2504,21 @@ function buildingMesh(type,team,age,hx,hz){
         mh.position.set(-1.8+i*1.2,11.45,15.2); g.add(mh);}                // murder holes
       for(let i=0;i<9;i++){const bar=box(0.22,3.2,0.16,STONEDK); bar.castShadow=false;
         bar.position.set(-2.4+i*0.6,9.4,17.2); g.add(bar);}                // the raised portcullis
-      const draw=box(3.8,0.36,5.6,0x5A4630); draw.rotation.x=-0.24; draw.castShadow=false;
-      draw.position.set(0,1.6,21.0); g.add(draw);
+      // THE DRAWBRIDGE, and the sign on it was inverted: +rotation.x carries the leaf's +Z end to
+      // -Y, so -0.24 LIFTED the end away from the castle to y=2.09 and dropped the end at the gate
+      // to y=0.76 — John's "angled the wrong way". It falls outward instead. Hinge on the ward rim
+      // at the gate axis (ward=cyl(17.0,17.6,1.0) at y=0.5, so its top face is y=0.5+1.0/2=1.0 at
+      // top radius 17.0, and the 16-gon carries a vertex at exactly (0,y,17.0)); land the far end
+      // on grade. A 1.0 drop over a 5.6 leaf is rotation.x=asin(1.0/5.6)=+0.1795, cos=0.98393,
+      // sin=0.17854, so the run is 5.6*0.98393=5.510 and the far underside lands at z=17.0+5.510
+      // =22.510. The centre is the midpoint of the two underside ends plus half the thickness along
+      // the leaf's normal: y=(1.000+0.000)/2+0.18*0.98393=0.500+0.177=0.677 and
+      // z=(17.000+22.510)/2+0.18*0.17854=19.755+0.032=19.787. Reach SHRINKS — the far top corner
+      // was 23.76 and is now 22.574 — so nothing that cleared the old leaf fouls this one, and the
+      // near corners at x=+/-1.9 stop inside the gatehouse drums' base footprint rather than
+      // overhanging open water.
+      const draw=box(3.8,0.36,5.6,0x5A4630); draw.rotation.x=0.1795; draw.castShadow=false;
+      draw.position.set(0,0.677,19.787); g.add(draw);
       const ban=box(2.8,1.9,0.14,tc); ban.castShadow=false; ban.position.set(0,14.6,17.4); g.add(ban);
       flagPole(g,0,23.0,0,4.0,tc,3.0,1.6);
     }else{
@@ -2641,7 +2810,23 @@ function buildingMesh(type,team,age,hx,hz){
       nave.position.y=4.8; nave.castShadow=true; nave.receiveShadow=true; g.add(nave);
       const apse=new THREE.Mesh(new THREE.CylinderGeometry(2.5,2.7,7.6,10,1,false,0,Math.PI),
         texturedMat("metal",P.stone));
-      apse.rotation.y=Math.PI; apse.position.set(0,4.8,-3.3); apse.castShadow=true; g.add(apse);
+      // THE APSE WAS YAWED 90 DEGREES OFF THE BACK. r128 lays a cylinder's theta from +Z toward
+      // +X (CylinderGeometry.js:94/96, x=r*sinTheta z=r*cosTheta), so thetaLength=PI is the +X
+      // half, and rotation.y=a slides the solid arc to [a, PI+a]. At PI that was [PI, 2PI] = the
+      // -X half: measured x[-2.70,0.00] y[1.00,8.60] z[-6.00,-0.60]. Note what that is NOT --
+      // 2.70 is inside the 7.4 nave's own 3.70, so nothing ever showed on the flank (the left
+      // elevation is pixel-identical either way). All that escaped the rear wall was the rear
+      // LEFT quarter, and the open theta cut lay on the centreline x=0 with its backfaces culled,
+      // so from the rear RIGHT the apse vanished outright. PI/2 gives [PI/2, 3PI/2] = the -Z
+      // half. Measured after: x[-2.70,2.70] y[1.00,8.60] z[-6.00,-3.30], which is the hand
+      // figure: the nave is 6.6 deep about z=0 so its rear face is -6.6/2 = -3.3, exactly the
+      // plane the flat cut now lands on -- both cut edges have local x=0, so the 2.7->2.5 taper
+      // does not tilt it -- and the nave wall seals it. The drum's 7.6 about y=4.8 already gave
+      // 1.0..8.6, the nave's own. Nothing above moves: acap is a full 360 cone concentric on
+      // (0,-3.3) with its base at 9.9-2.6/2 = 8.6 = the drum top 4.8+7.6/2, so it caps the drum
+      // at either yaw. Merged AABB, merged mesh count and BLD.temple.fx/fz are all unchanged --
+      // z still bottoms out at the cone's -6.4, inside fz=6.80.
+      apse.rotation.y=Math.PI/2; apse.position.set(0,4.8,-3.3); apse.castShadow=true; g.add(apse);
       const acap=new THREE.Mesh(new THREE.ConeGeometry(3.1,2.6,10),texturedMat(P.roofPat,P.roof));
       acap.castShadow=true; acap.position.set(0,9.9,-3.3); g.add(acap);
       ageRoof(g,4,7.4,6.6,8.6,type,{tc,long:"z"});
@@ -2744,9 +2929,22 @@ function buildingMesh(type,team,age,hx,hz){
       rev.rotation.y=Math.PI/5; rev.position.y=2.1; rev.castShadow=true; rev.receiveShadow=true; g.add(rev);
       const terre=new THREE.Mesh(new THREE.CylinderGeometry(5.6,5.6,0.6,5),plainMat(0x8a7a58));
       terre.rotation.y=Math.PI/5; terre.castShadow=false; terre.position.y=4.4; g.add(terre);
-      for(let i=0;i<5;i++){const a=i*Math.PI*0.4+0.3;   // the parapet, cut with EMBRASURES for guns
+      // THE PARAPET COURSE IS SQUARED TO THE PENTAGON UNDER IT. CylinderGeometry(...,5) stands its
+      // five corners at 72k deg, and rev/terre are both twisted Math.PI/5 = 36 deg, so the FLAT
+      // FACES below look out along 0/72/144/216/288 — one of them squarely on +z. So a=i*72 deg
+      // with NO offset (the shipped +0.3 rad = 17.19 deg put every block's centre halfway to a
+      // corner), and rotation.y=+a, because a mesh's local +z leaves at azimuth rotation.y: the
+      // shipped -a skewed block i by 144i+17.19 deg, which stood block 3 at 89.19 — broadside
+      // across its own face. Radius: the terreplein apothem is 5.6*cos(36 deg) = 4.5305, less
+      // half the 0.9 depth = 4.0805, rounded IN to 4.08 so the outer face lands 0.0005 behind the
+      // face below instead of coplanar with it. At the shipped 5.2 only 14-35% of each block's
+      // footprint was over the deck at all, and block 3 sat 0.74 inside the sentry box. 3.4 of
+      // merlon on a 6.58 face (2*5.6*sin 36) leaves 1.59 at each end, so the EMBRASURES open at
+      // the five corners — which is where the two guns already stand, at 35 deg. Blocks 1 and 4
+      // then meet a gun carriage 0.13 deep on the carriage's short axis: a butt joint, on purpose.
+      for(let i=0;i<5;i++){const a=i*Math.PI*0.4;      // the parapet, cut with EMBRASURES for guns
         const par=box(3.4,1.5,0.9,P.stone); par.castShadow=false;
-        par.position.set(Math.sin(a)*5.2,5.4,Math.cos(a)*5.2); par.rotation.y=-a; g.add(par);}
+        par.position.set(Math.sin(a)*4.08,5.4,Math.cos(a)*4.08); par.rotation.y=a; g.add(par);}
       for(const s of [-1,1]){                            // two guns, laid to sweep the curtain faces
         const gun=cyl(0.4,0.48,3.0,0x8A6A3A,8); gun.rotation.set(-0.34,s*0.7,0); gun.castShadow=false;
         gun.position.set(s*2.4,5.6,3.4); g.add(gun);
@@ -2756,8 +2954,19 @@ function buildingMesh(type,team,age,hx,hz){
       const mag=box(2.4,1.8,2.4,texturedMat("metal",BRICK)); mag.castShadow=true; mag.position.set(0,1.6,-3.2); g.add(mag);
       const sentry=box(1.3,2.2,1.3,P.wall); sentry.castShadow=true; sentry.position.set(-4.2,5.9,-4.2); g.add(sentry);
       const scap=cone(1.1,1.0,P.roof,6); scap.castShadow=false; scap.position.set(-4.2,7.4,-4.2); g.add(scap);
-      const mast=cyl(0.11,0.13,7.0,PLANK,5); mast.castShadow=false; mast.position.set(4.4,8.2,-3.4); g.add(mast);
-      const flag=box(2.0,1.1,0.09,tc); flag.castShadow=false; flag.position.set(5.4,10.6,-3.4); g.add(flag);
+      // THE LOOKOUT MAST STANDS ON THE TERREPLEIN. AGES:557 asks for "a slender timber lookout
+      // mast with signal flags" and this one was planted OFF THE BASTION. The terreplein is a
+      // pentagon of circumradius 5.6 turned PI/5, so its faces stand at 5.6*cos(PI/5) = 4.531 from
+      // the axis; (4.4,-3.4) is radius 5.561 on bearing 127.7 deg, and the rim on that bearing is
+      // 4.531/cos(144-127.7) = 4.720 — the foot was 0.84 past the edge, over nothing. Measured on
+      // the UNMERGED factory: 4.645 of air under it, down to the revetment's battered face, and
+      // 0.000 after. Same bearing, pulled in to radius 4.0, which puts the foot's OUTER EDGE 0.59
+      // inside the rim: x = 4.0*sin(127.7) = 3.17, z = 4.0*cos(127.7) = -2.45. Nearest embrasure
+      // block is 1.80 away, so nothing new is interpenetrated. The foot's HEIGHT was already
+      // right: 8.2-7.0/2 = 4.7 is the terreplein's top face (4.4+0.6/2).
+      const mast=cyl(0.11,0.13,7.0,PLANK,5); mast.castShadow=false; mast.position.set(3.17,8.2,-2.45); g.add(mast);
+      // the flag rides the mast: inner edge stays on the mast axis (3.17+2.0/2), height unchanged.
+      const flag=box(2.0,1.1,0.09,tc); flag.castShadow=false; flag.position.set(4.17,10.6,-2.45); g.add(flag);
     }else if(age>=4){
       // ROUND. 3-4 stories, arrow loops at each level, machicolations on corbels with floor slots.
       const bodyMat=texturedMat("metal",P.stone);
@@ -2777,7 +2986,19 @@ function buildingMesh(type,team,age,hx,hz){
         mer.position.set(Math.sin(a)*4.1,18.0,Math.cos(a)*4.1); mer.rotation.y=-a; g.add(mer);}
       const spire=new THREE.Mesh(new THREE.ConeGeometry(4.0,5.2,12),texturedMat(roofPat(4),P.roof));
       spire.castShadow=true; spire.receiveShadow=true; spire.position.y=20.6; g.add(spire);
-      const ban=box(1.6,2.4,0.1,tc); ban.castShadow=false; ban.position.set(0,12.4,4.3); g.add(ban);
+      // THE BANNER LIES ON THE DRUM. The drum is CylinderGeometry(3.4,4.0,16,12) centred at y=8 and
+      // a 12-gon's vertex 0 sits on +z, so +z is the widest it ever gets: r = 4.0-0.0375y, which is
+      // 3.58 at the cloth's foot (11.2) and 3.49 at its head (13.6). At z=4.3 the back face stood at
+      // 4.25 and the measured daylight behind it was 0.63 at the centre (to the arrow loop, which
+      // stands 0.12 proud of the r=3.5 line it is set on) and 0.67 to 0.95 to the drum itself.
+      // The cloth hangs vertically off a wall that leans away going up, so it takes contact at its
+      // WIDEST point — the foot: back face on 3.58, centre 3.58+0.1/2 = 3.63. Measured after:
+      // 0.001 / 0.044 / 0.088 at foot / mid / head, which IS the batter, and 0.19 to 0.28 at the
+      // corners, which is the chord a 12-gon leaves under a flat 1.6 cloth. Both are geometry, not
+      // a gap. The arrow loop at (0,13,3.5) ends up 0.04 inside the cloth's back face and stays
+      // 0.06 BEHIND its front face, so it is buried and hidden — 0.06 is far outside depth-buffer
+      // resolution at this range, and a shallower bed would have left the loop poking through.
+      const ban=box(1.6,2.4,0.1,tc); ban.castShadow=false; ban.position.set(0,12.4,3.63); g.add(ban);
       flagPole(g,0,23.0,0,2.4,tc,1.9,1.1);
     }else{
       // CLASSICAL: SQUARE and PROJECTING. It stands proud of the wall line on purpose — a mural
