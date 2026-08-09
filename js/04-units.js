@@ -3336,8 +3336,26 @@ function _buildBodyRaw(u){
       const lash=noShadow(box(0.14,0.1,0.15,0x5a3c22)); lash.position.set(0,0.5,0); TS.add(lash);
     }else if(vAge===1){ // bronze sickle
       const haft=noShadow(new THREE.Mesh(new THREE.BoxGeometry(0.1,0.6,0.1),haftM)); haft.position.y=0; TS.add(haft);
+      // v131.11 JOHN: "bronze age villager sickle head not connected to handle". The hook did
+      // not ride the haft's tip, it ORBITED it: the torus was centred ON the tip (0.08,0.3), and
+      // the centre of a ring is empty space, so every scrap of bronze stood a full radius away.
+      // Nearest metal to wood 0.0860, ALL OF IT SIDEWAYS — which is why the A12 grip gate passed
+      // it: gripcheck.js joins parts by box overlap (TOUCH 0.045) and the ring's box straddles
+      // the haft's box. A box test cannot see round a curve.
+      // (Hand check on a SMOOTH tube of the same radii gives 0.0774, at the arc's 189-deg end.
+      // The mesh reads 0.0860 because radialSegments=5 makes the cross-section a pentagon whose
+      // inner face sits at the apothem 0.05*cos36 = 0.0405, not at the tube 0.05 — 0.0086 of the
+      // tube is not there. Measurement and arithmetic agree once that is in.)
+      // THE TANG IS THE ARC'S 0-END. TorusGeometry sweeps anticlockwise from +x, so at theta=0
+      // the tube runs along +Y — parallel to the haft — and its open face points straight DOWN: a
+      // 0.05 disc that exactly inscribes the 0.10 square haft. The far end (189 deg) has come
+      // round past horizontal and is the point. Haft 0.6 tall at y=0, so its top face is
+      // 0+0.6/2 = 0.30; bury the tang half a haft-thickness (0.05) and the seat is y 0.25, with
+      // the metal leaving the wood at 0.30. The tang sits at centre+(R,0,0), so the centre goes
+      // to (0-0.26, 0.25). Measured after: 0.022 of bronze inside the haft solid, was 0.086
+      // clear. Costs the tool 0.05 of reach: top 0.608 -> 0.558.
       const blade=noShadow(new THREE.Mesh(new THREE.TorusGeometry(0.26,0.05,5,9,Math.PI*1.05),plainMat(0xc9a44a)));
-      blade.position.set(0.08,0.3,0); TS.add(blade); // the hook rides the haft's tip
+      blade.position.set(-0.26,0.25,0); TS.add(blade); // tang buried 0.05 in the haft's top face
     }else if(vAge===2){ // iron pick
       const haft=noShadow(new THREE.Mesh(new THREE.BoxGeometry(0.1,0.85,0.1),haftM)); haft.position.y=0.1; TS.add(haft);
       const pickL=noShadow(cone(0.07,0.4,0x6a7280,5)); pickL.rotation.z=Math.PI/2; pickL.position.set(-0.24,0.52,0); TS.add(pickL);
@@ -3345,12 +3363,38 @@ function _buildBodyRaw(u){
     }else if(vAge===3){ // the balanced sickle, steel on a turned grip
       const haft=noShadow(new THREE.Mesh(new THREE.BoxGeometry(0.1,0.66,0.1),haftM)); haft.position.y=0.02; TS.add(haft);
       const grip=noShadow(cyl(0.07,0.07,0.16,0xcfc6ae,6)); grip.position.y=-0.24; TS.add(grip);
+      // v131.11 JOHN: "classical age sickle not attached to handle" — the same defect and the
+      // same derivation as the Bronze hook above. The ring was centred ON the haft's tip, and a
+      // ring's centre is empty, so the nearest steel stood 0.1017 clear of the wood: 0.0935 on a
+      // smooth tube of these radii, plus 0.0082 of 5-gon inset (apothem 0.045*cos36 = 0.0364
+      // against the 0.045 tube). Sideways again, so the A12 box test called it one object.
+      // Haft 0.66 tall at y=0.02, top face 0.02+0.33 = 0.35. Tang = the arc's 0-end, where the
+      // tube runs along +Y and its open face points down — a 0.045 disc inside the 0.10 haft.
+      // Bury it half a haft-thickness (0.05): seat at y 0.30, centre at (0-0.28, 0.30). The point
+      // is the far end at 198 deg, swung back past horizontal — that is the hook. Measured after:
+      // 0.025 of steel inside the haft solid. Costs 0.04 of reach: top 0.665 -> 0.625.
       const blade=noShadow(new THREE.Mesh(new THREE.TorusGeometry(0.28,0.045,5,9,Math.PI*1.1),plainMat(0xb9c0c9)));
-      blade.position.set(0.08,0.34,0); TS.add(blade); // hook at the tip
+      blade.position.set(-0.28,0.30,0); TS.add(blade); // tang buried 0.05 in the haft's top face
     }else if(vAge===4){ // the scythe: long snath, angled blade
       const haft=noShadow(new THREE.Mesh(new THREE.BoxGeometry(0.09,1.15,0.09),haftM)); haft.position.y=0.2; TS.add(haft);
       const peg=noShadow(box(0.2,0.07,0.07,0x6b4a2b)); peg.position.set(0.1,0.05,0); TS.add(peg); // grip peg
-      const blade=noShadow(box(0.55,0.07,0.11,0x9aa2ad)); blade.position.set(0.26,0.78,0); blade.rotation.z=-0.5; TS.add(blade);
+      // v131.11 JOHN: "medieval villager hoe head not connected to handle". The blade's CENTRE
+      // was parked on the snath's top (0.26,0.78 against a top face at 0.775) and THEN raked
+      // -0.5 about that centre, which swings the mounting end up and away: its inner-bottom
+      // corner landed at (0.0019,0.8811), 0.106 above the wood, and the nearest surface-to-
+      // surface distance was 0.0725. The A12 y-scan missed it because the blade's FAR end dips
+      // to 0.617, below the snath's top, so the two stacks overlap — the daylight is at the end
+      // that mounts, not along the axis (measure the joint, not the box). Seat the INNER END
+      // instead and leave the rake alone. Snath 1.15 tall at y=0.2 -> top face 0.2+0.575 =
+      // 0.775; bury half a haft-thickness (0.09/2 = 0.045) so the inner end face centre goes to
+      // (0,0.73). That face is at centre-0.275*(cos0.5,-sin0.5) = centre-(0.2413,-0.1318), so
+      // the blade centre is (0.2413, 0.73-0.1318) = (0.2413,0.5982). Separating-axis test against
+      // the snath: 0.062 of overlap on x over the full 0.09 of z, where it was 0.0725 SEPARATED.
+      // NOTE for the next probe: the blade is 0.11 deep against a 0.09 snath, so all four inner
+      // corners still sit 0.010 OUTSIDE in z. A vertex-to-box metric reports +0.010 and reads as
+      // detached; the solids interpenetrate. Costs the tool 0.17 of reach (0.943 -> 0.775, the
+      // snath's own tip becoming the highest point).
+      const blade=noShadow(box(0.55,0.07,0.11,0x9aa2ad)); blade.position.set(0.2413,0.5982,0); blade.rotation.z=-0.5; TS.add(blade);
     }else{ // the improved shovel: iron blade, D-grip
       const haft=noShadow(new THREE.Mesh(new THREE.BoxGeometry(0.09,0.8,0.09),haftM)); haft.position.y=0.06; TS.add(haft);
       const blade=noShadow(box(0.26,0.32,0.06,0x8d949c)); blade.position.y=0.6; TS.add(blade);
@@ -3512,23 +3556,28 @@ function _buildBodyRaw(u){
       // prop happens to shade one crop; a club parked over the ribs to keep a torso mean down is
       // the tool measuring the prop, which is the thing agecheck.js:230 is already complaining about.
       const CG=weaponGrip(R.faR,NC_PIKE_CARRY,0.3,0.22); // shouldered vertical (§6.5) — see the const
-      // >>> v131.11 AND IT HUNG IN FRONT OF AN EMPTY FIST. John filed this one twice, front AND
-      // side, which is the tell that the error is in z and not in x. <<<
-      // weaponGrip parks the group at faR-local (0,-0.52,z); the HAND is endCap's sphere, r=0.12
-      // at faR-local (0,-0.54,0). Both hang off faR, so the offset between them is identical in
-      // every pose. At z=0.30 the haft's axis passes 0.284 from the hand's centre and the haft is
-      // 0.088 of radius there: 0.284 - 0.088 - 0.12 = 0.076 of AIR, measured 0.084 across the
-      // 7-gon's facets. Gate A12 cannot see this: it measures inside the GROUP's frame, where y=0
-      // is "the fist" by assertion rather than by geometry.
-      // THE SEAT IS A PERPENDICULAR MOVE, so the club never slides along its own length and §B.1's
-      // silhouette survives. Stack axis (0.2182,0.9399,0.2627), hand at axial -0.098, perpendicular
-      // part of the offset (-0.0213,-0.0717,0.2744). Take 0.648 of that off the position and 0.10
-      // of it is left: the haft's axis then sits 0.10 from the hand's centre — INSIDE a 0.12 fist —
-      // and the 0.10 that stays is what keeps the haft out of the sleeve cuff (r 0.20 on the arm's
-      // axis, world y 1.74-2.10). Dead centre buried 4.3% of the club in that cuff; 0.10 out leaves
-      // 0.6%. The greenstone still rides above the shoulder line at 2.04 — measured, world y tops
-      // out at 2.494 against 2.506 as built and x reaches 1.335 against 1.321.
-      CG.position.set(0.014,-0.474,0.122); // (0,-0.52,0.30) - 0.648*(-0.0213,-0.0717,0.2744)
+      // >>> v131.11 THE FIST-SEAT WAS TRIED HERE AND TAKEN OUT AGAIN. DO NOT RE-APPLY IT. <<<
+      // The defect it chased is real. weaponGrip parks the group at faR-local (0,-0.52,0.30)
+      // while the HAND is endCap's sphere, r=0.12 at faR-local (0,-0.54,0); both hang off faR,
+      // so the offset is the same in every pose. The haft's axis passes 0.284 from the fist's
+      // centre and the haft is 0.088 of radius there: 0.284 - 0.088 - 0.12 = 0.076 of AIR,
+      // measured 0.084 across the 7-gon's facets. Gate A12 cannot see it — gripcheck measures
+      // inside the GROUP's frame, where y=0 is the fist by assertion rather than by geometry.
+      // BUT THE SEAT IS NOT AVAILABLE BY TRANSLATION, AND THE NOTE ABOVE ALREADY SAID SO.
+      // The fist sits 0.30 BEHIND the group origin in z, so every move that brings the haft's
+      // axis onto it drags the whole club back — into the fur cap's ear flap, which is the
+      // clearance this block warns about (box 0.245x0.78x0.34 on R.head, helmHideDome, world
+      // z -0.11..0.23). Measured by raycast parity on the UNMERGED body, 14748 interior samples,
+      // idle pose (armR 0, faR -0.32) — fraction of the club buried in that flap, by seat f:
+      //   f=0 (as built) 0.12%   0.25 -> 1.18%   0.30 -> 1.73%   0.35 -> 2.37%   0.648 -> 4.46%
+      // and at f=0.648 another 0.84% goes into the shoulder cap and 0.62% into the sleeve cuff.
+      // No f under 0.30 closes the daylight, so no fraction buys both. Nor does another
+      // direction: inside the plane perpendicular to the stack axis the straight move onto the
+      // fist is the one with the SMALLEST backward component, so every alternative goes further
+      // back, not less. Sliding along the axis instead runs the fist off the butt at 0.082 and
+      // would need 0.677 to cancel the z.
+      // What is left is a design call, not a nudge: more `out` so the greenstone clears the flap
+      // in x (and a re-run of the agecheck numbers above), a shorter haft, or the gap stays.
       const haft=noShadow(cyl(0.06,0.09,1.20,0x7a5230,7)); haft.position.y=0.42; CG.add(haft);
       const headC=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.33,0.33,0.52,8),plainMat(0x5F7355)));
       headC.scale.z=0.80; headC.position.y=1.20; CG.add(headC);   // §B.1's pierced greenstone, z 0.80
@@ -3631,7 +3680,42 @@ function _buildBodyRaw(u){
       // §B.2's row says "**no chin strap**" in bold and that is what `flaps:false` is. See
       // kitStoneAge, which now maps the two keys apart.
       kitStoneAge(R,u,tc,{flat:true,strap:true,flaps:false});
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.3);
+      // >>> v131.15 THE 0.3 GRIP OFFSET WAS A SLIDE ALONG THE SHAFT AND IS NOW A FLOAT ACROSS IT. <<<
+      // weaponGrip's `z` translates the group in the FOREARM's frame, BEFORE the group's own
+      // rotation, so it moves a weapon along its own stack axis only for as long as that axis points
+      // the way the forearm's +z does. It used to: the v129.4 baseline carried this line at -1.35,
+      // whose stack axis is (0, 0.043, 0.999) — 87 degrees over — so 0.3 of forearm +z was 0.3 of
+      // slide DOWN THE SHAFT, and that is what put the fist on the shaft instead of on its butt.
+      // v130.4 stood the shaft up (NC_PIKE_CARRY: axis (0, 0.963, 0.269)) and left the 0.3 exactly
+      // where it was, where it is now 87 degrees ACROSS the shaft instead of along it.
+      // HAND CALCULATION. Fist = SphereGeometry(0.12,6,5) at forearm-local (0,-0.54,0); grip origin
+      // (0,-0.52,z); axis (0, cos 0.2726, sin 0.2726). The centre line's miss is
+      //     perp(z)^2 = 0.9275 z^2 - 0.01037 z + 0.0000289,  perp(0.30) = 0.2835.
+      // MEASURED on the unmerged factory (_buildBodyRaw), in the FOREARM's frame so no pose can
+      // change it: the nearest point of the shaft is 0.226 from the fist's CENTRE. AND THE FIST IS
+      // NOT A SMOOTH SPHERE — a 6x5 sphere's flat faces stand at 0.12*sin72*cos30 = 0.0988 and only
+      // its vertices reach 0.12 (probed: 0.0988 / 0.1200). So the daylight between skin and wood is
+      // 0.106 at a vertex and 0.127 across a face, on all six ages of the line. That is John's
+      // floating spear, and it is one defect at six call sites, not six defects.
+      // WHY 0.13. perp = 0.12 at z = 0.1302 and perp = 0.0988 at z = 0.1082, so 0.13 is the last
+      // two-decimal offset whose centre line is inside the fist's vertex circle (perp(0.13)=0.1198,
+      // perp(0.131)=0.1208); the contact that actually lands comes from the shaft's own 0.05-0.06
+      // radius on top of that. PROBED at 0.13, by ray parity and not by AABB: the shaft's nearest
+      // point is 0.067 from the fist's centre and 0.0389 of wood is INSIDE the fist — contact, with
+      // 0.0162 more inside the wrist and nothing at all in the sleeve. Shouldered means touching.
+      // WHY NOT FURTHER BACK. The fist stands only 0.17 proud of the upper arm's axis while the
+      // sleeve band (cyl(0.185,0.20,0.36) at armR y -0.12, i.e. world y 1.61-1.97) has radius 0.20,
+      // so a VERTICAL shaft through the MIDDLE of the fist has to come out through the sleeve: at
+      // z=0 it buries about 0.12 in it. Leaning the shaft forward would allow both and contradicts
+      // AD 6.5 "Vertical pike/musket", so it is not taken here.
+      // WHAT MOVES: the whole weapon drops 0.17*sin(0.32) = 0.0535 in world y and 0.17*cos(0.32) =
+      // 0.1614 back. Charred tip 3.418 -> 3.365 above the sole, butt 0.509 -> 0.455 — further under
+      // 5.4's health bar at 5.3, not nearer it, and still well clear of the turf.
+      // WHAT THIS DOES NOT FIX, SAID OUT LOUD: this cap is a 0.84 disc over a 0.55 skull and the
+      // shaft stands at x 0.68, so the spear passes THROUGH the brim at BOTH offsets — probed 0.149
+      // deep at 0.30 and 0.174 at 0.13. Moving the grip deepens a crossing it did not cause and
+      // cannot cure; that is a 6.5a brim item on the widest hat in the game, not a weapon item.
+      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13);
       const shaft=noShadow(cyl(0.05,0.06,2.4,0x7a5230,6)); shaft.position.y=0.7; SP.add(shaft);
       const lash=noShadow(cyl(0.075,0.075,0.14,0x4a3320,5)); lash.position.y=1.82; SP.add(lash);
       // §B.2 ends that row with "**NO METAL ANYWHERE ON THIS UNIT**" and this point was
@@ -3664,7 +3748,18 @@ function _buildBodyRaw(u){
     }
     if(u.cls==="spearfighter"){ // BRONZE: the same panoply with NO cheek pieces — §B.2's separator
       kitDendra(R,u,tc,{cheeks:false});
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.3);
+      // v131.15 grip z 0.3 -> 0.13, derivation on the spearman above: weaponGrip's z translates in
+      // the FOREARM's frame, so once NC_PIKE_CARRY stood the shaft up the 0.3 stopped being a slide
+      // along the shaft and became a 0.2835 miss across it. Probed unmerged, the ash's nearest point
+      // is 0.225 from the fist's CENTRE against a 6x5 fist whose faces stand at 0.0988 and whose
+      // vertices reach 0.12 — 0.105 to 0.126 of daylight. perp(z)^2 = 0.9275z^2 - 0.01037z +
+      // 0.0000289 meets 0.12 at z = 0.1302, so 0.13 is the last offset inside the fist; probed at
+      // 0.13 the fist swallows 0.0399 of the shaft and the ENTIRE remaining bill is 0.0185 in the
+      // wrist and 0.0096 in the sleeve band. Nothing else on the figure is entered at all.
+      // The sauroter drops with it, 0.242 -> 0.188 above the sole: still B.2's bright chip beside
+      // the boot. Worst walking frame is about 0.12 once the 0.09 body lean and the 0.045 torso bob
+      // are taken off it — arithmetic from animateUnit, not probed, but positive with margin.
+      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13);
       const shaft=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.06,2.8,6),texturedMat("wood",0x8a6a3f)));
       shaft.position.y=0.9; SP.add(shaft);
       const collar=noShadow(cyl(0.075,0.075,0.1,0x9a7532,6)); collar.position.y=2.28; SP.add(collar);
@@ -3679,7 +3774,26 @@ function _buildBodyRaw(u){
     }
     if(u.cls==="impspear"){ // IRON: the same bell plus the anti-cav line's horsehair TUFT (§B.2)
       kitLamellar(R,u,tc,{tuft:true});
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.3);
+      // v131.15 grip z 0.3 -> 0.13, derivation on the spearman above: weaponGrip's z translates in
+      // the FOREARM's frame, so standing the shaft up turned the 0.3 from a slide along the shaft
+      // into a 0.2835 miss across it — probed, the ash's nearest point is 0.225 from the fist's
+      // CENTRE, i.e. 0.105-0.126 of daylight against a 6x5 fist (faces 0.0988, vertices 0.12).
+      // At 0.13 the fist swallows 0.0375 of the shaft.
+      // >>> THIS IS THE ONE CLASS THAT PAYS ANYTHING REAL, AND HERE IS THE WHOLE BILL, RAY-PARITY
+      // PROBED AT 0.13 RATHER THAN AABB'd: <<<
+      //   0.0711 into age 2's scale cape, box(0.40,0.20,0.50) at x 0.571, y 1.06
+      //   0.0422 into the tall Iron helmet's own lathe (head-local y 0.75)
+      //   0.0232 into the cap under the cape, box(0.34,0.15,0.42) at x 0.588
+      //   0.0164 wrist, 0.0153 into the helmet's 0.688 disc, 0.0123 into the humeralia, 0.0120 sleeve
+      // At 0.30 this shaft ALREADY grazed the 0.724 brim disc by 0.0073, so the helmet was never
+      // clear; what 0.13 adds is a spear resting ON the shoulder guard and touching the helmet's
+      // flare instead of hanging 0.11 in front of both. ageShoulders' own note records that every
+      // box it builds sits inboard of the arm, so there was never clear air out there to hang it in.
+      // NOT CANTED OUTBOARD to buy the helmet back: weaponGrip's `out` is a LEAN, it walks the head
+      // of a 3.1 shaft sideways, and a new lean is a 6.3 silhouette decision that has to be measured
+      // against the age's own outline rather than guessed at the same time as the grip.
+      // The leaf drops 4.182 -> 4.129 above the sole and the butt 0.509 -> 0.455.
+      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13);
       const shaft=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.06,3.1,6),texturedMat("wood",0x8a6a3f)));
       shaft.position.y=1.05; SP.add(shaft);
       const collar=noShadow(cyl(0.08,0.08,0.1,0x687079,6)); collar.position.y=2.52; SP.add(collar);
@@ -3716,7 +3830,16 @@ function _buildBodyRaw(u){
       const rim=noShadow(new THREE.Mesh(new THREE.TorusGeometry(0.76,0.05,5,14),plainMat(0xb08a3f)));
       rim.rotation.y=Math.PI/2; rim.position.set(-0.19,-0.3,0.15); R.faL.add(rim);
       // the doru: ash shaft, bronze leaf, sauroter butt-spike
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.3);
+      // v131.15 grip z 0.3 -> 0.13, derivation on the spearman above: NC_PIKE_CARRY standing the
+      // shaft up turned weaponGrip's FOREARM-frame 0.3 from a slide along the shaft into a 0.2835
+      // miss across it. Probed, the doru's nearest point is 0.225 from the fist's CENTRE — 0.105 to
+      // 0.126 of daylight against a 6x5 fist (faces 0.0988, vertices 0.12). perp(z)^2 = 0.9275z^2 -
+      // 0.01037z + 0.0000289 meets 0.12 at z = 0.1302; at 0.13 the fist swallows 0.0369 of the shaft
+      // and the whole remaining bill is 0.0162 in the wrist and 0.0091 in the sleeve band — the
+      // aspis, the corinthian and the bell cuirass are all untouched.
+      // The sauroter drops with it, 0.362 -> 0.308 above the sole; the leaf 4.332 -> 4.279, second
+      // only to the halberd spike and still far under 5.4's bar at 5.3.
+      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13);
       const shaft=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.06,3.4,6),texturedMat("wood",0x8a6a3f)));
       shaft.position.y=1.1; SP.add(shaft);
       const leaf=noShadow(cone(0.13,0.55,0xc9a44a,5)); leaf.position.y=3.05; SP.add(leaf);
@@ -3767,7 +3890,24 @@ function _buildBodyRaw(u){
       // 0.65 (clear of the 0.45 boot top) and drops the leaf to 3.92, which still crowns the hat
       // at 3.81 — a pike has to out-top the man — without owning five bands on its own. The leaf
       // comes off 0xc2c8d0 as well: that is a 0.72 value on the brightest slot in the frame.
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.3,0.12);
+      // v131.15 grip z 0.3 -> 0.13, derivation on the spearman above. THIS CLASS HAS ITS OWN
+      // QUADRATIC because the 0.12 outboard cant tips the stack axis to (0.1197, 0.9562, 0.2673):
+      //     perp(z)^2 = 0.92855 z^2 - 0.010223 z + 0.0000343,  perp(0.30) = 0.2838, perp(0.13) =
+      //     0.11999, and the root at 0.12 is z = 0.13001 — this is the tightest of the six by a
+      //     hundredth of a millimetre, and it still lands inside.
+      // Probed: 0.104-0.125 of daylight at 0.30 (nearest point 0.224 from a fist whose faces stand
+      // at 0.0988 and whose vertices reach 0.12), and at 0.13 the fist swallows 0.0351 of the shaft.
+      // THE CANT PAYS FOR ITSELF HERE: the entire remaining bill on this class is 0.0171 in the
+      // wrist and NOTHING in the sleeve band — the only one of the six that touches no sleeve.
+      // The leaf goes 4.234 -> 4.180 above the sole, still the highest thing on the figure, and the
+      // butt 0.755 -> 0.702.
+      // WHAT THIS DOES NOT FIX, said out loud because it is the other half of "shouldered": at 3.1
+      // centred on 1.30 the butt sits at grip-y -0.25 and lands 0.075 under the fist's lowest point,
+      // where every other shaft in the line clears it by 0.32-0.59. This man grips the very end of
+      // his pike. 3.35 centred on 1.175 would hold the top at 2.85 and drop the butt to -0.50 with
+      // it; left alone here because v130.6 chose that length against a boot-top budget and a section
+      // H ladder reading that a length change has to be re-measured against, not guessed.
+      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13,0.12);
       const shaft=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.06,3.1,6),texturedMat("wood",0x6b4a2b)));
       shaft.position.y=1.30; SP.add(shaft);
       const collarG=noShadow(cyl(0.08,0.08,0.12,0xd9a92e,6)); collarG.position.y=2.58; SP.add(collarG);
@@ -3812,7 +3952,18 @@ function _buildBodyRaw(u){
       const combH=noShadow(box(0.086,0.274,0.78,A5.metal)); combH.position.y=NC_HATY+0.78; R.head.add(combH);
       const plumeH2=noShadow(cone(0.10,0.55,tc,5)); plumeH2.position.y=NC_HATY+1.20; R.head.add(plumeH2);
       // the HALBERD: spike, axe blade, rear hook, gold collar
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.3);
+      // v131.15 grip z 0.3 -> 0.13, derivation on the spearman above: NC_PIKE_CARRY standing the
+      // shaft up turned weaponGrip's FOREARM-frame 0.3 from a slide along the shaft into a 0.2835
+      // miss across it. Probed, the haft's nearest point is 0.219 from the fist's CENTRE — the
+      // tightest of the six, and only because this haft is the thickest at 0.065 — which is still
+      // 0.099 of daylight to the fist's vertices and 0.121 to its flat faces.
+      // perp(z)^2 = 0.9275z^2 - 0.01037z + 0.0000289 meets 0.12 at z = 0.1302; at 0.13 the fist
+      // swallows 0.0390 of the haft, the wrist takes 0.0210 and the sleeve band 0.0112, and nothing
+      // else on the figure is entered — not the sallet, not the pauldron, not the gold etch.
+      // The spike drops 4.432 -> 4.378 above the sole (further under 5.4's bar at 5.3, not nearer)
+      // and the butt 0.408 -> 0.355, still 0.42 below the fist, which is the whole point of a
+      // shouldered polearm.
+      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13);
       const shaft=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.065,3.3,6),texturedMat("wood",0x4a3826)));
       shaft.position.y=1.05; SP.add(shaft);
       const collarH=noShadow(cyl(0.085,0.085,0.12,0xd9a92e,6)); collarH.position.y=2.3; SP.add(collarH);
