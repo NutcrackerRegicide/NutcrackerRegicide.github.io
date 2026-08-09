@@ -375,6 +375,25 @@ const NC_MUSKET_CARRY={x:0.14,y:-0.478,z:0.009,rx:-1.4282,ry:0.12};
 // near §5.4's bar at 5.3. The z=0.3 grip offset comes with it — at the default 0.15 a vertical
 // blade shaves the epaulette on its way past.
 const NC_PIKE_CARRY=-2.869;
+// v131.20 JOHN OVERRULES THE VERTICAL, AND SPLITS IT THREE WAYS. His words across two rounds:
+// "spearman is holding spear but it is still completely vertical same with clubman", then
+// "they should be held perpendicular to body and club at 45 degree angle", then "swords still
+// not fixed either they need to be held at 45 degree angle".
+// v130.4 and v130.5 stood this whole set upright and they were fixing a real defect -- the pike
+// line was carried 87 degrees over, a 3.3-long shaft flat across a third of the army -- but they
+// answered it by putting EVERY weapon on one constant, and one constant cannot hold a levelled
+// spear, a shouldered sword and a club at once. AD 6.5's "Vertical pike/musket" is the clause
+// being overruled here; the owner has seen it in play and it reads as planted, not carried.
+// THE CONSTANT IS NOT THE WORLD ANGLE. weaponGrip does g.rotation.x = rotX + PI and the weapon
+// hangs off a forearm animateUnit holds at its own pitch, so the number has to be measured, not
+// derived. Swept on a live unit (tools/carrysweep.js), stack axis against world vertical:
+//     rotX -2.869  ->  15.6 deg (spearman) / 20.0 deg (clubman)   <- what John called vertical
+//     rotX -2.369  ->  44.3 deg            / 45.7 deg             <- his 45
+//     rotX -1.569  ->  89.9 deg            / 89.9 deg             <- perpendicular to the body
+const NC_SPEAR_CARRY=-1.569;   // levelled: the six spear classes
+const NC_SWORD_CARRY=-2.369;   // shouldered at 45: the five sword classes and the club
+// NC_PIKE_CARRY itself survives for the trader's coin scale, which shares it only by accident of
+// history and is not a weapon at all -- moving it would swing a set of scales to the horizontal.
 // EVERY legacy hat in this file (the cavalry line, the king's crown, the wilds) was hand-fitted to
 // the old egg head: max radius 0.58, crown at y=1.15. The block head is 0.58 wide again — so the
 // carrier's WIDTH scale is back to 1.0 and thirty hand-tuned helmets fit the skull they were drawn
@@ -3555,7 +3574,7 @@ function _buildBodyRaw(u){
       // four of five rungs either way and their fix is in the PALETTE, not in whether one class's
       // prop happens to shade one crop; a club parked over the ribs to keep a torso mean down is
       // the tool measuring the prop, which is the thing agecheck.js:230 is already complaining about.
-      const CG=weaponGrip(R.faR,NC_PIKE_CARRY,0.3,0.22); // shouldered vertical (§6.5) — see the const
+      const CG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3,0.22); // shouldered vertical (§6.5) — see the const
       // >>> v131.11 THE FIST-SEAT WAS TRIED HERE AND TAKEN OUT AGAIN. DO NOT RE-APPLY IT. <<<
       // The defect it chased is real. weaponGrip parks the group at faR-local (0,-0.52,0.30)
       // while the HAND is endCap's sphere, r=0.12 at faR-local (0,-0.54,0); both hang off faR,
@@ -3588,7 +3607,7 @@ function _buildBodyRaw(u){
     if(u.cls==="shortsword"){ // BRONZE: linen under bronze + the boar's-tusk CONE — no shield
       kitDendra(R,u,tc);
       // the bronze shortsword
-      const SG=weaponGrip(R.faR,NC_PIKE_CARRY,0.3);
+      const SG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3);
       const ssw=noShadow(box(0.13,1.0,0.12,0xc9a44a)); ssw.position.y=0.62; SG.add(ssw);
       const sgd=noShadow(box(0.38,0.08,0.14,0x9a7532)); sgd.position.y=0.12; SG.add(sgd);
     }
@@ -3597,7 +3616,7 @@ function _buildBodyRaw(u){
       // longer and wider than the bronze blade — and canted outboard, because vertical was not
       // enough on its own: at the fist's x=0.68 a 0.2-wide blade came within 0.04 of the beard's
       // bottom corner and crossed it on any camera off the axis (see weaponGrip's `out`).
-      const BG=weaponGrip(R.faR,NC_PIKE_CARRY,0.3,0.12);
+      const BG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3,0.12);
       const bsw=noShadow(box(0.2,1.35,0.13,0xb9c0c9)); bsw.position.y=0.8; BG.add(bsw);
       const bgd=noShadow(box(0.48,0.09,0.15,0x8d949c)); bgd.position.y=0.12; BG.add(bgd);
       // a small round buckler
@@ -3623,7 +3642,7 @@ function _buildBodyRaw(u){
       // reads head-on, where the fore-aft fin this replaces disappeared into a line.
       helmGallic(R,tc,AGEPAL[3],{});
       // the gladius: mirror-bright, visibly edged, gold furniture
-      const GG=weaponGrip(R.faR,NC_PIKE_CARRY,0.3);
+      const GG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3);
       const gla=noShadow(box(0.16,1.15,0.1,0xc8ced6)); gla.position.y=0.72; GG.add(gla);
       for(const ex of [-0.09,0.09]){const edge=noShadow(box(0.035,1.05,0.11,0xccd0d6));  // §10.22: the only pure white is teeth
         edge.position.set(ex,0.72,0); GG.add(edge);}
@@ -3658,7 +3677,7 @@ function _buildBodyRaw(u){
       // coif — look at it.
       helmGreatHelm(R,tc,AGEPAL[4],{});
       // the giant two-hander, carried high over the shoulder
-      const ZG=weaponGrip(R.faR,NC_PIKE_CARRY,0.3);
+      const ZG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3);
       const zw=noShadow(box(0.17,1.9,0.12,0xc4cad2)); zw.position.y=1.1; ZG.add(zw);
       const zgd=noShadow(box(0.64,0.1,0.16,0x8d949c)); zgd.position.y=0.13; ZG.add(zgd);
       const zpom=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.11,6,5),plainMat(0xd9a92e))); zpom.position.y=-0.1; ZG.add(zpom);
@@ -3715,7 +3734,7 @@ function _buildBodyRaw(u){
       // shaft stands at x 0.68, so the spear passes THROUGH the brim at BOTH offsets — probed 0.149
       // deep at 0.30 and 0.174 at 0.13. Moving the grip deepens a crossing it did not cause and
       // cannot cure; that is a 6.5a brim item on the widest hat in the game, not a weapon item.
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13);
+      const SP=weaponGrip(R.faR,NC_SPEAR_CARRY,0.13);
       const shaft=noShadow(cyl(0.05,0.06,2.4,0x7a5230,6)); shaft.position.y=0.7; SP.add(shaft);
       const lash=noShadow(cyl(0.075,0.075,0.14,0x4a3320,5)); lash.position.y=1.82; SP.add(lash);
       // §B.2 ends that row with "**NO METAL ANYWHERE ON THIS UNIT**" and this point was
@@ -3759,7 +3778,7 @@ function _buildBodyRaw(u){
       // The sauroter drops with it, 0.242 -> 0.188 above the sole: still B.2's bright chip beside
       // the boot. Worst walking frame is about 0.12 once the 0.09 body lean and the 0.045 torso bob
       // are taken off it — arithmetic from animateUnit, not probed, but positive with margin.
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13);
+      const SP=weaponGrip(R.faR,NC_SPEAR_CARRY,0.13);
       const shaft=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.06,2.8,6),texturedMat("wood",0x8a6a3f)));
       shaft.position.y=0.9; SP.add(shaft);
       const collar=noShadow(cyl(0.075,0.075,0.1,0x9a7532,6)); collar.position.y=2.28; SP.add(collar);
@@ -3793,7 +3812,7 @@ function _buildBodyRaw(u){
       // of a 3.1 shaft sideways, and a new lean is a 6.3 silhouette decision that has to be measured
       // against the age's own outline rather than guessed at the same time as the grip.
       // The leaf drops 4.182 -> 4.129 above the sole and the butt 0.509 -> 0.455.
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13);
+      const SP=weaponGrip(R.faR,NC_SPEAR_CARRY,0.13);
       const shaft=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.06,3.1,6),texturedMat("wood",0x8a6a3f)));
       shaft.position.y=1.05; SP.add(shaft);
       const collar=noShadow(cyl(0.08,0.08,0.1,0x687079,6)); collar.position.y=2.52; SP.add(collar);
@@ -3839,7 +3858,7 @@ function _buildBodyRaw(u){
       // aspis, the corinthian and the bell cuirass are all untouched.
       // The sauroter drops with it, 0.362 -> 0.308 above the sole; the leaf 4.332 -> 4.279, second
       // only to the halberd spike and still far under 5.4's bar at 5.3.
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13);
+      const SP=weaponGrip(R.faR,NC_SPEAR_CARRY,0.13);
       const shaft=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.06,3.4,6),texturedMat("wood",0x8a6a3f)));
       shaft.position.y=1.1; SP.add(shaft);
       const leaf=noShadow(cone(0.13,0.55,0xc9a44a,5)); leaf.position.y=3.05; SP.add(leaf);
@@ -3907,7 +3926,7 @@ function _buildBodyRaw(u){
       // his pike. 3.35 centred on 1.175 would hold the top at 2.85 and drop the butt to -0.50 with
       // it; left alone here because v130.6 chose that length against a boot-top budget and a section
       // H ladder reading that a length change has to be re-measured against, not guessed.
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13,0.12);
+      const SP=weaponGrip(R.faR,NC_SPEAR_CARRY,0.13,0.12);
       const shaft=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.06,3.1,6),texturedMat("wood",0x6b4a2b)));
       shaft.position.y=1.30; SP.add(shaft);
       const collarG=noShadow(cyl(0.08,0.08,0.12,0xd9a92e,6)); collarG.position.y=2.58; SP.add(collarG);
@@ -3963,7 +3982,7 @@ function _buildBodyRaw(u){
       // The spike drops 4.432 -> 4.378 above the sole (further under 5.4's bar at 5.3, not nearer)
       // and the butt 0.408 -> 0.355, still 0.42 below the fist, which is the whole point of a
       // shouldered polearm.
-      const SP=weaponGrip(R.faR,NC_PIKE_CARRY,0.13);
+      const SP=weaponGrip(R.faR,NC_SPEAR_CARRY,0.13);
       const shaft=noShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.065,3.3,6),texturedMat("wood",0x4a3826)));
       shaft.position.y=1.05; SP.add(shaft);
       const collarH=noShadow(cyl(0.085,0.085,0.12,0xd9a92e,6)); collarH.position.y=2.3; SP.add(collarH);
@@ -4786,7 +4805,7 @@ function _buildBodyRaw(u){
         rl.rotation.z=Math.PI/2; rl.position.set(sx*0.56,bandY-0.30,-0.06); R.head.add(rl);}
     }
     // ---- the regalia in his hands, and the age's own sceptre head ----
-    const KG=weaponGrip(R.faR,NC_PIKE_CARRY,0.3);
+    const KG=weaponGrip(R.faR,NC_SWORD_CARRY,0.3);
     const staff=_noSh(cyl(0.062,0.070,1.45,kAge===0?KA.wood:NC.gold,8)); staff.position.y=0.50; KG.add(staff);
     if(kAge===0){const mace=_noSh(cyl(0.24,0.24,0.30,KA.stone,8)); mace.position.y=1.30; KG.add(mace);}
     else if(kAge===1){const hilt=_noSh(box(0.30,0.10,0.10,NC.goldH)); hilt.position.y=1.24; KG.add(hilt);

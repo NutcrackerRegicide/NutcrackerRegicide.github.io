@@ -677,6 +677,25 @@ function bStand(def,want){return want+bSurf(def)-def.r;}
 // based, so a boxed type hands it the box's LONGEST half-extent — never smaller than the box, or a
 // unit would steer straight into the wall it is trying to avoid, and never the corner, which would
 // re-introduce the wide swerve the box exists to remove.
+// bSpace: HOW MUCH ROOM DOES THIS BUILDING NEED BESIDE ANOTHER ONE. The fourth radius, and the
+// last one -- r for the plaza and the road plan, bSurf for reach, bSteer for pathing, bSpace for
+// PLACEMENT. John, on a Classical town: "buildings are so close together its creating a barrier i
+// cant walk through." validFor spaced plots by `r`, but v131.9/.19 made buildings BLOCK at their
+// measured footprint, and for several types the drawn building is far bigger than r:
+//     barracks a3  r 7.2 -> 10.00     market a4  r 7.2 -> 10.60
+//     towncenter a4 r 11 -> 11.88     archery_range a5  r 6.4 -> 7.83
+// so two LEGALLY placed neighbours could end up with their boxes touching, or overlapping, and
+// the corridor between them was gone. Spacing has to be measured against the same footprint the
+// collider uses or the two disagree, and the player is the one who finds out.
+// max(fx,fz) rather than the corner: the corner is hypot(fx,fz) and using it re-inflates spacing
+// the way the circumscribing circle did -- which is what emptied the buildable yard at v131.1 and
+// cost a release. This is the tightest radius that cannot leave two boxes overlapping.
+function bSpace(def,team){
+  const a=Math.max((def.age||0),
+    Math.min(5,(typeof teamAge!=="undefined"&&teamAge[team])||0));
+  if(def.fxA&&def.fxA[a]!==undefined)return Math.max(def.fxA[a],def.fzA[a]);
+  return def.rBlock!==undefined?def.rBlock:def.r;
+}
 function bSteer(def){
   if(def.fx!==undefined)return def.fx>def.fz?def.fx:def.fz;
   return def.rBlock!==undefined?def.rBlock:def.r;

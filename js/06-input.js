@@ -672,7 +672,11 @@ function validFor(type,x,z,team){
       if(dist2(x,z,b.x,b.z)<Math.pow(r+b.def.r-3.4,2))return false;
       continue;
     }
-    if(dist2(x,z,b.x,b.z)<Math.pow(r+b.def.r+gap,2))return false;
+    // v131.21 SPACED BY THE FOOTPRINT, NOT BY r. See bSpace in 00-data.js: the collider has used
+    // the measured footprint since v131.9 and placement was still using r, so a barracks whose
+    // shell is 10.00 was being spaced as though it were 7.2 and the gap between two of them
+    // vanished. The `gap` constant keeps its old meaning -- clear ground BETWEEN the footprints.
+    if(dist2(x,z,b.x,b.z)<Math.pow(bSpace(BLD[type],team)+bSpace(b.def,b.team)+gap,2))return false;
   }
   // v114 CLEARING THE LAND: with the map flush with forest, a wood node blocking placement
   // meant you could barely build outside your own yard. Trees no longer refuse a plot — the
