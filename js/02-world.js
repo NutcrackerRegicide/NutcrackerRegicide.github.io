@@ -629,6 +629,57 @@ const FOL={
 };
 
 // ---------- sparse grass: scattered patches of small clumped blades ----------
+// ==================== v131.30 ONE EXCLUSION TEST, SHARED BY EVERY FOLIAGE LAYER ====================
+// §8.7: "zero props within 1.5 tiles of any building footprint or road. Undergrowth currently grows
+// through bazaar plazas, through pond water …". There were two tests before this and they disagreed:
+// undergrowth() had one covering the Town Centres and the road, plantGrass had NONE, and neither
+// knew about the plazas or the water. One predicate, defined before the first layer that needs it.
+// The pond table is hoisted out of ponds() below rather than copied, so the two cannot drift.
+const PONDS=[[-105,82,6.5],[98,-88,7],[-24,-104,5.5]];
+const _FOL_ROAD=[]; for(let i=0;i<=40;i++)_FOL_ROAD.push(roadPoint(i/40));
+function foliageClear(x,z){
+  // dist2() lives in 04-units.js, which loads AFTER this file, and separate <script> tags do not
+  // hoist across each other — calling it here throws at load and kills the whole IIFE silently,
+  // which is a mistake this file has already made once and left a comment about.
+  for(const t of TCPOS){const dx=x-t[0],dz=z-t[1];if(dx*dx+dz*dz<34*34)return false;}
+  for(const r of _FOL_ROAD){const dx=x-r.x,dz=z-r.z;if(dx*dx+dz*dz<9*9)return false;}
+  // the bazaar plazas: the v131.29 deck is 7.4 and its sunk step 8.6, so 10.5 keeps greenery off
+  // the flagstones AND off the rim the contact shadow paints
+  for(const m of neutralMarkets){const dx=x-m.x,dz=z-m.z;if(dx*dx+dz*dz<10.5*10.5)return false;}
+  for(const p of PONDS){const dx=x-p[0],dz=z-p[1],rr=p[2]+2.4;if(dx*dx+dz*dz<rr*rr)return false;}
+  return true;
+}
+// ---------- and the runtime half: a building placed at minute nine clears its own ground ----------
+// No world-gen radius can exclude a barracks, because the barracks does not exist when the grass is
+// sown. Every instanced layer registers itself here and makeBuilding (03-buildings.js) calls
+// clearFoliageAt with the footprint it is about to stand on.
+// PURELY DISPLAY. Nothing in the simulation reads an instance matrix, so a host and a guest may
+// disagree about this for ever without desyncing — the same argument setGarrisonView already makes
+// for .visible. It is also one-way: foliage does not grow back when a building falls, which is both
+// cheaper and more truthful about ground somebody has been building on.
+const FOLIAGE_LAYERS=[];
+const _FOL_GONE=new THREE.Matrix4().makeScale(0,0,0);
+function registerFoliage(inst){
+  const n=inst.count, px=new Float32Array(n), pz=new Float32Array(n), m=new THREE.Matrix4();
+  for(let i=0;i<n;i++){inst.getMatrixAt(i,m);px[i]=m.elements[12];pz[i]=m.elements[14];}
+  FOLIAGE_LAYERS.push({inst,px,pz,live:new Uint8Array(n).fill(1)});
+  return inst;
+}
+function clearFoliageAt(x,z,r){
+  if(!FOLIAGE_LAYERS.length)return 0;
+  const rr=r*r; let hit=0;
+  for(const L of FOLIAGE_LAYERS){
+    let dirty=false;
+    for(let i=0;i<L.px.length;i++){
+      if(!L.live[i])continue;
+      const dx=L.px[i]-x, dz=L.pz[i]-z;
+      if(dx*dx+dz*dz>rr)continue;
+      L.live[i]=0; L.inst.setMatrixAt(i,_FOL_GONE); dirty=true; hit++;
+    }
+    if(dirty)L.inst.instanceMatrix.needsUpdate=true;
+  }
+  return hit;
+}
 (function plantGrass(){
   const mats=[]; const dummy=new THREE.Object3D(); const col=new THREE.Color();
   // v130 W1: this layer is ON THE WIRE — it runs inside the seeded window and burns 7 randoms per
@@ -655,6 +706,14 @@ const FOL={
       const sc=0.55+Math.random()*0.5; dummy.scale.set(sc,sc,sc);
       dummy.updateMatrix();
       col.setHex(tones[(Math.random()*tones.length)|0]).offsetHSL(0,0,(Math.random()-0.5)*0.04);
+      // v131.30 …AND THE TEST GOES ON THE PUSH, NOT ON THE DRAW. This layer is on the wire: all
+      // SEVEN Math.random()s above happen unconditionally, and the note at the head of this
+      // function is right that moving the call count moves every node index downstream. Rejecting
+      // AFTER the last draw changes what is kept and not what is drawn, so the stream is untouched
+      // by construction — verified by tools/nodehash.js, which must still read a0e4532bfa20051c.
+      // Before this, plantGrass had no exclusion of any kind: not the plazas, not the water, not
+      // even the roads and the two thrones that undergrowth() has always avoided.
+      if(!foliageClear(x,z))continue;
       mats.push([dummy.matrix.clone(),col.clone()]);
     }
   }
@@ -674,6 +733,7 @@ const FOL={
   // gets encoded a second time and comes back a full band pale. (01-engine.js:195 lists these
   // layers by name as needing exactly this.)
   for(let i=0;i<mats.length;i++){inst.setMatrixAt(i,mats[i][0]);inst.setColorAt(i,mats[i][1].convertSRGBToLinear());}
+  registerFoliage(inst);   // v131.30 so a building placed later can clear the ground it stands on
   inst.instanceMatrix.needsUpdate=true;
   if(inst.instanceColor)inst.instanceColor.needsUpdate=true;
   // v130.4 THE GREENERY CATCHES SHADOW NOW, and this is the biggest single piece of §3.8 still
@@ -1738,7 +1798,7 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
   scene.add(rmesh);
 })();
 (function ponds(){ // still water, sandy rims, reeds and cattails
-  for(const [px,pz,pr] of [[-105,82,6.5],[98,-88,7],[-24,-104,5.5]]){
+  for(const [px,pz,pr] of PONDS){   // v131.30 hoisted above plantGrass so foliageClear sees it too
     const y=terrainHeight(px,pz);
     const rim=new THREE.Mesh(new THREE.CircleGeometry(pr+1.3,10),mat(0xcbb488));
     rim.rotation.x=-Math.PI/2; rim.position.set(px,y+0.04,pz); rim.castShadow=false; scene.add(rim); worldDeco.push(rim);
@@ -2225,6 +2285,15 @@ function _appendGeo(mesh,parts){
     const inst=new THREE.InstancedMesh(geo,leafMat(),count);
     for(let i=0;i<count;i++){
       place(i,dummy,col);
+      // v131.30 THE TEST IS ON THE PIECE, NOT ON THE PATCH. clear() below is only consulted by
+      // spot(), which picks a patch CENTRE — and every layer then spreads its blades, clovers,
+      // bushes and ferns up to 2.1 units around it. So a patch standing legally just outside a
+      // plaza throws a third of itself onto the flagstones, which is exactly what the bazaar
+      // render shows: bushes ON the rim rather than beside it. One test here is all six layers,
+      // exactly, instead of six tests on their centres, approximately.
+      // A zero-scale matrix is how an InstancedMesh hides ONE instance without disturbing the rest;
+      // the colour is still written so the buffer stays uniform.
+      if(!foliageClear(dummy.position.x,dummy.position.z))dummy.scale.set(0,0,0);
       dummy.updateMatrix();
       inst.setMatrixAt(i,dummy.matrix);
       // v130 W1: every place() authors and jitters in sRGB, because that is where hue and lightness
@@ -2244,6 +2313,7 @@ function _appendGeo(mesh,parts){
     // too cheap to be worth culling anyway.
     inst.frustumCulled=false;
     scene.add(inst);
+    registerFoliage(inst);   // v131.30 runtime clearing, same as the grass layer
     return inst;
   }
   // keep the undergrowth off the roads, the plazas and the two thrones — a lawn growing through
@@ -2256,11 +2326,10 @@ function _appendGeo(mesh,parts){
   // to test missed the bends, and `v114 clear lanes` duly reported undergrowth growing through the
   // highway. Walk the actual polyline instead.
   const ROAD=[]; for(let i=0;i<=40;i++)ROAD.push(roadPoint(i/40));
-  const clear=(x,z)=>{
-    for(const t of TCPOS){const dx=x-t[0],dz=z-t[1];if(dx*dx+dz*dz<34*34)return false;}
-    for(const r of ROAD){const dx=x-r.x,dz=z-r.z;if(dx*dx+dz*dz<9*9)return false;}
-    return true;
-  };
+  // v131.30 was a private copy of the Town Centre and road tests. It is now the one shared
+  // predicate (see foliageClear, above plantGrass), which also knows about the bazaar plazas and
+  // the ponds — so patch centres stop being placed in water and then rejected piece by piece.
+  const clear=foliageClear;
   const spot=(spread)=>{ // rejection-sample a legal patch centre
     for(let k=0;k<24;k++){
       const x=(R()*2-1)*(MAP.x-spread), z=(R()*2-1)*(MAP.z-spread);

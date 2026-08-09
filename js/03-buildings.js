@@ -3641,6 +3641,19 @@ function makeBuilding(team,type,x,z,instant,rot){
     b.cropMesh=crop; b.crop=0;
   }
   clearFootprint(b); // v114: the plot is cleared of standing timber the moment it's laid out
+  // v131.30 A BUILDING CLEARS THE GROUND IT STANDS ON. No world-gen exclusion can cover this: the
+  // foliage is sown once at load and this barracks is being placed minutes later, so §8.7's "zero
+  // props within 1.5 tiles of any building footprint" is a RUNTIME rule for everything except the
+  // Town Centres. The radius is the building's own physical extent — bSteer is the longest half
+  // extent it will ever have and rBlock is what a body is pushed out to — plus a tile of margin, so
+  // the clearing matches the footprint rather than a guess about it.
+  // Display only: nothing in the simulation reads an instance matrix (10.6 / §G), so this cannot
+  // desync, and it is deliberately one-way — ground somebody has built on stays cleared.
+  if(typeof clearFoliageAt==="function"){
+    const _fr=Math.max((typeof bSteer==="function")?bSteer(b.def):0,b.def.rBlock||b.def.r||0)
+      *((typeof BSCALE!=="undefined"&&BSCALE[type])||1)+1.5;
+    clearFoliageAt(b.x,b.z,_fr);
+  }
   buildings.push(b); return b;
 }
 // v114: fell every live tree under a new building's footprint. Wood nodes no longer refuse a
