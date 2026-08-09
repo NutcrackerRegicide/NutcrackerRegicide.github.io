@@ -1589,70 +1589,65 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
     const q=Math.round(t*1.5)/1.5;
     return (q<=1?_rc.copy(_rA).lerp(_rB,q):_rc.copy(_rB).lerp(_rC,q-1)).getHex();
   };
+  // v131.13 ONE RIBBON, NOT 53 DISCS. See the note at the head of this function: five passes
+  // improved the discs and none of them could stop a union of circles from having a scalloped
+  // outline, because the scallops ARE the circles. A swept quad strip has no disc boundaries in it
+  // at all, and it costs ONE mesh either way — this still lands in ROAD_PARTS and is welded below.
+  //
+  // THE RANDOM BUDGET IS UNCHANGED AND THAT IS LOAD-BEARING. §10.7: the seeded window places
+  // nodes[] positionally and the netcode indexes them, so one extra Math.random() in this function
+  // moves every resource node on the wire. The half-width is drawn from exactly the same
+  // `4.55+Math.random()*0.55`, once per cross-section, in the same order — 53 calls, as before.
+  // The node hash (tools/townages.js) must read 3ad55989 after this change or it is wrong.
+  const HW=[], CEN=[];
   for(let i=0;i<=N;i++){
-    const rp=roadPoint(i/N); // the ONE course — the bazaars sit on the same curve
-    // …and the y offset ALTERNATES, which is not decoration. Discs that overlap by 1.5–3 units are
-    // two coplanar surfaces at the same height over a 534-unit plane against near 0.6 / far 1200 —
-    // the exact case that put polygonOffset on the ink hulls after the v128.2 Android report — and
-    // the first render of the fattened road came back with a dither of z-fighting speckle in every
-    // overlap. Consecutive segments always differ in parity and the next-but-one never reaches
-    // (13.5 units apart against a 10.8-unit maximum span), so one bit of stagger is enough. 0.02 is
-    // far under the terrain's own quad-to-quad relief, so nothing lifts off the ground.
-    // v130.2 THE ROAD CONNECTED AND THEN READ AS LILY PADS. Fattening the discs satisfied F10 and
-    // made two other things four times worse, both of which are about the DISC being legible rather
-    // than the ribbon:
-    //   · THE TEXTURE. "hide" is a 16px swatch and it was being stretched across an 11-unit disc,
-    //     restarting at every disc centre. At foreground distance that is a hard blocky brown
-    //     camouflage quilt at a texel scale that matches nothing else in the frame, and the quilt
-    //     restarting per disc is what drew the outline of each pad. §7.8 asks for hand-painted flat
-    //     colour with minimal noise; the road now takes it flat and the two §2.2 hexes carry it.
-    //   · THE OUTLINE. 12 segments over a 5-unit radius is a 2.7-unit facet — countable as a
-    //     polygon at 200px across. 20 segments halves it to a 1.6-unit facet, which reads as a
-    //     rutted edge instead of as a hand-drawn dodecagon. Segment count is not a random, so
-    //     §10.7 does not care.
-    // v130.3 AND THEN IT READ AS ONE FLAT BROWN AMOEBA. Runs of three discs still tie the colour to
-    // the DISC — the thing that must not be legible — and 52 flat lozenges of two tones is,
-    // correctly described, a puddle with a wobbly edge. Two changes, and the first is the one that
-    // matters:
-    //   · THE MODULATION IS A FUNCTION OF WORLD POSITION, NOT OF INDEX. Three coprime sines of
-    //     (x,z) mixing §2.2's road.base and road.dark, evaluated per vertex at merge time, so the
-    //     variation runs ACROSS disc boundaries and there is no seam anywhere for the eye to find.
-    //     It needs vertices to land on, which is what `rings:3` in _discGeo buys — a one-ring fan
-    //     has nothing between its rim and its centre and can only carry a flat colour.
-    //   · THE EDGE FIRMS UP. The width was swinging ±14% disc to disc (4.2–5.4), which is what the
-    //     wobble in the outline actually was; at 4.55–5.10 the ribbon holds a steady width and the
-    //     scallops read as a rutted verge instead of as a spill. A 4.5% hashed wobble on top keeps
-    //     it from being a chain of perfect arcs. Still one Math.random() per segment, still N=52,
-    //     so the wire is untouched (§10.7) — coefficients inside the expression are free.
-    // ONE MESH, welded BELOW THE LINE (see weldGroundDecals): 53 separate decals in worldDeco were up to
-    // 53 draw calls and 53 distance tests for a static ribbon that never changes, and welded it is
-    // one permanent call that no longer blinks out of a wide shot when the player walks away from
-    // the middle of it. The disc is still built here at full price — the uuid trap at the top of
-    // this file is why — and only the scene add moves.
-    // The Y stagger stays on PARITY — that is the z-fight fix and it is unrelated to any of this.
-    // v130.4 The rim wobble goes 0.045 → 0.075, the segments 24 → 28 and the rings 5 → 8. The first is
-    // the outer edge again: ±7.5% of a 4.8-unit radius is ±0.36 units of lump, enough that no run of
-    // the boundary is a clean arc, and it is a HASH OF THE ANGLE, not a per-disc width swing — the
-    // ±14% the ribbon used to have was the whole disc breathing, which is what read as a spill.
-    // The other two are the RESOLUTION OF THE BANDS. A vertex colour is as sharp as the cell it sits
-    // in: at 5 rings the mesh could only turn a value break over ~1.0 world unit, which at the near
-    // vantage is 40 screen pixels of ramp and reads as shading. 8 rings puts the cell at 0.6 and the
-    // rut edges land. It costs 160 triangles a disc, 8.5k on the ribbon — §9.2's exchange rate says
-    // that is free next to one draw call, and this is still ONE mesh. No Math.random(), no new
-    // objects, so the wire does not care (§10.7).
-    // v130.5 …AND 8 RINGS WAS STILL HALF A RUT. The narrowed wheel track above holds its darkest stop
-    // over ~0.75 units; at a 0.6-unit cell that core is barely wider than one quad and the mesh
-    // cannot draw the band at all — it interpolates straight through it and hands back the vignette
-    // the measurement complained about. 18 rings puts the cell at 0.27, so the core is three cells
-    // across and both of its edges are one cell wide (~10 screen px at the near vantage). Segments
-    // go 28 → 32 for the same reason in the other axis: at the rim the ANGULAR cell was 1.08 units,
-    // four times the radial one, so every band edge went soft exactly where the discs meet.
-    // 1,152 triangles a disc, 61k on the ribbon against 24k. That is the whole cost: still ONE mesh,
-    // still one draw call, still no Math.random() and no new objects (§9.2, §10.7).
-    const rr=4.55+Math.random()*0.55;
-    const d=drapedDecal(rr,32,0x8A7150,rp.x,rp.z,0.055+(i%2)*0.02,undefined,{rings:18,wob:0.075});
-    ROAD_PARTS.push({geo:d.geometry,matrix:new THREE.Matrix4().makeTranslation(rp.x,0,rp.z),color:roadTint});
+    HW.push(4.55+Math.random()*0.55);            // the ONE random per segment — do not add another
+    CEN.push(roadPoint(i/N));                    // the ONE course — the bazaars sit on the same curve
   }
+  // Subdivide BETWEEN the cross-sections so the ribbon drapes over terrain relief instead of
+  // spanning it: the spine samples are ~6.7 units apart and the terrain moves inside that.
+  const SUB=4, M=N*SUB;
+  const pos=[], idx=[];
+  const _p=(t)=>{ const q=Math.max(0,Math.min(1,t)); return roadPoint(q); };
+  for(let j=0;j<=M;j++){
+    const t=j/M;
+    // the tangent, from a short central difference on the real spine
+    const e=0.0009, p0=_p(t-e), p1=_p(t+e);
+    let tx=p1.x-p0.x, tz=p1.z-p0.z;
+    const tl=Math.hypot(tx,tz)||1; tx/=tl; tz/=tl;
+    const nx=-tz, nz=tx;                          // the across-track normal
+    const c=_p(t);
+    // half-width lerped between the two nearest sampled cross-sections, so the edge keeps the
+    // same gentle breathing the discs had without any of them being individually legible
+    const f=t*N, i0=Math.min(N,Math.floor(f)), i1=Math.min(N,i0+1), fr=f-i0;
+    let hw=HW[i0]+(HW[i1]-HW[i0])*fr;
+    // …AND THE VERGE IS WHERE A RIBBON CAN GO WRONG IN THE OTHER DIRECTION. The first cut used a
+    // single small wobble on the half-width and came back as a brown strip with two straight
+    // parallel edges — which fixes "a bunch of circles" and replaces it with "a paved road", on a
+    // dirt cart track. What a worn verge actually is: the edge wanders because the traffic did.
+    // So each side is hashed off ITS OWN world position (not the spine's, or both edges would
+    // wander in lockstep and the ribbon would just snake), three coprime sines, ±0.82 on a ~4.8
+    // half-width = ±17%. Deterministic by construction — no Math.random here, §10.7.
+    for(const sgn of [-1,1]){
+      const ex=c.x+nx*sgn*hw, ez=c.z+nz*sgn*hw;      // the nominal edge, then perturb it
+      const wob=0.42*Math.sin(ex*0.63+ez*0.41)
+               +0.26*Math.sin(ex*1.31-ez*0.87)
+               +0.14*Math.sin(ex*2.90+ez*2.10);
+      const w=hw+wob;
+      const px=c.x+nx*sgn*w, pz=c.z+nz*sgn*w;
+      pos.push(px,terrainHeight(px,pz)+0.06,pz);
+    }
+  }
+  for(let j=0;j<M;j++){
+    const o=j*2;
+    idx.push(o,o+1,o+2, o+1,o+3,o+2);
+  }
+  const rgeo=new THREE.BufferGeometry();
+  rgeo.setAttribute("position",new THREE.Float32BufferAttribute(pos,3));
+  rgeo.setIndex(idx);
+  rgeo.computeVertexNormals();
+  // identity matrix: the ribbon is already authored in world coordinates
+  ROAD_PARTS.push({geo:rgeo,matrix:new THREE.Matrix4(),color:roadTint});
 })();
 (function ponds(){ // still water, sandy rims, reeds and cattails
   for(const [px,pz,pr] of [[-105,82,6.5],[98,-88,7],[-24,-104,5.5]]){

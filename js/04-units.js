@@ -3949,9 +3949,20 @@ function _buildBodyRaw(u){
       const br=0.55+tier*0.06;
       const bowGeo=new THREE.TorusGeometry(br,0.07,5,10,Math.PI);
       bowGeo.rotateZ(-Math.PI/2); bowGeo.rotateY(-Math.PI/2); // chord along the forearm, belly forward
+      // v131.12 THE FIST WAS ON THE STRING, AND THAT IS GEOMETRY, NOT TASTE. John: "holding bow by
+      // string and not handle", and "not carrying bow by the middle of the handle". A half-torus
+      // runs t = 0..PI at radius br about the group ORIGIN, so the origin sits on the CHORD — and
+      // the chord is where the string goes. The belly (t = PI/2) lands at local (0,0,+br) after the
+      // two rotations above, i.e. a whole bow-radius in front of the hand.
+      // The old line compensated by sliding the GROUP back 0.85*br, which is neither br nor along
+      // the axis the belly actually moved, so the grip landed between the string and the stave and
+      // the aim pose pivoted about the string. Move the GEOMETRY instead: put the belly on the
+      // origin and the fist grips the stave by construction, at every tier, in every pose.
+      bowGeo.translate(0,0,-br);
       const bow=new THREE.Mesh(bowGeo,mat(0x6b4a2b)); bow.castShadow=false; BG.add(bow);
-      const string=noShadow(cyl(0.018,0.018,br*2,0xd2cdbe,4)); string.position.z=-0.02; BG.add(string);
-      BG.position.z=0.18-br*0.85; // slide the whole bow back: the fist grips the WOODEN belly, the string rides behind it
+      // and the string is now the chord, exactly one radius behind the belly — it used to sit at
+      // -0.02, which is to say straight through the archer's fist.
+      const string=noShadow(cyl(0.018,0.018,br*2,0xd2cdbe,4)); string.position.z=-br; BG.add(string);
     }
     if(u.cls!=="slinger"&&u.cls!=="skirmisher"){ // the quiver, with arrows to spare
       const quiver=noShadow(cyl(0.2,0.2,0.9,0x6b4a2b)); quiver.position.set(-0.35,0.6,-0.5); quiver.rotation.x=0.4; R.torso.add(quiver);
