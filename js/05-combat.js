@@ -131,7 +131,8 @@ function updateProjectiles(dt){
       // agrees with the body — you cannot walk somewhere your own arrows fly through.
       if(!done)for(const b of buildings){
         if(!b.alive||b.def.flat)continue;
-        if(b!==p.ignoreB&&segDist2(_px,_pz,p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.rBlock*0.8,2)){
+        if(b!==p.ignoreB&&!_shotClears(b,p.m.position)&&
+           segDist2(_px,_pz,p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.rBlock*0.8,2)){
           if(b.team!==p.att.team)damageBuilding(b,p.dmg,p.att);
           done=true;break;
         }
@@ -172,7 +173,8 @@ function updateProjectiles(dt){
       let blk=null;
       for(const b of buildings){
         if(!b.alive||b===p.target||b.def.flat)continue;
-        if(b!==p.ignoreB&&dist2(p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.rBlock*0.8,2)){blk=b;break;} // v131.6 rBlock — see :126
+        if(b!==p.ignoreB&&!_shotClears(b,p.m.position)&&
+           dist2(p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.rBlock*0.8,2)){blk=b;break;} // v131.6 rBlock — see :126
       }
       if(blk){
         if(blk.team!==p.att.team)damageBuilding(blk,p.dmg*0.5,p.att);
@@ -671,10 +673,49 @@ function tryAttack(u){ if(u.dmg<=0)return false;
 //     inner faces at |x| 2.50 but its jambs close to |x| 0.80, which is 1.60 of air against a 1.40
 //     body — either a deliberate non-passage or a second sealed gate, and the source does not say
 //     which. Guessing it open is how a gate stops being a wall.
+// v132.17 HOW HIGH A WALL ACTUALLY STANDS, so a shot flying over one is not stopped by a circle
+// drawn in plan. MEASURED by tools/shootover.js as the 90th PERCENTILE of the top surface and not
+// the maximum: the age-5 profile is 4.0 across the terreplein, 5.2 across the parapet and a single
+// 11.0 spike at z=0 which is a banner on a pole. A ceiling taken from the max would sit above the
+// parapet the man is standing behind and fix nothing.
+// Only the age-5 curtain is low, which is §F.6's whole argument — "the trade is firepower for
+// height, and the drop in height is the upgrade" — and it is also the only one you can walk on. The
+// wall you can stand on is the wall you can shoot over; that is one fact, not two.
+function wallTopY(b){
+  if(!b||!b.def||!b.def.wall)return Infinity;
+  const a=Math.max((b.def.age||0),
+    Math.min(5,(typeof teamAge!=="undefined"&&teamAge[b.team])||0));
+  const wood=b.type.indexOf("wood")===0;
+  const fort=(b.type.indexOf("fort")===0)||a>=4;
+  if(b.def.gate){
+    if(wood)return a<=3?8.4:10.5;
+    return fort?(a>=5?9.4:11.6):10.1;
+  }
+  if(wood)return a<=2?6.9:7.2;
+  return fort?(a>=5?5.2:10.4):8.2;
+}
+// …and the one place that decides whether a shot is stopped by a wall at all. ONE function, called
+// from all three sites that carry the circle — the free shot, the homing shot and the guest's
+// rewind — because 05-combat already warns that the rewind "must use the SAME circle as :126 or a
+// guest's shot and the host's disagree", and three copies of a condition is how that happens.
+function _shotClears(b,pos){
+  if(!b.def.wall)return false;
+  if(pos.y>wallTopY(b))return true;                    // over the top of it
+  if(b.def.gate){                                      // …or straight through the gateway
+    const r=b.rot||0, c=Math.cos(r), s=Math.sin(r);
+    if(Math.abs((pos.x-b.x)*c-(pos.z-b.z)*s)<GATE_PASS/2-0.4)return true;
+  }
+  return false;
+}
 function _gatePassHX(b){
   const a=Math.max((b.def.age||0),
     Math.min(5,(typeof teamAge!=="undefined"&&teamAge[b.team])||0));
-  if(a>=5&&(b.type==="fort_gate"||b.type==="stone_gate"))return 3.4/2-0.7;
+  // v132.15 GATE_PASS, NOT A SECOND COPY OF IT. This read 3.4 — the model's passage, re-typed here
+  // — which is the same species of drift as the hand-copied road spine and the hand-typed bazaar
+  // flats. Now that all four model branches leave the same opening, every gate that HAS a measured
+  // passage gets one, not just age 5.
+  if(a>=3&&(b.type==="fort_gate"||b.type==="stone_gate"))return GATE_PASS/2-0.7;
+  if(a>=2&&b.type==="wood_gate")return GATE_PASS/2-0.7;
   return null;
 }
 function moveUnit(u,dx,dz,dt){
@@ -1119,7 +1160,8 @@ function catchUpArrow(p,fromT,now){
     }
     for(const b of buildings){ // a wall in the way stops it in the past too
       if(!b.alive||b.def.flat)continue;
-      if(b!==p.ignoreB&&segDist2(x0,z0,p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.rBlock*0.8,2)){ // v131.6 rBlock — the rewind must use the SAME circle as :126 or a guest's shot and the host's disagree
+      if(b!==p.ignoreB&&!_shotClears(b,p.m.position)&&
+         segDist2(x0,z0,p.m.position.x,p.m.position.z,b.x,b.z)<Math.pow(b.def.rBlock*0.8,2)){ // v131.6 rBlock — the rewind must use the SAME circle as :126 or a guest's shot and the host's disagree
         if(b.team!==p.att.team)damageBuilding(b,p.dmg,p.att);
         return true;
       }

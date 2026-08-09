@@ -546,6 +546,17 @@ BLD.blacksmith={name:"Blacksmith",hp:420,r:5.6,rBlock:8.6,cost:{wood:100},hits:1
 // percentile gate is right for sizing a circle and wrong for sizing a box, and _bldfoot's gate cuts
 // the age-4 curtain's own length off (it reports 3.51 x 3.51 for a 12.5-long segment).
 BLD.wood_wall={name:"Wood Wall",hp:650,r:5.5,cost:{wood:55},hits:6,wall:true};
+// v132.15 THE CLEAR PASSAGE EVERY GATE MUST LEAVE, in one place, read by all four model branches
+// in 03-buildings.js AND by _gatePassHX in 05-combat.js. Measured, not chosen: tools/gatefit.js
+// puts a caliper across every unit at PIER HEIGHT (a bounding box is not what passes a doorway —
+// a trebuchet is 16.8 tall and most of that is an arm in the air) and the widest thing that has to
+// walk through a gate is a catapult at 6.53, with a trebuchet equal to it. 7.8 leaves 1.27.
+// IT HAS TO BE ONE NUMBER. The passage governs the piers, the lintel span, the vault, the
+// portcullis grooves, the drawbridge, the rampart split and the collider's own half-width; typed
+// twice it goes stale in one of them and the gate seals itself somewhere nobody is looking. That
+// is not hypothetical — it is what shipped: 3.4 in the model, 3.4 re-typed in the collider, and
+// door leaves nobody had measured leaving 0.23 between them.
+const GATE_PASS=7.8;
 BLD.wood_gate={name:"Wood Gate",hp:560,r:5.8,cost:{wood:85},hits:7,wall:true,gate:true};
 BLD.stone_wall={name:"Stone Wall",hp:1700,r:5.5,cost:{stone:100},hits:8,wall:true};
 BLD.stone_gate={name:"Stone Gate",hp:1400,r:5.8,cost:{stone:75},hits:8,wall:true,gate:true};

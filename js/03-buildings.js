@@ -423,6 +423,13 @@ function wallFloorAt(x,z){
     const a=Math.max((b.def.age||0),
       Math.min(5,(typeof teamAge!=="undefined"&&teamAge[b.team])||0));
     if(a<5)continue;                                  // only the star-fort curtain carries a deck
+    // v132.16 AND A GATE IS NOT A PIECE OF WALL YOU WALK OVER. John: "it is treating the gate as
+    // another mountable wall so you have this weird condition where units CLIMB OVER the gate to
+    // get through it." v131.28 exempted the RAMP from gates and left the DECK, so a gate still
+    // reported a floor at 4.00 across its whole width — including over the gateway, which then had
+    // to be bricked up at deck height to stand on, which is what made the passage 3.1 tall.
+    // A gate is the way THROUGH a wall. It has no deck, and its model no longer draws one.
+    if(b.def.gate)continue;
     const rot=b.rot||0,c=Math.cos(rot),sn=Math.sin(rot);
     const dx=x-b.x,dz=z-b.z;
     const lx=dx*c-dz*sn, lz=dx*sn+dz*c;
@@ -2401,6 +2408,32 @@ function buildingMesh(type,team,age,hx,hz){
       const ban=box(1.2,1.8,0.1,tc); ban.castShadow=false; ban.position.set(0,h-2.6,1.15); g.add(ban);
     }
   }else if(type==="wood_gate"||type==="stone_gate"||type==="fort_gate"){
+    // v132.15 A DOOR THAT IS OPEN, WHICH NONE OF THEM WERE. Every gate in the game drew its leaves
+    // shut across the passage — 0.20 clear on the wood gate, 0.23 at age 5 — and units walked
+    // through solid oak at every age. A leaf is hinged at the JAMB and swings back into the
+    // passage: the group's origin is the hinge, the leaf hangs off it by half its own width, and
+    // the group turns. Opened rather than deleted, because a gateway with no leaves is a hole in a
+    // wall while a gateway with its leaves folded back is a gate somebody opened — and it keeps
+    // the ironwork on the model where §F.3 and §F.5 want it.
+    const _gateLeaves=(grp,hingeX,z,lw,lh,th,mat,strapMat)=>{
+      for(const s of [-1,1]){
+        const hinge=new THREE.Group();
+        hinge.position.set(s*hingeX,0,z);
+        // v132.16 83 DEGREES, NOT 110. A leaf hangs off its hinge along local +x, and rotation.y
+        // maps that to (cos t, -sin t): at 1.92 the cosine is NEGATIVE, so the far end swings back
+        // ACROSS the gateway — hinged at 4.0 it landed at 2.83 and took 2.5 off the passage. Doors
+        // that open inward are still doors in the way. At 1.45 the far end is at 4.41, outboard of
+        // its own hinge, and the leaf lies along the reveal where an opened door belongs.
+        hinge.rotation.y=s*1.45;              // 83 deg: laid back along the reveal, clear of it
+        const leaf=box(lw,lh,th,mat); leaf.castShadow=false;
+        leaf.position.set(s*lw/2,lh/2,0); hinge.add(leaf);
+        if(strapMat!==undefined)for(const by of [0.3,0.66]){
+          const st=box(lw,0.2,th*0.45,strapMat); st.castShadow=false;
+          st.position.set(s*lw/2,lh*by,th*0.8); hinge.add(st);
+        }
+        grp.add(hinge);
+      }
+    };
     // Same ladder, same owner ruling (§0a.1): a stone_gate at age 4 or 5 builds the fortified form.
     const rung=(type==="wood_gate")?"wood":(type==="fort_gate"||age>=4)?"fort":"stone";
     if(rung==="wood"){
@@ -2408,7 +2441,11 @@ function buildingMesh(type,team,age,hx,hz){
       // §F.6 two squared BLOCKHOUSES and a flagstaff (Enlightenment).
       const squared=age>=5, hoard=age===4;
       const tim=texturedMat("wood",P.timber);
-      const h=6.6;
+      // v132.16 8.4, NOT 6.6. The lintel hangs 1.7 deep off the top, so at 6.6 its underside sat at
+      // 4.90 — and a Club Man is 5.43 tall, a Knight 5.49 and an Ox Cart 6.18. Everything that used
+      // this gate walked its head through the beam. 8.4 puts the underside at 6.70, which clears the
+      // cart. Width was only half of "will it walk through it"; this is the other half.
+      const h=8.4;
       for(const px of [-5.4,5.4]){
         const t=new THREE.Mesh(new THREE.BoxGeometry(2.8,h,squared?3.2:2.8),tim);
         t.position.set(px,h/2,0); t.castShadow=true; t.receiveShadow=true; g.add(t);
@@ -2427,16 +2464,20 @@ function buildingMesh(type,team,age,hx,hz){
       }
       const lintel=new THREE.Mesh(new THREE.BoxGeometry(13,1.7,2.2),tim);
       lintel.position.y=h-0.85; lintel.castShadow=true; g.add(lintel);
-      for(const s of [-1,1]){ // the oak leaves with their iron strapping and drawbar
-        const leaf=box(2.9,h-2.6,0.24,0x5A4630); leaf.castShadow=false; leaf.position.set(s*1.55,(h-2.6)/2,0.9); g.add(leaf);
-        for(const by of [0.3,0.66]){const st=box(2.9,0.2,0.1,STONEDK); st.castShadow=false;
-          st.position.set(s*1.55,(h-2.6)*by,1.05); g.add(st);}
-      }
+      // v132.15 THE OAK LEAVES, OPEN. They were 2.9 wide at x = +-1.55, i.e. spanning +-(0.1..3.0)
+      // across an opening the towers leave 8.0 wide — 0.20 of daylight, and every unit in the game
+      // walked through them. Hinged at the tower faces (+-4.0) and swung back, the mesh finally
+      // says what the collider always did.
+      _gateLeaves(g,4.0,0.9,3.4,h-2.6,0.24,0x5A4630,STONEDK);
       if(squared){flagPole(g,0,h+2.0,0,3.2,tc,1.8,1.0);}
       else{const ban=box(1.8,1.1,0.09,tc); ban.castShadow=false; ban.position.set(0,h+0.6,0); g.add(ban);}
       if(age<=2){ // the inturned entrance: the passage walls fold back into a killing corridor
+        // v132.15 …AT +-4.7, NOT +-3.2. At 3.2 with a 1.4 width they spanned +-(2.5..3.9) and
+        // pinched the passage to 5.0 behind the doors — the corridor was narrower than the gate it
+        // defends, which is a killing corridor for your own siege train. Aligned with the towers'
+        // inner faces so the passage is one width from front to back.
         for(const s of [-1,1]){const inw=new THREE.Mesh(new THREE.BoxGeometry(1.4,h-1.4,4.6),tim);
-          inw.position.set(s*3.2,(h-1.4)/2,-3.2); inw.castShadow=true; g.add(inw);}
+          inw.position.set(s*4.7,(h-1.4)/2,-3.2); inw.castShadow=true; g.add(inw);}
       }
     }else if(rung==="stone"){
       // §F.4 PORTA NIGRA, the showpiece of the Classical set: twin FOUR-STORY towers projecting
@@ -2444,29 +2485,54 @@ function buildingMesh(type,team,age,hx,hz){
       // are the building's identity and they survive the ladder.
       const wmat=texturedMat("metal",STONELIT);
       const h=9.6;
-      for(const px of [-5.2,5.2]){
-        const t=new THREE.Mesh(new THREE.CylinderGeometry(2.5,2.7,h,9,1,false,Math.PI*0.5,Math.PI*1.5),wmat);
+      // v132.15 THE DRUMS SLIM AND STEP OUT. 2.5/2.7 at +-5.2 left inner faces at +-2.5 and a 5.0
+      // passage before the jambs below cut it to 1.6. 2.0/2.2 at +-6.0 leaves +-4.0 — GATE_PASS
+      // with room — and the gate ends up 16.4 overall against the 15.4 it already was, so nothing
+      // about how a gate sits in a wall line changes.
+      for(const px of [-6.0,6.0]){
+        const t=new THREE.Mesh(new THREE.CylinderGeometry(2.0,2.2,h,9,1,false,Math.PI*0.5,Math.PI*1.5),wmat);
         t.position.set(px,h/2,0.4); t.castShadow=true; t.receiveShadow=true; g.add(t);
-        for(let s=0;s<4;s++){const bandy=box(5.4,0.22,5.4,P.stone); bandy.castShadow=false;
+        // v132.16 4.6, NOT 5.4. The bands are the drum's storeys and they have to be the drum's
+        // SIZE: slimming it from 2.5/2.7 to 2.0/2.2 and leaving 5.4-wide bands left them standing
+        // 0.5 proud of the tower on the passage side, and THEY became the pinch at 6.6 — a catapult
+        // is 6.53. Sized off the drum, so the next time it moves they move.
+        for(let s=0;s<4;s++){const bandy=box(4.6,0.22,4.6,P.stone); bandy.castShadow=false;
           bandy.position.set(px,1.9+s*2.2,0.4); g.add(bandy);}       // the four stories, banded
         for(let s=0;s<3;s++){const arc=box(0.7,1.3,0.3,P.dark); arc.castShadow=false;
           arc.position.set(px,2.7+s*2.2,3.0); g.add(arc);}            // arched windows
-        const cap=box(6.0,0.5,6.0,P.roof); cap.castShadow=false; cap.position.set(px,h+0.25,0.4); g.add(cap);
+        const cap=box(5.2,0.5,5.2,P.roof); cap.castShadow=false; cap.position.set(px,h+0.25,0.4); g.add(cap);
       }
-      const lintel=new THREE.Mesh(new THREE.BoxGeometry(11,2.0,2.4),wmat);
+      const lintel=new THREE.Mesh(new THREE.BoxGeometry(12.4,2.0,2.4),wmat);
       lintel.position.y=h-1.0; lintel.castShadow=true; g.add(lintel);
-      for(const s of [-1,1]){ // the DOUBLE passage — two arches, not one, and the courtyard between
-        const arch=cyl(1.5,1.5,0.5,P.dark,10); arch.rotation.x=Math.PI/2; arch.castShadow=false;
-        arch.position.set(s*2.3,4.4,1.15); g.add(arch);
-        const jamb=box(3.0,4.4,0.4,P.dark); jamb.castShadow=false; jamb.position.set(s*2.3,2.2,1.15); g.add(jamb);
-      }
+      // v132.15 ONE ARCH, NOT TWO. §F.4's "double passage" is the historically right note and it is
+      // what sealed this gate: two jambs 3.0 wide at x = +-2.3 span +-(0.8..3.8), leaving 1.6 down
+      // the middle — narrower than a VILLAGER at 2.30, let alone the catapult at 6.53 the owner
+      // asked to get through. Twin passages cannot be widened without pushing the drums past the
+      // curtain, so the Classical gate keeps its round towers, its banding and its rustication —
+      // the things §F.4 calls its identity — and gives up the pair of arches.
+      // v132.16 THE REVEAL GOES ROUND THE OPENING, NOT ACROSS IT. v132.15 replaced the two 3.0-wide
+      // jambs with ONE GATE_PASS-wide slab and re-sealed the gate at 0.88 — the dark panel that is
+      // supposed to read as the inside of an arch was drawn over the whole doorway. Two narrow
+      // jambs at the passage edges and a head band above it frame the opening and stand outside it.
+      // …and the head band sits UNDER THE LINTEL, not at head height. At y=6.6 it spanned 6.2..7.0
+      // and became the Classical gate's ceiling at 6.20 — against an Ox Cart 6.18 tall, which is
+      // 0.02 of clearance and not a margin. 7.2 puts it at 6.80..7.60, flush with the lintel's
+      // underside, where a reveal head belongs.
+      for(const s of [-1,1]){const jb=box(0.6,6.8,0.4,P.dark); jb.castShadow=false;
+        jb.position.set(s*(GATE_PASS/2+0.3),3.4,1.15); g.add(jb);}
+      {const hd=box(GATE_PASS+1.2,0.8,0.4,P.dark); hd.castShadow=false;
+       hd.position.set(0,7.2,1.15); g.add(hd);}
       const ban=box(1.8,1.1,0.09,tc); ban.castShadow=false; ban.position.set(0,h+0.7,1.2); g.add(ban);
     }else if(age>=5){
       // §F.6 — the gate is "often the only decorative masonry on the whole enceinte", a classical
       // rusticated PORTAL through a low rampart, reached across the ditch by a bridge. The siting
       // rule (a gate goes in a curtain face, never in a bastion) is a placement rule, not a mesh
       // one, but the low silhouette is this mesh's job: nothing here stands above 5.6.
-      const GH=9.4, PW=2.5, PGAP=3.4;            // gatehouse height, pier width, clear passage
+      // v132.15 PGAP IS GATE_PASS NOW, and the piers slim from 2.5 to 2.2 to pay for it: the
+      // lintel spans PGAP + 2*PW + 0.4, which at 7.8 and 2.2 is 12.6 against the 12.5 curtain
+      // segment this gate splits. This is the ONE gate genuinely boxed in — the others simply
+      // stepped their drums outward, because a gatehouse already stands wider than a curtain.
+      const GH=9.4, PW=2.2, PGAP=GATE_PASS;      // gatehouse height, pier width, clear passage
       // >>> v131.28 THE RAMPART IS SPLIT AROUND THE PASSAGE, AND UNTIL NOW IT WAS NOT. <<<
       // These two boxes were 12.5 wide and ran straight across the opening: rev topping out at 3.53
       // and core at 3.60, against a body 2.6 tall. The 3.4-wide "clear passage" the piers make was
@@ -2515,13 +2581,17 @@ function buildingMesh(type,team,age,hx,hz){
       lint.position.set(0,GH-0.65,0.4); lint.castShadow=true; g.add(lint);
       // the reveal: a recessed head to the passage, set back from the front face so the opening
       // reads as a tunnel with depth rather than as a disc painted on a wall
-      const head=cyl(PGAP/2,PGAP/2,0.5,_dk(P.stone,0.22),12); head.rotation.x=Math.PI/2;
-      head.castShadow=false; head.position.set(0,GH-1.3,0.1); g.add(head);
-      // the leaves, SET BACK 1.5 into the reveal and left ajar, which is what says "this opens"
-      for(const s of [-1,1]){
-        const leaf=box(PGAP/2-0.1,GH-2.6,0.22,P.dark); leaf.castShadow=false;
-        leaf.position.set(s*(PGAP/4+0.05),(GH-2.6)/2,-0.55); leaf.rotation.y=s*0.22; g.add(leaf);
-      }
+      // v132.16 A BAND, NOT A DISC. This was a cylinder of radius PGAP/2 laid face-on: at PGAP 3.4
+      // it spanned y 6.4..8.1 and nobody noticed, and at 7.8 it spans 4.2..12.0 and seals the
+      // gateway from chest height up. Any decoration whose SIZE is tied to the passage will
+      // eventually grow across the passage; a band cannot.
+      const head=box(PGAP+0.6,0.7,0.5,_dk(P.stone,0.22)); head.castShadow=false;
+      head.position.set(0,GH-1.75,0.1); g.add(head);
+      // v132.15 THE LEAVES, ACTUALLY OPEN. "Left ajar" was a 0.22 rad YAW on a pair of leaves that
+      // still met in the middle — it angled them without opening them, and the measured daylight
+      // between them was 0.23. v131.25 fixed "the gate looks solid" as far as the reveal and this
+      // is the rest of that same defect. Hinged at the jambs and folded back, like every other gate.
+      _gateLeaves(g,PGAP/2,-0.55,PGAP/2-0.1,GH-2.6,0.22,P.dark);
       const arms=box(1.5,0.9,0.2,GOLD); arms.castShadow=false; arms.position.set(0,GH-2.2,2.05); g.add(arms);
       const bridge=box(PGAP,0.34,4.6,PLANK); bridge.castShadow=false; bridge.position.set(0,1.0,4.4); g.add(bridge);
       const ban=box(1.4,0.9,0.1,tc); ban.castShadow=false; ban.position.set(0,GH+0.6,0.6); g.add(ban);
@@ -2533,14 +2603,16 @@ function buildingMesh(type,team,age,hx,hz){
         const gt=box((12.5-PGAP)/2,0.6,4.4,0x8a7a58); gt.castShadow=false;
         gt.position.set(s*(PGAP/2+(12.5-PGAP)/4),3.7,-1.2); g.add(gt);
       }
-      // AND IT BRIDGES THE PASSAGE. wallFloorAt returns one deck height across a segment's whole
-      // width, so leaving the gateway open at deck level would walk the player over the opening on
-      // nothing. A gate passage is VAULTED and the rampart walk runs across the top of it — that is
-      // what a gatehouse is — so the vault is both the honest architecture and the floor.
-      const vault=box(PGAP+0.4,0.6,4.4,0x8a7a58); vault.castShadow=false;
-      vault.position.set(0,3.7,-1.2); g.add(vault);
-      const soff=box(PGAP+0.4,0.3,4.4,_dk(P.stone,0.26)); soff.castShadow=false;
-      soff.position.set(0,3.25,-1.2); g.add(soff);           // the vault's underside, seen from below
+      // v132.16 AND IT NO LONGER BRIDGES THE PASSAGE. v131.28 floored the gateway at deck height —
+      // a 0.6 slab at y=3.7 — for a stated reason: "leaving the gateway open at deck level would
+      // walk the player over the opening on nothing." The premise was that you can walk over a
+      // gate, and that premise is John's other bug: "it is treating the gate as another mountable
+      // wall so you have this weird condition where units CLIMB OVER the gate to get through it."
+      // A gate is the way THROUGH a wall. wallFloorAt returns null for gates now, nothing walks
+      // over the passage, and so nothing has to floor it — which also gives the passage back the
+      // 5 units of headroom that slab was taking. One fix, both bugs.
+      // The flanking stubs above stay: the curtain's walk runs up to the gatehouse and stops there,
+      // which is what a walk meeting a tower has always done.
     }else{
       // §F.5 THE GREAT TWIN-TOWERED GATEHOUSE, and by this period the gatehouse and not the keep
       // is the strongest part of a castle: two projecting DRUM towers, a vaulted passage between
@@ -2549,29 +2621,41 @@ function buildingMesh(type,team,age,hx,hz){
       // §F.5 is explicit that they are this rung's upgrade and must not leak downward.
       const wmat=texturedMat("metal",P.stone);
       const h=10.4;
-      for(const px of [-5.0,5.0]){
-        const t=new THREE.Mesh(new THREE.CylinderGeometry(2.6,3.0,h,10),wmat);
+      // v132.15 THE DRUMS SLIM AND STEP OUT, same move as the Classical gate one rung down. 2.6/3.0
+      // at +-5.0 put the inner faces at +-2.0 — a 4.0 passage on the rung §F.5 calls the strongest
+      // part of a castle, and the one an army's siege train has to leave through. 2.2/2.5 at +-6.4
+      // leaves +-3.9, and the gate is 17.8 overall against 16.0, so it still sits in a wall line
+      // the way it always did.
+      for(const px of [-6.4,6.4]){
+        const t=new THREE.Mesh(new THREE.CylinderGeometry(2.2,2.5,h,10),wmat);
         t.position.set(px,h/2,0.8); t.castShadow=true; t.receiveShadow=true; g.add(t);
         for(let i=0;i<7;i++){const a=i*Math.PI/3.4-0.6;
           const mer=box(1.1,1.2,1.0,P.stone); mer.castShadow=false;
-          mer.position.set(px+Math.sin(a)*2.7,h+0.6,0.8+Math.cos(a)*2.7); mer.rotation.y=-a; g.add(mer);}
+          mer.position.set(px+Math.sin(a)*2.3,h+0.6,0.8+Math.cos(a)*2.3); mer.rotation.y=-a; g.add(mer);}
         for(const sy of [3.4,6.6]){const loop=box(0.24,1.1,0.2,P.dark); loop.castShadow=false;
           loop.position.set(px,sy,3.6); g.add(loop);}
       }
-      const vault=new THREE.Mesh(new THREE.BoxGeometry(10.4,2.4,3.2),wmat);
+      const vault=new THREE.Mesh(new THREE.BoxGeometry(13.2,2.4,3.2),wmat);
       vault.position.y=h-1.2; vault.castShadow=true; g.add(vault);
       for(let i=0;i<4;i++){const mh=box(0.4,0.3,0.4,P.dark); mh.castShadow=false;
         mh.position.set(-1.8+i*1.2,h-2.35,0.6); g.add(mh);}          // MURDER HOLES in the vault
+      // v132.15 THE GROOVES, THE BARS AND THE VAULT ALL MOVE WITH THE PASSAGE. Widening the drums
+      // and leaving these where they were would have re-sealed the gate 0.6 further in — the
+      // grooves alone stood at +-2.6 and left 4.86. Every one of them is written off GATE_PASS now,
+      // so the next time it moves they follow instead of quietly strangling the opening again.
       for(const s of [-1,1]){const grv=box(0.34,h-2.4,0.5,_dk(P.stone,0.2)); grv.castShadow=false;
-        grv.position.set(s*2.6,(h-2.4)/2,1.55); g.add(grv);}          // the portcullis grooves
-      for(let i=0;i<9;i++){const bar=box(0.22,3.0,0.16,STONEDK); bar.castShadow=false;
-        bar.position.set(-2.4+i*0.6,h-3.6,1.5); g.add(bar);}          // the raised portcullis
+        grv.position.set(s*(GATE_PASS/2+0.17),(h-2.4)/2,1.55); g.add(grv);}   // the portcullis grooves
+      // …AND THE RAISED PORTCULLIS RIDES HIGHER. Its bars hung with their bottoms at 5.30 against
+      // a body 5.43 tall: raised, and still decapitating the infantry. h-2.4 puts them at 6.50.
+      {const NB=13, sp=GATE_PASS/(NB-1);
+       for(let i=0;i<NB;i++){const bar=box(0.22,3.0,0.16,STONEDK); bar.castShadow=false;
+         bar.position.set(-GATE_PASS/2+i*sp,h-2.4,1.5); g.add(bar);}}        // the raised portcullis
       // §F.5's drawbridge, DOWN. rotation.x=-0.28 left the leaf's far underside at 1.90 and its
       // near underside at 0.57 with nothing under either — John's "sits partially up". A leaf lying
       // flat: 0.34 thick resting on grade puts its centre at 0.34/2=0.17, and the hinge belongs on
       // the face of the portcullis grooves, z=1.55+0.5/2=1.80, so the centre is 1.80+4.8/2=4.20,
       // the lifting end is z=6.60 and the deck top is 0.17+0.17=0.34.
-      const draw=box(3.6,0.34,4.8,0x5A4630); draw.castShadow=false;
+      const draw=box(GATE_PASS,0.34,4.8,0x5A4630); draw.castShadow=false;
       draw.position.set(0,0.17,4.20); g.add(draw);
       // THE CHAINS, and now both ends land on something. Top: the head of the passage, i.e. the
       // vault's bottom-front edge — y=9.2-2.4/2=8.00, z=0+3.2/2=1.60. Bottom: the leaf's lifting
@@ -2583,7 +2667,7 @@ function buildingMesh(type,team,age,hx,hz){
       // grooves at +/-2.6. Was a 4.6 stick from (y2.08,z1.30) to (y6.12,z3.50): neither end touched
       // the gate or the leaf.
       for(const s of [-1,1]){const ch=cyl(0.07,0.07,9.15,STONEDK,4); ch.rotation.x=-0.5783; ch.castShadow=false;
-        ch.position.set(s*1.7,4.17,4.10); g.add(ch);}                 // the chains
+        ch.position.set(s*(GATE_PASS/2-0.1),4.17,4.10); g.add(ch);}   // the chains, on the leaf's edges
       const ban=box(1.8,1.2,0.09,tc); ban.castShadow=false; ban.position.set(0,h+0.4,1.7); g.add(ban);
     }
   }else if(type==="castle"){
