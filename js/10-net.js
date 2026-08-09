@@ -992,11 +992,33 @@ NET.driveRemote=function(r,dt){
     r.eUsed=false;
     if(u.garrison){ // climb down
       const b=u.garrison; u.garrison=null; setClassStats(u); u.deckX=u.deckZ=0;
+      // v132.23 a wall puts a GUEST back at its ladder too. 06-input.js learned this in v132.22 and
+      // this copy did not: bSurf+1.6 along world +x is a fine spit-out for a tower, which is round,
+      // and on a curtain 12.5 long at an arbitrary yaw it is a point somewhere along the face.
+      if(b.def.wall&&!b.def.gate){
+        const _r=b.rot||0,_c=Math.cos(_r),_s=Math.sin(_r), _z=WALL_LADDER_Z-1.4;
+        u.root.position.set(b.x+_z*_s,0,b.z+_z*_c);
+      }else
       u.root.position.set(b.x+(bSurf(b.def)+1.6),0,b.z);
       u.root.position.y=terrainHeight(u.root.position.x,u.root.position.z);
-      NET.note(r,"You climb down from the watch tower.");
+      NET.note(r,b.def.wall?"You climb down from the rampart.":"You climb down from the watch tower.");
       try{r.conn.send({t:"snd",k:"garrison",x:b.x,z:b.z});}catch(_){} // v104: the acting guest hears it
       r.eUsed=true;
+    }
+    // v132.23 CLIMB UP A WALL — the guest half of v132.22. playerInteract returns immediately on a
+    // guest ("host drives gather/build via your E key"), so the loop added there is host-only and a
+    // guest pressing E at a ladder got nothing at all. Same radius, same foot, same range boost.
+    if(!r.eUsed)for(const b of buildings){
+      if(b.team!==u.team||!b.alive||!b.built||!b.def.wall||b.def.gate)continue;
+      if(!b.deck)continue;                                  // only the age-5 curtain has a walkway
+      if(CLS[u.cls].mounted||isSiege(u.cls))continue;
+      const _r=b.rot||0,_c=Math.cos(_r),_s=Math.sin(_r);
+      if(dist2(px0,pz0,b.x+WALL_LADDER_Z*_s,b.z+WALL_LADDER_Z*_c)<WALL_LADDER_R*WALL_LADDER_R){
+        u.garrison=b; u.rng*=1.2; u.gathering=null; u.deckX=u.deckZ=0;
+        NET.note(r,"You climb the ladder onto the rampart — shoot down from the wall. E climbs down.","blue");
+        try{r.conn.send({t:"snd",k:"garrison",x:b.x,z:b.z});}catch(_){}
+        r.eUsed=true;break;
+      }
     }
     if(!r.eUsed)for(const b of buildings){ // climb up
       if(b.team===u.team&&b.alive&&b.built&&b.type==="watch_tower"&&
@@ -1060,8 +1082,9 @@ NET.driveRemote=function(r,dt){
         const L=Math.hypot(dir.x,dir.z)||1;
         u.deckX=(u.deckX||0)+dir.x/L*u.spd*dt*0.7;
         u.deckZ=(u.deckZ||0)+dir.z/L*u.spd*dt*0.7;
-        const dd=Math.hypot(u.deckX,u.deckZ);
-        if(dd>deck.r){u.deckX*=deck.r/dd;u.deckZ*=deck.r/dd;}
+        // v132.23 one clamp, in 03-buildings.js, shared by all four sites — see deckClamp
+        {const _cl=deckClamp(deck,gb.rot,u.deckX,u.deckZ);
+         u.deckX=_cl.x; u.deckZ=_cl.z;}
         u.facing=Math.atan2(dir.x,dir.z); u.moving=true; u._mv=T; u.walkT+=dt*5;
       }else u.moving=false;
       u.root.position.set(gb.x+(u.deckX||0),gb.root.position.y+deck.y,gb.z+(u.deckZ||0));
@@ -1967,9 +1990,12 @@ NET.guestFrame=function(dt){
     if(u.garrison&&u.garrison.alive){ // sentries walk the deck: snapshot x/z, deck height
       const gd=u.garrison.deck||{y:7.15,r:2.4};
       if(u!==player){ // clamp drift to the platform; height comes from the deck
-        const ddx=u.root.position.x-u.garrison.x, ddz=u.root.position.z-u.garrison.z;
-        const dl=Math.hypot(ddx,ddz);
-        if(dl>gd.r){u.root.position.x=u.garrison.x+ddx/dl*gd.r;u.root.position.z=u.garrison.z+ddz/dl*gd.r;}
+        // v132.23 …through deckClamp, so a sentry on a rampart is held to the rampart. This read
+        // gd.r, which a wall deck does not have, so the clamp was a no-op on exactly the deck whose
+        // shape it was supposed to respect.
+        const _cl=deckClamp(gd,u.garrison.rot,
+          u.root.position.x-u.garrison.x,u.root.position.z-u.garrison.z);
+        u.root.position.x=u.garrison.x+_cl.x; u.root.position.z=u.garrison.z+_cl.z;
         u.root.position.y=u.garrison.root.position.y+gd.y;
       }
     }else if(u.garrison){u.garrison=null;u.deckX=u.deckZ=0;}
@@ -1989,8 +2015,12 @@ NET.guestFrame=function(dt){
       const L=Math.hypot(dir.x,dir.z)||1;
       player.deckX=(player.deckX||0)+dir.x/L*player.spd*dt*0.7;
       player.deckZ=(player.deckZ||0)+dir.z/L*player.spd*dt*0.7;
-      const dd=Math.hypot(player.deckX,player.deckZ);
-      if(dd>deck.r){player.deckX*=deck.r/dd;player.deckZ*=deck.r/dd;}
+      // v132.23 THE ONE THAT MATTERED MOST: a guest predicting ITSELF. deck.r is undefined on a
+      // rampart, so the test dd > deck.r is false for every dd and this clamped nothing at all —
+      // the guest walked off the end of the wall on his own screen and was snapped back by the
+      // next snapshot, every snapshot, for as long as he held the key.
+      {const _cl=deckClamp(deck,gb.rot,player.deckX,player.deckZ);
+       player.deckX=_cl.x; player.deckZ=_cl.z;}
       player.facing=Math.atan2(dir.x,dir.z); player.moving=true; player.walkT+=dt*5;
     }else player.moving=false;
     player.root.position.set(gb.x+(player.deckX||0),gb.root.position.y+deck.y,gb.z+(player.deckZ||0));

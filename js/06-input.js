@@ -379,13 +379,38 @@ function playerInteract(){
   const px=player.root.position.x, pz=player.root.position.z;
   if(player.garrison){ // climb down
     const b=player.garrison; player.garrison=null; player.deckX=player.deckZ=0;
+    // v132.22 a wall puts you back at the foot of its own ladder, not off its side
+    if(b.def.wall&&!b.def.gate){
+      const _r=b.rot||0,_c=Math.cos(_r),_s=Math.sin(_r), _z=WALL_LADDER_Z-1.4;
+      player.root.position.set(b.x+_z*_s,0,b.z+_z*_c);
+    }else
     player.root.position.set(b.x+(bSurf(b.def)+1.6),0,b.z);
     player.root.position.y=terrainHeight(player.root.position.x,player.root.position.z);
     setClassStats(player); // restore base range
     if(typeof Sound!=="undefined"){Sound.play("garrison",{x:b.x,z:b.z}); // v104: tower clamber
       if(Math.random()<0.6)Sound.play("veffort",{x:b.x,z:b.z});} // v109: the climb takes a grunt
-    msg("You climb down from the watch tower.");
+    msg(b.def.wall?"You climb down from the rampart.":"You climb down from the watch tower.");
     return;
+  }
+  // v132.22 CLIMB UP: MAN A WALL, at its ladder. John: "someone goes to ramp, presses E, boom they
+  // are on top of the wall and can shoot down." Same machinery as the watch tower — the garrison
+  // system already parks a unit on a platform, moves it with deckX/deckZ and carries it on the wire
+  // — so this is a second building type answering the same key, not a second system.
+  // AT THE LADDER, NOT ANYWHERE ALONG THE WALL. A curtain is 12.5 long and manning it from any
+  // point would make the ladder a decoration. The foot is at the middle of the segment's rear face.
+  for(const b of buildings){
+    if(b.team!==MYTEAM||!b.alive||!b.built||!b.def.wall||b.def.gate)continue;
+    if(!b.deck)continue;                                    // only the age-5 curtain has a walkway
+    if(CLS[player.cls].mounted||isSiege(player.cls))continue;
+    const _r=b.rot||0,_c=Math.cos(_r),_s=Math.sin(_r);
+    const lxw=b.x+WALL_LADDER_Z*_s, lzw=b.z+WALL_LADDER_Z*_c;
+    if(dist2(px,pz,lxw,lzw)<WALL_LADDER_R*WALL_LADDER_R){
+      player.garrison=b; player.rng*=1.2; player.deckX=0; player.deckZ=0;
+      if(typeof Sound!=="undefined"){Sound.play("garrison",{x:b.x,z:b.z});
+        if(Math.random()<0.6)Sound.play("veffort",{x:b.x,z:b.z});}
+      msg("You climb the ladder onto the rampart — shoot down from the wall. E climbs down.","blue");
+      return;
+    }
   }
   for(const b of buildings){ // climb up: man a watch tower
     if(b.team===MYTEAM&&b.alive&&b.built&&b.type==="watch_tower"&&

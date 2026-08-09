@@ -86,8 +86,9 @@ function updatePlayer(dt){
         const L=Math.hypot(dir.x,dir.z)||1;
         player.deckX=(player.deckX||0)+dir.x/L*player.spd*dt*0.7;
         player.deckZ=(player.deckZ||0)+dir.z/L*player.spd*dt*0.7;
-        const dd=Math.hypot(player.deckX,player.deckZ);
-        if(dd>deck.r){player.deckX*=deck.r/dd; player.deckZ*=deck.r/dd;}
+        // v132.23 one clamp, in 03-buildings.js, shared by all four sites — see deckClamp
+        {const _cl=deckClamp(deck,gb.rot,player.deckX,player.deckZ);
+         player.deckX=_cl.x; player.deckZ=_cl.z;}
         player.facing=Math.atan2(dir.x,dir.z); player.moving=true; player.walkT+=dt*5;
       }else player.moving=false;
       player.root.position.set(gb.x+(player.deckX||0),gb.root.position.y+deck.y,gb.z+(player.deckZ||0));

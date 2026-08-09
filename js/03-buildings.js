@@ -394,6 +394,30 @@ const BSCALE={storage_pit:0.95,farm:0.6375,watch_tower:0.75};
 // one. Read the same numbers `buildingMesh` uses; the smoketest's 6 < y < 14 window covers all six.
 function watchTowerH(age){return age>=5?9.2:(age===4?15.5:14);}
 function watchDeck(age,bs){return {y:(watchTowerH(age|0)+0.25)*(bs||1),r:2.5};}
+// v132.23 ONE CLAMP FOR EVERY DECK, IN THE DECK'S OWN FRAME. Four places hold a garrisoned body on
+// its platform — the host's own player (09-main.js), a guest driven on the host and a remote sentry
+// drawn from a snapshot and a guest PREDICTING ITSELF (all three in 10-net.js) — and v132.22 taught
+// two of them that a wall's terreplein is a rectangle while the other two went on reading deck.r.
+// That does not fail loudly: on a rectangular deck r is undefined, d > undefined is false for every
+// d, and the clamp silently does nothing — so a guest predicted himself walking off the rampart
+// at deck height until the host's next packet pulled him back. Four copies of a geometric rule is
+// how two of them ended up believing every deck is a circle; there is one copy now.
+//   deck   {y,r} a circle (watch towers) or {y,hx,z0,z1} a rectangle (the age-5 curtain)
+//   rot    the building's yaw. The local frame is the one wallFloorAt and the wall collider use:
+//          lx = dx·c - dz·s, lz = dx·s + dz·c, which is THREE's own rotation.y inverted.
+//   ox/oz  the offset from the building's centre, in world units; the return is the same.
+// d===0 falls out of the circular branch untouched (0 > r is false), so no division by zero.
+function deckClamp(deck,rot,ox,oz){
+  if(deck.hx===undefined){
+    const d=Math.hypot(ox,oz);
+    return (d>deck.r)?{x:ox*deck.r/d,z:oz*deck.r/d}:{x:ox,z:oz};
+  }
+  const c=Math.cos(rot||0),s=Math.sin(rot||0);
+  let lx=ox*c-oz*s, lz=ox*s+oz*c;
+  lx=Math.max(-deck.hx,Math.min(deck.hx,lx));
+  lz=Math.max(deck.z0,Math.min(deck.z1,lz));
+  return {x:lx*c+lz*s, z:-lx*s+lz*c};
+}
 // v131.24 THE WALL WALKWAY. John: "add ramps and make tops of walls walkable surface so people can
 // shoot from the top", scoped by him to the PLAYER only -- no AI pathing onto walls, no attackers
 // taking one. So this is a floor query and nothing else: no navmesh, no waypoints, no new unit
@@ -424,8 +448,41 @@ const WALL_DECK_Y=4.0, WALL_DECK_HX=6.25, WALL_DECK_Z0=-3.4, WALL_DECK_Z1=1.0;
 //                    the wall is 6.0 rather than the 8.0 the old run would have cost when stood up.
 //                    The tail is the price of a ramp you can see is a ramp; this is the smaller bill.
 const WALL_RAMP_HX=1.1, WALL_RAMP_ZTOP=-3.4, WALL_RAMP_RUN=6.0, WALL_RAMP_FLAT=0.8;
+// v132.21 THE HIGHEST FLOOR UNDER YOU, NOT THE FIRST ONE IN THE ARRAY. Segments stand 10.9 apart
+// and each claims a deck 12.5 wide, so consecutive decks OVERLAP by 1.6 — and each sits at its own
+// base + 4.0, so over that strip there are two floors at two heights. Returning the first match
+// returned them in PLACEMENT ORDER, which has nothing to do with which surface is under a body's
+// feet: walking from a high segment into the overlap could hand you the low neighbour's floor, drop
+// you onto it, and leave you standing inside the high segment's masonry. And moveUnit's exemption
+// survived the drop — its tolerance is 1.2 and the measured base spread on FLAT ground is 1.07 —
+// so the wall's collider stayed switched off and you walked on through the stonework. That is
+// John's "i can slip through the wall base", and tools/wallslip.js caught it 11 times in 576 drives,
+// every single one of them starting on the deck.
+// It degrades the right way, too: where the spread EXCEEDS 1.2 the step up is too big to count as
+// standing on it, the exemption fails and the collider fires. Stopped is correct; dropped inside is
+// not.
+// v132.22 THE LADDER'S FOOT, in the wall's own local frame: middle of the segment, just behind the
+// terreplein's inner edge. E within WALL_LADDER_R of it mans the wall.
+const WALL_LADDER_Z=WALL_DECK_Z0-0.55, WALL_LADDER_R=2.8;
+// v132.22 NOTHING WALKS ON A WALL ANY MORE, so there is no floor up there to report. John: "the
+// wall should act like a watch tower… someone goes to ramp, presses E, boom they are on top."
+// This function used to hand back a surface in mid-air, which required a per-frame height hug in
+// renderFrame AND an exemption in moveUnit that switched the wall's collider OFF while you stood on
+// it. That exemption is the shape of thing that generates position disagreements between host and
+// guest (v131.28), lets you pop onto a curtain without a ramp (v131.34), forces a gateway to be
+// bricked up at deck height so there is something to stand on (v132.16), and is the only credible
+// way into a wall's base (v132.21, never reproduced in 768 drives but never explained either).
+// A garrisoned unit is not in the collision world at all. Returning null everywhere retires all of
+// it: the exemption never fires, so a wall always collides.
+// KEPT AS A FUNCTION rather than deleted because 05-combat.js and 09-main.js both call it, and a
+// stub that always says "no floor" is a smaller, more obvious change than removing three call
+// sites — and it leaves one place to look if walls are ever made walkable again.
 function wallFloorAt(x,z){
+  return null;
+}
+function _wallFloorAtRetired(x,z){
   if(typeof buildings==="undefined")return null;
+  let _wfBest=null;
   for(const b of buildings){
     if(!b.alive||!b.built||!b.def.wall)continue;
     const a=Math.max((b.def.age||0),
@@ -441,8 +498,11 @@ function wallFloorAt(x,z){
     const rot=b.rot||0,c=Math.cos(rot),sn=Math.sin(rot);
     const dx=x-b.x,dz=z-b.z;
     const lx=dx*c-dz*sn, lz=dx*sn+dz*c;
-    if(Math.abs(lx)<=WALL_DECK_HX&&lz>=WALL_DECK_Z0&&lz<=WALL_DECK_Z1)
-      return b.root.position.y+WALL_DECK_Y;
+    if(Math.abs(lx)<=WALL_DECK_HX&&lz>=WALL_DECK_Z0&&lz<=WALL_DECK_Z1){
+      const f=b.root.position.y+WALL_DECK_Y;
+      if(_wfBest===null||f>_wfBest)_wfBest=f;
+      continue;                                       // a deck wins over this wall's own ramp
+    }
     // v131.28 THE RAMP IS THE CURTAIN'S. Gate types carry wall:true and reach this loop, but the
     // gate branch of the model builds no ramp at all — only the curtain branch does. So every
     // age-5 gate has had an invisible slope behind it, lifting the player up a surface that is not
@@ -454,11 +514,12 @@ function wallFloorAt(x,z){
       // is, up to a unit higher. Unclamped, stepping onto the ramp's bottom end SANK the body into
       // the hillside before it started climbing. A ramp emerges from the ground; it does not cut a
       // trench to reach it.
-      return Math.max(b.root.position.y+WALL_DECK_Y*
+      {const f=Math.max(b.root.position.y+WALL_DECK_Y*
         Math.min(1,(lz-(WALL_RAMP_ZTOP-WALL_RAMP_RUN))/(WALL_RAMP_RUN-WALL_RAMP_FLAT)), // flat landing at the top
         terrainHeight(x,z));
+       if(_wfBest===null||f>_wfBest)_wfBest=f;}
   }
-  return null;
+  return _wfBest;
 }
 // v131.3 THE GARRISON SKIN. Hides the cap of the tower THIS client's player is standing in and
 // restores the last one it touched. Purely render state — no simulation reads it — so a guest and
@@ -2366,19 +2427,27 @@ function buildingMesh(type,team,age,hx,hz){
       // Ends, checked: length hypot(6,4) = 7.2111 centred at z = ZTOP - RRUN/2 = -6.4, y = 2.0.
       // Local +z end (0,0,3.606) turns to (0,+2.0,+3.0) -> world (0, 4.0, -3.4) = the deck edge.
       // Local -z end turns to (0,-2.0,-3.0) -> world (0, 0.0, -9.4) = the ground.
-      const RRISE=4.0, RRUN=WALL_RAMP_RUN, RANG=Math.atan2(RRISE,RRUN);
-      const RLEN=Math.hypot(RRUN,RRISE), RMIDZ=WALL_RAMP_ZTOP-RRUN/2;
-      const ramp=new THREE.Mesh(new THREE.BoxGeometry(WALL_RAMP_HX*2,0.4,RLEN),
-        texturedMat("metal",P.stone));
-      ramp.rotation.x=-RANG; ramp.position.set(0,RRISE/2,RMIDZ);
-      ramp.castShadow=true; ramp.receiveShadow=true; g.add(ramp);
-      // TWO kerbs now, not one: a ramp you walk UP has an edge on either side of you, and a single
-      // kerb on a perpendicular ramp is a handrail on one side of a staircase.
-      for(const ks of [-1,1]){
-        const kerb=new THREE.Mesh(new THREE.BoxGeometry(0.26,0.34,RLEN),aWall(age));
-        kerb.rotation.x=-RANG; kerb.position.set(ks*(WALL_RAMP_HX+0.13),RRISE/2+0.30,RMIDZ);
-        kerb.castShadow=false; g.add(kerb);
-      }
+      // v132.22 A LADDER, NOT A RAMP. John: "even better nix the ramps and put ladders up against
+      // the wall." It is the smaller object in every direction — 0.9 wide against 2.2, and no 6.0
+      // tail into the courtyard, which finally answers the objection the original along-the-wall
+      // ramp was built around ("every segment of a curtain would grow a tail into its own
+      // courtyard"). Climbing is an E press now, so the ladder does not have to be walkable, only
+      // legible: this is what says "you can get up here".
+      // Leaned by 0.16 rad with the TOP toward the wall — rotation about +x carries a point at +y
+      // toward +z, so a positive angle tips the head in and the feet out, which is how a ladder
+      // stands. Feet at the ladder's own z, head at the terreplein's inner edge.
+      {const LAD=new THREE.Group();
+       LAD.position.set(0,0,WALL_LADDER_Z-0.35); LAD.rotation.x=0.16;
+       const wood=texturedMat("wood",P.timber);
+       for(const ls of [-1,1]){
+         const rail=new THREE.Mesh(new THREE.BoxGeometry(0.15,4.9,0.15),wood);
+         rail.position.set(ls*0.42,2.45,0); rail.castShadow=true; LAD.add(rail);
+       }
+       for(let i=0;i<7;i++){
+         const rung=new THREE.Mesh(new THREE.BoxGeometry(0.99,0.11,0.11),wood);
+         rung.position.set(0,0.55+i*0.65,0); rung.castShadow=false; LAD.add(rung);
+       }
+       g.add(LAD);}
     }else{
       // §F.5 THE MEDIEVAL FORTIFIED WALL. "TALL AND THIN IS CORRECT FOR THIS AGE" — height beats
       // ladders and every siege answer is still muscle-powered. Sloping batter at the base,
@@ -3764,6 +3833,18 @@ function makeBuilding(team,type,x,z,instant,rot){
     built:!!instant,progress:instant?def.hits:0,alive:true,atkT:0};
   fitApron(b); // the foundation, the plaza and the contact shadow, in the one mesh they used to fight over
   if(type==="watch_tower")b.deck=watchDeck(b.body.userData.age,bs);
+  // v132.22 …and an age-5 curtain carries one too, but RECTANGULAR: a terreplein is 12.5 by 4.4,
+  // not a tower top. z0/z1 rather than r, clamped in the wall's own local frame so a curtain at any
+  // rotation is clamped along ITS length.
+  // v132.23 AGE-GATED FOR REAL. The line above said "age 5 only" and did not test the age, while
+  // the terreplein and the ladder are drawn only in the age>=5 branch of the wall builder. A
+  // palisade is 5.0 tall with a plank walk at 3.30 and a Medieval curtain is 9.4 and solid: both
+  // would have offered a deck at 4.00 with no ladder to reach it, which is standing in mid-air
+  // beside the one and inside five units of masonry on the other. The MESH's own age, which is the
+  // field watchDeck is handed one line up — so a wall that ages into a star fort gains its deck on
+  // the restyle below, and one that has not reached §F.6 has none.
+  if(b.def.wall&&!b.def.gate&&(b.body.userData.age|0)>=5)
+    b.deck={y:WALL_DECK_Y,hx:WALL_DECK_HX-0.7,z0:WALL_DECK_Z0+0.7,z1:WALL_DECK_Z1-0.7};
   b.bar=makeBar(root,BARH[type]||10,4,0x4caf50);
   if(def.heal){ // visible healing aura
     const aura=new THREE.Mesh(new THREE.RingGeometry(def.heal.rng-0.35,def.heal.rng,40),
@@ -3876,6 +3957,12 @@ function _restyleOneBuilding(b){
   // Enlightenment watch tower is 6.3 units shorter than the Medieval one it replaces, so a garrison
   // that aged up without this line would be standing in mid-air over its own gun platform.
   if(b.type==="watch_tower")b.deck=watchDeck(nb.userData.age,BSCALE[b.type]||1);
+  // v132.23 …and the restyle is where a curtain GAINS one: it is rebuilt at the new age, so the
+  // test is the new mesh's age and the else clears a deck the old mesh had. Assigning
+  // unconditionally, as v132.22 did, gave a Bronze palisade a rampart at 4.00.
+  if(b.def.wall&&!b.def.gate)
+    b.deck=((nb.userData.age|0)>=5)?
+      {y:WALL_DECK_Y,hx:WALL_DECK_HX-0.7,z0:WALL_DECK_Z0+0.7,z1:WALL_DECK_Z1-0.7}:null;
   fitApron(b); // the new age is a new footprint; a pool sized to the old one is a ring around air
   puff(b.x+(Math.random()-0.5)*3,2.5,b.z+(Math.random()-0.5)*3,0xffe27a,1.4,0.8);
 }
