@@ -21,7 +21,10 @@ var NET={
   // count and every id after them changes, and the camps' tree clearance moves the node stream.
   // The three are APPENDED to CREEP_SITES so indices 0-5 and the existing ids hold — but a peer on
   // 28 has six camps and 15 fewer units, which is a desync, not a degraded experience.
-  PROTO:29,             // bumped whenever the wire format changes OR the generated world does.
+  // v132.9 29 -> 30: the Viking road's bow was reversed. The spine moved, so its clearance corridor
+  // moved, so the trees moved; and the two team bazaars are defined ON the spine, so they moved too
+  // and took their own clearance with them. Every node index downstream is different.
+  PROTO:30,             // bumped whenever the wire format changes OR the generated world does.
                         // v127: 25 → 26. The envelope (stock0/stock1/carry/ares) went from
                         // "every snapshot" to "when it changes, plus the 1Hz keyframe". A v126
                         // guest reads s.stock0.f with no guard, so an absent field would write

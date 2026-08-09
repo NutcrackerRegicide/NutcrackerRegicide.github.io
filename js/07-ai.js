@@ -189,7 +189,16 @@ function updateCreep(u,dt){
   const st=u.bot.camp;
   const px=u.root.position.x,pz=u.root.position.z;
   let t=null,bd=1e9; // nearest intruder INSIDE the aggro ring (per-camp: the boss shore casts a wider net)
-  const agg=st.aggro||CAMP_AGGRO;
+  // v132.10 …and a WOKEN camp reaches further, but only as far as whoever is hitting it. Extending
+  // by the flat CAMP_WAKE_REACH would put an interior camp's scan at 35 from centre — past the
+  // Viking road at 29.7 — so poking a camp would set the pack on a passing trade cart. Reaching to
+  // the threat's own distance plus 4, capped, cannot.
+  const woke=st.wake&&T<st.wake;
+  let agg=st.aggro||CAMP_AGGRO;
+  if(woke&&st.threat&&st.threat.alive){
+    const td=Math.hypot(st.threat.root.position.x-st.x,st.threat.root.position.z-st.z);
+    agg=Math.max(agg,Math.min(td+4,agg+CAMP_WAKE_REACH));
+  }
   for(const e of units){
     if(!e.alive||e.team===NEUTRAL||e.garrison)continue;
     if(dist2(e.root.position.x,e.root.position.z,st.x,st.z)>agg*agg)continue;
@@ -224,8 +233,12 @@ function updateCreep(u,dt){
     if(u.hp<u.maxHp){u.hp=Math.min(u.maxHp,u.hp+u.maxHp*0.08*dt);setBar(u.bar,u.hp/u.maxHp);}
   }
   // the hard leash: paws never leave the camp circle, no matter the shoving
+  // v132.10 …except while the camp is awake, when it gives CAMP_WAKE_CHASE. Seeing the slinger is
+  // worth nothing if the paws still stop at r-1.2: on an interior camp the leash is 9.8 and a
+  // slinger shooting from 18 would be watched, angrily, from inside the fence. 21.8 reaches him.
+  // It snaps back the moment the camp settles, and the calm branch above walks them home.
   const dx=u.root.position.x-st.x,dz=u.root.position.z-st.z,dd=Math.hypot(dx,dz);
-  const lim=(st.r||CAMP_R)-1.2;
+  const lim=(st.r||CAMP_R)-1.2+(woke?CAMP_WAKE_CHASE:0);
   if(dd>lim){u.root.position.x=st.x+dx/dd*lim;u.root.position.z=st.z+dz/dd*lim;}
 }
 

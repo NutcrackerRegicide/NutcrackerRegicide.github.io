@@ -98,6 +98,18 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
           const d=Math.hypot(c.x-_p.x,c.z-_p.z); if(d<fol)fol=d;
         }
       s.fol=+fol.toFixed(1);
+      // v132.12 IS IT ACTUALLY IN THE WOODS? John: "more tucked into heavily wooded areas. for
+      // example this camp is pretty much just in the open." Count the trees in the annulus between
+      // the camp's own clearing (r+4) and 34 beyond it, and compare the density there with the
+      // whole map's. A camp standing in a meadow scores about 1.0; a camp in a stand scores well
+      // over it. This is the check that "I planted a stand on it" has to survive.
+      {const lo=c.r+4, hi=c.r+34, wood=nodes.filter(n=>n.type==="wood");
+       let inRing=0;
+       for(const n of wood){const d=Math.hypot(c.x-n.x,c.z-n.z); if(d>=lo&&d<hi)inRing++;}
+       const ringArea=Math.PI*(hi*hi-lo*lo);
+       const mapArea=(MAP.x*2)*(MAP.z*2);
+       s.ringN=inRing;
+       s.woodX=+((inRing/ringArea)/(wood.length/mapArea)).toFixed(2);}
       // and you cannot build on it — asked of the real predicate, at the centre and at the rim
       s.buildCentre=validFor("house",c.x,c.z,0);
       s.buildRim=validFor("house",c.x+c.r+BLD.house.r+6,c.z,0);
@@ -146,6 +158,8 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
   for(const s of out.sites){
     console.log("      ("+s.x+", "+s.z+")");
     console.log("        no tree inside the clearing (needs > "+(s.r+4)+")   nearest "+s.tree+F(s.tree>=s.r+3.5));
+    console.log("        …but it IS in the woods: "+s.ringN+" trees in the ring, "+s.woodX+
+      "x the map's own density"+F(s.woodX>=1.5));
     console.log("        no undergrowth on the camp floor (needs > "+s.r+")   nearest "+s.fol+F(s.fol>=s.r-0.5));
     console.log("        walkable and level across the footprint            spread "+s.spread+F(s.walk&&s.spread<2.6));
     console.log("        the scenery is dressed at it                                "+(s.dressed?"yes":"NO")+F(s.dressed));

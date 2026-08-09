@@ -266,6 +266,15 @@ function dealDamage(att,victim,dmg){
   }
   victim._lastHurt=T; // Second Skin waits for quiet
   victim.hp-=dmg; hitFlash(victim);
+  // v132.10 THE PACK NOTICES. Camps aggro'd on an intruder's distance from the camp CENTRE and on
+  // nothing else, so anything with range could stand off and shoot them to death unopposed. Waking
+  // on damage is the rule that was missing, and it wakes the whole camp because st.wake is on the
+  // camp state. NOT for a tower (att.def): creeps have no attack against buildings, so that would
+  // set them charging something they can never hurt, for ever.
+  if(victim.bot&&victim.bot.camp&&att&&!att.def&&att.team!==undefined&&att.team!==NEUTRAL){
+    victim.bot.camp.wake=T+CAMP_WAKE;
+    victim.bot.camp.threat=att;
+  }
   // v100 SOUND — impact, keyed to the attacker: siege thud · arrow strike · melee clash.
   // (host/solo only — dealDamage returns early on guests; their impacts ride swings & deaths)
   if(typeof Sound!=="undefined"){

@@ -113,12 +113,19 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
     // Retuning a palette against a broken meter is how v130.4 shipped the value order inverted.
 
     // ---- 2. THE DRAPE --------------------------------------------------------------------------
-    let dWorst=0, dAt=null;
+    // v132.14 A VERTEX IS NOW AT LEAST 0.035 ABOVE groundY, NOT EXACTLY. It takes the max of the
+    // ground here and half a step either way along the tangent, so where the road crosses a crease
+    // the vertex rises to let its own chord clear the ridge. Under-clearing is still a defect;
+    // over-clearing is the fix, so the check is one-sided — and the LIFT is reported, because a
+    // lift that stopped being local would be a road floating off the ground.
+    let dWorst=0, dAt=null, dLift=0, dLiftAt=null;
     for(let i=0;i<V.P.count;i+=3){
       const x=V.P.getX(i), y=V.P.getY(i), z=V.P.getZ(i);
-      const e=Math.abs(y-groundY(x,z)-0.035);
-      if(e>dWorst){dWorst=e;dAt=[+x.toFixed(1),+z.toFixed(1)];}
+      const over=y-groundY(x,z);
+      if(0.035-over>dWorst){dWorst=0.035-over;dAt=[+x.toFixed(1),+z.toFixed(1)];}
+      if(over-0.035>dLift){dLift=over-0.035;dLiftAt=[+x.toFixed(1),+z.toFixed(1)];}
     }
+    dWorst=Math.max(0,dWorst);
 
     // ---- 2b. POKE-THROUGH: does the GROUND come up through the ribbon BETWEEN its vertices? -----
     // Every vertex sitting 0.035 above groundY says nothing about the surface in between. A ribbon
@@ -205,7 +212,7 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
     const baz=BAZAAR_SITES.filter(s=>s.team!==undefined).map(s=>{const p=s.p();
       return {what:s.what,off:+dV(p.x,p.z).toFixed(2)};});
 
-    return {pv,pk,pkV,pkK,dWorst,dAt,both,kingOver,worstGap:+worstGap.toFixed(3),gapAt,
+    return {pv,pk,pkV,pkK,dWorst,dAt,dLift:+dLift.toFixed(3),dLiftAt,both,kingOver,worstGap:+worstGap.toFixed(3),gapAt,
       wV:+wV.toFixed(1),wVat,wK:+wK.toFixed(1),fV:+fV.toFixed(2),fVat,fK:+fK.toFixed(2),fN,fSkip,
       bw,bk,tipD:+Math.hypot(tip.x-boss.x,tip.z-boss.z).toFixed(1),sandR:boss.r-1,baz,
       verts:V.P.count,tris:VK.geometry.index.count/3,K:V.K,
@@ -237,9 +244,11 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
     F(out.pv.spread>0.05));
   console.log("     (the cut-line question is a rendered-frame question — tools/vikingshot.js)");
 
-  console.log("\n  2. DRAPE — every vertex 0.035 above groundY (the DRAWN mesh, not the function)");
-  console.log("     worst error "+out.dWorst+(out.dAt?"  at ("+out.dAt[0]+", "+out.dAt[1]+")":"")+
+  console.log("\n  2. DRAPE — every vertex at LEAST 0.035 above groundY (the DRAWN mesh, not the function)");
+  console.log("     worst shortfall "+(+out.dWorst.toFixed(6))+(out.dAt?"  at ("+out.dAt[0]+", "+out.dAt[1]+")":"")+
     F(out.dWorst<0.002));
+  console.log("     biggest ridge lift "+out.dLift+(out.dLiftAt?"  at ("+out.dLiftAt[0]+", "+out.dLiftAt[1]+")":"")+
+    "   (local, and bounded by the crease it clears)"+F(out.dLift<0.16));
 
   console.log("\n  2b. POKE-THROUGH — clearance at TRIANGLE CENTROIDS, where a chord sags most");
   console.log(R("worst clearance",out.pkV.worst,out.pkK.worst));
@@ -282,7 +291,12 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
   console.log("\n  7. ENDS");
   console.log("     the tapered tip is "+out.tipD+" from the bay centre, sand reaches "+out.sandR+
     F(out.tipD<out.sandR));
-  for(const z of out.baz)console.log("     the "+z.what+" bazaar sits "+z.off+" off the path"+F(z.off<0.05));
+  // v132.11 THE BAZAARS STEPPED OFF THE ROAD ON PURPOSE. This asserted off < 0.05 — the bazaar
+  // sitting ON the spine — which is exactly what John reported as wrong ("all bazaars are directly
+  // on top of the roads"). What has to hold now is that the plaza clears the ribbon's own edge.
+  for(const z of out.baz)console.log("     the "+z.what+" bazaar stands "+z.off+" off the path — "+
+    (+(z.off-8.6-out.bw.hi).toFixed(2))+" of lawn between plaza and ribbon"+
+    F(z.off-8.6-out.bw.hi>2));
 
   console.log("\n  "+(bad?bad+" check(s) failed -> FAIL":"the Viking road is a road -> PASS")+"\n");
   await b.close(); srv.close(); process.exit(bad?1:0);

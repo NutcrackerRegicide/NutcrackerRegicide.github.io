@@ -763,6 +763,17 @@ const CAMP_AGGRO=11.5;  // (legacy fallback — per-camp aggro is set from the p
 const CREEP_N=5;        // creep bodies per camp (a 4-pack leaves the fifth dead) — fixed for net id order
 const CAMP_RESPAWN=180; // seconds from pack wipe to the next wave (runs even if the chest sits)
 const CAMP_CHEST=300;   // the treasure: 300 food (wolves) or 300 gold (barbarians)
+// v132.10 BEING HIT COUNTS. updateCreep measured an intruder's distance from the CAMP CENTRE, so a
+// shooter standing one aggro-radius out was invisible no matter how many stones it put into the pack — and
+// every ranged unit in the game outranges every camp's ring from a standing start (slinger 16 vs a
+// 13.5 interior ring; skirmisher 25 and cannon 30 vs a pocket's 23.5). John's screenshot: four
+// slingers on the rim, five wolves doing nothing.
+// The wake lives on the CAMP, not the creep, so one stone brings the whole pack.
+const CAMP_WAKE=9;        // seconds of anger after the last hit lands
+const CAMP_WAKE_REACH=22; // CAP on the woken scan. It extends to just past the actual attacker and
+                          // no further — a flat +22 would reach 35 from an interior camp's centre
+                          // and set the pack on carts using the Viking road 29.7 away.
+const CAMP_WAKE_CHASE=12; // …and the leash gives this much, or seeing him changes nothing
 // ---- the RAID BOSS shore (v79): the south-mid camp is a DOUBLE-size beachfront ----
 const BOSS_R=52;        // twice a (doubled) camp — a whole bay
 const BOSS_N=11;        // 1 Viking chieftain + 10 vikings, fixed body count for net id order
@@ -808,11 +819,24 @@ function inCampGround(x,z){ // is this spot on a camp pocket's ground?
 // 180-degree one TREE_STANDS uses. Both live in this world; they are not interchangeable. And the
 // pair was validated on BOTH halves because the terrain is noise and noise does not mirror — 1.45
 // against 1.46 is the measured result of asking rather than assuming.
-const CREEP_R_INNER=16;
+// v132.12 r 16 -> 11, John's "reduce by 30%". It is not only a footprint: 07-ai.js derives the
+// trampled disc (r-1.5 -> 9.5), the hard leash (r-1.2 -> 9.8) and the aggro ring (r-2.5 -> 8.5)
+// from it, and an 8.5 ring is why v132.10's wake-on-damage had to land first — a slinger's range is
+// 16, so without it the whole pack could be shot to death from outside its own awareness.
+const CREEP_R_INNER=11;
+// v132.12 AND THE LAYOUT WAS MIRRORED. John: "facing down kings road toward red base, there should
+// be TWO new camps on the RIGHT side of kings road and ONE on the left. right now it is the
+// opposite." Blue faces +x with +y up, so right = cross(forward,up) = +z — and the sketch says the
+// same thing independently, because its "up" is the VIKINGS and the bay is at z = -196: the lone
+// camp sits between the Viking arc and the King's Road (-z), the pair on the far side (+z).
+// Sited by tools/campsite.js against the v132.9 roads and the v132.11 bazaars:
+//                  to King's Rd   to Viking   ground spread
+//     (0, -72)        84.0           75.5       0.57        its own mirror
+//     (+-65, 77)      62.9          134.3       1.19 / 1.19 both halves measured, not assumed
 const CREEP_SITES=CAMPS.concat([
-  {x: 0,z: 55,r:CREEP_R_INNER,inner:true},   // north of the Grand Bazaar, on the centre line
-  {x: 79,z:-33,r:CREEP_R_INNER,inner:true},  // the wedge between the Kings Road and the red branch
-  {x:-79,z:-33,r:CREEP_R_INNER,inner:true},  // …and its mirror, on the blue side
+  {x: 0,z:-72,r:CREEP_R_INNER,inner:true},   // the lone camp, between the Kings Road and the arc
+  {x: 65,z: 77,r:CREEP_R_INNER,inner:true},  // the pair, on the far side of the Kings Road…
+  {x:-65,z: 77,r:CREEP_R_INNER,inner:true},  // …mirrored about x=0, so neither team owns one
 ]);
 // v83: the invisible wall sits at the MOUNTAINS, not the map line — a walkable apron
 // rings the whole field (the ground between the border and the peaks' feet), and the
@@ -976,17 +1000,53 @@ function roadPoint(t){
 // is inside the mouth and outside the boss's own ground. The bow is what stops it reading as a
 // ruler: it swings away from the King's Road on the way out.
 const VIKING_END={x:0,z:-150};
+// v132.9 THE BOW HAD THE WRONG SIGN AND THE COMMENT ABOVE IT WAS DESCRIBING WHAT IT MEANT TO DO.
+// A.z is 0 and B.z is -150, so the straight line runs NEGATIVE — and the z term added a POSITIVE
+// sin(t*PI)*18, pulling the road back UP towards z=0, which is where the King's Road is. Measured
+// on the shipped build, 18.7 / 20.0 / 25.8 units apart at t = 0.10 / 0.15 / 0.20.
+// TWENTY UNITS IS NOT THE PROBLEM BY ITSELF — the ribbons are only 5.9 and 3.2 of half-width. The
+// TREE CLEARANCE is: 21 for the King's Road plus 12 for this one is 33 against a 20-unit gap, so
+// the two cleared corridors merged into one bare avenue with a stripe of lawn up the middle. That
+// is John's "too close together": not the roads, the wood that was no longer between them.
+// -30 swings it AWAY, southward, as the comment always claimed; 0.55 gives +-14.3 of lateral swing
+// instead of +-9.1 on a 231-unit road. Separation becomes 27.6 / 34.9 / 54.0 against a 33 sum.
+// KEEP THE MIRRORING. z(team 0) === z(team 1) and x mirrors about 0, so neither branch is shorter
+// and the two team bazaars — which are DEFINED as vikingPoint(team, 0.42) and so move with this —
+// stay exactly as far from their own thrones as each other.
 function vikingPoint(team,t){
   const A=TCPOS[team], B=VIKING_END;
   const bow=Math.sin(t*Math.PI)*(team===0?-26:26);   // mirrored, so neither team's path is shorter
-  return {x:A[0]+(B.x-A[0])*t+bow*0.35,
-          z:A[1]+(B.z-A[1])*t+Math.sin(t*Math.PI)*18};
+  return {x:A[0]+(B.x-A[0])*t+bow*0.55,
+          z:A[1]+(B.z-A[1])*t-Math.sin(t*Math.PI)*30};
+}
+// v132.11 A MARKET BESIDE A ROAD, NOT ON IT. John: "grand bazaar should be to the right of kings
+// road while the other two bazaars should be to the left of vikings roads. right now all bazaars
+// are directly on top of the roads." The Grand had an offset of 3.2 against a plaza of 11.4 and a
+// ribbon reaching 5.86 of half-width, so the road ran 8.2 units inside its outer step; the team
+// bazaars had NO offset — they were the spine itself, with the track through the flagstones.
+//   Grand  11.4 + 5.86 + 6 of visible lawn = 23.3 -> 24
+//   team    8.6 + 3.22 + 6                 = 17.8 -> 18
+// WHICH SIDE IS NOT ARBITRARY. Blue faces +x down the King's Road, so right = cross(forward,up) =
+// +z, and the sketch agrees on both counts: the Grand Bazaar is drawn on the far side of the King's
+// Road from the Vikings (+z), and both team bazaars sit OUTSIDE the Viking arc (-z).
+// THE TEAM OFFSET RIDES THE SPINE'S OWN NORMAL, not z. The Viking road runs diagonally and its
+// bearing turns along its length, so a flat +-z offset would swing the plaza from beside the road
+// to in front of it. Take the across-track normal from a central difference and keep the one
+// pointing away from the King's Road — the same construction the ribbon uses for its cross-sections.
+function vikingOffset(team,t,off){
+  const e=0.004;
+  const a=vikingPoint(team,Math.max(0,t-e)), b=vikingPoint(team,Math.min(1,t+e));
+  let tx=b.x-a.x, tz=b.z-a.z; const tl=Math.hypot(tx,tz)||1; tx/=tl; tz/=tl;
+  let nx=-tz, nz=tx;
+  if(nz>0){nx=-nx; nz=-nz;}                       // away from the King's Road
+  const c=vikingPoint(team,t);
+  return {x:c.x+nx*off, z:c.z+nz*off};
 }
 // The three sites, and everything downstream reads THIS. `plaza` is the plinth's outer step, which
 // is what the terrain has to be level across and what the foliage has to keep off.
 const BAZAAR_SITES=[
-  {what:"grand", grand:true,  scale:1.32, plaza:11.4, p:()=>{const q=roadPoint(0.5);   return {x:q.x,z:q.z+3.2};}},
-  {what:"blue",  team:0,      scale:1.00, plaza:8.6,  p:()=>{const q=vikingPoint(0,0.42); return {x:q.x,z:q.z};}},
-  {what:"red",   team:1,      scale:1.00, plaza:8.6,  p:()=>{const q=vikingPoint(1,0.42); return {x:q.x,z:q.z};}},
+  {what:"grand", grand:true,  scale:1.32, plaza:11.4, p:()=>{const q=roadPoint(0.5); return {x:q.x,z:q.z+24};}},
+  {what:"blue",  team:0,      scale:1.00, plaza:8.6,  p:()=>vikingOffset(0,0.42,18)},
+  {what:"red",   team:1,      scale:1.00, plaza:8.6,  p:()=>vikingOffset(1,0.42,18)},
 ];
 function tradeGold(d){return Math.round(0.35*d+0.002*d*d);} // superlinear: risk pays a premium

@@ -32,7 +32,7 @@
               y and a steep site floats them.                                                      */
 const {chromium}=require("playwright-core");
 const http=require("http"),fs=require("fs"),path=require("path"),ROOT=path.join(__dirname,"..");
-const R=+(process.argv[2]||16);
+const R=+(process.argv[2]||11);
 const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg",png:"image/png"};
 (async()=>{
   const srv=http.createServer((q,r)=>{const p=path.join(ROOT,decodeURIComponent(q.url.split("?")[0]).replace(/^\//,"")||"index.html");
@@ -50,7 +50,15 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
     const DISC=R-1.5;                      // the trampled dirt decal, which is what must not overlap
     const KING_HW=5.9, VIK_HW=3.3;         // measured maxima, tools/vikingroad.js check 6
     const GRASS=6;                         // a strip of lawn you can see between the two surfaces
-    const KMIN=DISC+KING_HW+GRASS, VMIN=DISC+VIK_HW+GRASS;
+    // v132.11 THE BINDING CONSTRAINT IS NOT THE DIRT, IT IS THE TREE CLEARANCE. John: "more tucked
+    // into heavily wooded areas. for example this camp is pretty much just in the open." Keeping the
+    // decals apart (DISC + half-width + 6) is nothing: the ROAD clears trees to 21 and the CAMP
+    // clears them to r+4, so a camp any closer than the sum has its clearing WELDED to the road's
+    // and the pair render as one continuous bare avenue with the camp as a bulge in it. That is
+    // exactly the failure mode the Viking road's own bow was just fixed for (v132.9), one object
+    // over. +2 so a band of wood survives between them rather than the two merely touching.
+    const KMIN=Math.max(DISC+KING_HW+GRASS,TREE_CLEAR_ROAD+R+4+2);
+    const VMIN=Math.max(DISC+VIK_HW+GRASS,TREE_CLEAR_VIKING+R+4+2);
     const SPINE_K=[], SPINE_V=[];
     for(let i=0;i<=400;i++)SPINE_K.push(roadPoint(i/400));
     for(const t of [0,1])for(let i=0;i<=400;i++)SPINE_V.push(vikingPoint(t,i/400));
@@ -63,8 +71,17 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
       if(r.dK<KMIN||r.dV<VMIN)return {...r,why:"road"};
       // thrones: TREE_CLEAR_BASE is 52 and that is the yard a town builds out into
       for(const t of TCPOS)if(Math.hypot(x-t[0],z-t[1])<52+DISC)return {...r,why:"throne"};
+      // v132.11 John, playtesting: "i wish the camps closest to the bazaar were a little bit
+      // further away from the bazaar". It was plaza + DISC + 4 — 33.7 centre to centre, which put a
+      // barbarian camp in the same glance as a team's trade post. 30 of clear ground between the
+      // two surfaces instead of 4.
       for(const S of BAZAAR_SITES){const p=S.p();
-        if(Math.hypot(x-p.x,z-p.z)<S.plaza+DISC+4)return {...r,why:"bazaar"};}
+        if(Math.hypot(x-p.x,z-p.z)<S.plaza+DISC+30)return {...r,why:"bazaar"};}
+      // v132.11 …and off the resource clusters. John: "looks like a gold node is in the wolf camp".
+      // placeNodes drops the forward gold cluster at x in +-[70,90], z in [-54.5,-29.5] — which is
+      // precisely where the old flank camp sat. The nodes are hand-tuned and placed BEFORE anything
+      // camp-related in the seeded stream, so they are the fixed thing here and the camp moves.
+      for(const n of nodes)if(n.type!=="wood"&&Math.hypot(x-n.x,z-n.z)<DISC+10)return {...r,why:"node"};
       if(typeof PONDS!=="undefined")for(const p of PONDS)
         if(Math.hypot(x-p[0],z-p[1])<p[2]+2.4+DISC)return {...r,why:"pond"};
       // the six border pockets, plus a real gap so the wilds do not merge into one belt
@@ -82,6 +99,15 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
       if(bad)return {...r,why:"unwalkable"};
       r.spread=+(hi-lo).toFixed(2);
       if(r.spread>2.6)return {...r,why:"steep"};
+      // how wooded is it ALREADY? Informational: the chosen sites get a stand planted on them
+      // (that is what "tucked in" means — the woods are placed on purpose, not hoped for), but a
+      // site that is already in cover needs less help and reads better.
+      let dens=0;
+      if(typeof TREE_STANDS!=="undefined")for(const st2 of TREE_STANDS){
+        const dd=Math.hypot(x-st2.x,z-st2.z);
+        if(dd<st2.r)dens=Math.max(dens,1-Math.pow(dd/st2.r,3.2));
+      }
+      r.wood=+Math.min(1,dens*1.45+0.03).toFixed(2);
       r.ok=true; return r;
     };
 
@@ -115,7 +141,8 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
       for(let x=-210;x<=210;x+=7){
         const t=test(x,z);
         s+= t.ok?"#" : (t.why==="road"?"=" : t.why==="throne"?"T" : t.why==="bazaar"?"B" :
-                        t.why==="camp"?"c" : t.why==="pond"?"o" : t.why==="border"?"." : ",");
+                        t.why==="camp"?"c" : t.why==="pond"?"o" : t.why==="node"?"$" :
+                        t.why==="border"?"." : ",");
       }
       rows.push({z,s});
     }
@@ -134,14 +161,14 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
       }
       return best;
     };
-    const picks={axis:refine(0,56,10),flank:refine(78,-38,10)};
+    const picks={axis:refine(0,-60,22),flank:refine(86,70,22)};
     return {axis,flank,why,rows,picks,DISC,KMIN:+KMIN.toFixed(1),VMIN:+VMIN.toFixed(1),
       grand:BAZAAR_SITES.find(s=>s.grand).p()};
   },R);
 
   console.log("\n  A CAMP OF RADIUS "+R+" (its dirt disc is "+out.DISC+")");
   console.log("  needs "+out.KMIN+" from the King's Road spine and "+out.VMIN+" from a Viking spine.\n");
-  console.log("  WHERE IT FITS AT ALL   # fits · = road · T throne · B bazaar · c border camp · o pond · . border\n");
+  console.log("  WHERE IT FITS AT ALL   # fits · = road · T throne · B bazaar · c camp · o pond · $ node · . border\n");
   for(const r of out.rows)console.log("   "+String(r.z).padStart(5)+" |"+r.s);
   console.log("         |"+"-".repeat(61));
   console.log("          -210"+" ".repeat(24)+"0"+" ".repeat(25)+"210\n");
@@ -155,17 +182,24 @@ const MIME={html:"text/html",js:"text/javascript",css:"text/css",ogg:"audio/ogg"
     for(const c of s)console.log("   "+String(c.x).padStart(4)+"  "+String(c.z).padStart(6)+
       "   "+c.dK.toFixed(1).padStart(8)+"   "+c.dV.toFixed(1).padStart(9)+
       "   "+c.road.toFixed(1).padStart(7)+"   "+String(c.spread).padStart(7)+
+      "  w"+String(c.wood===undefined?"-":c.wood).padStart(5)+
       "   "+String(c.spreadM===undefined?"-":c.spreadM).padStart(6)+
       "   "+String(c.apart===undefined?"-":c.apart).padStart(5)+
       "   "+(c.dThrone?c.dThrone.join("/"):"-"));
     console.log("");
   };
   console.log("  the Grand Bazaar is at ("+out.grand.x.toFixed(0)+", "+out.grand.z.toFixed(0)+")\n");
-  show(out.axis.filter(c=>c.z>out.grand.z),"AXIS CAMP (x=0) — north of the Grand Bazaar, per the sketch",8);
-  show(out.axis.filter(c=>c.z<0),"AXIS CAMP (x=0) — south, for comparison",5);
-  show(out.flank.filter(c=>c.z<0&&c.apart>=110&&c.spreadWorst<1.9),
-    "FLANKING PAIR (+-x) — south, >=110 apart so they read as two camps, both halves level",12);
-  show(out.flank.filter(c=>c.z>0),"FLANKING PAIR (+-x) — north, for comparison",5);
+  // v132.11 THE SKETCH, RE-READ. Its "up" is the VIKINGS, which in world space is -z, so the lone
+  // camp between the Viking arc and the King's Road is at NEGATIVE z and the flanking pair is on the
+  // far side of the King's Road at POSITIVE z. John: "facing down kings road toward red base, there
+  // should be two new camps on the RIGHT side and one on the LEFT. right now it is the opposite."
+  // Blue stands at (-175,0) facing +x with +y up, so right = cross(forward,up) = +z. He is right:
+  // v132.7 shipped one camp at +z and the pair at -z, which is the mirror of the brief.
+  show(out.axis.filter(c=>c.z<0&&c.z>-110),"THE LONE CAMP (x=0, -z) — between the Kings Road and the Viking arc",10);
+  show(out.axis.filter(c=>c.z>out.grand.z),"AXIS at +z, for comparison (this is where v132.7 wrongly put it)",4);
+  show(out.flank.filter(c=>c.z>0&&c.apart>=110&&c.spreadWorst<1.9),
+    "THE FLANKING PAIR (+-x, +z) — the far side of the Kings Road, both halves level",12);
+  show(out.flank.filter(c=>c.z<0&&c.apart>=110),"pairs at -z, for comparison (v132.7 put them here)",4);
   console.log("  REFINED — 1-unit sweep around each anchor, ranked on the WORSE half of the pair");
   for(const k of ["axis","flank"]){
     const c=out.picks[k]; if(!c){console.log("    "+k+": nothing fits");continue;}

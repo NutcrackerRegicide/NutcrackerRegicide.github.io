@@ -206,15 +206,38 @@ check("neutral bazaars placed (3)",typeof neutralMarkets!=="undefined"&&neutralM
   const near=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z)<0.01;
   check("every bazaar stands where BAZAAR_SITES says it does",
     SITES.length===3&&SITES.every(Sq=>{const q=Sq.p();return neutralMarkets.some(m=>near(m,q));}));
+  // v132.11 BESIDE ITS ROAD, NOT ON IT. John: "grand bazaar should be to the right of kings road
+  // while the other two bazaars should be to the left of vikings roads. right now all bazaars are
+  // directly on top of the roads." What used to be here typed the offset — z + 3.2 for the Grand,
+  // nothing at all for the team pair — which is the same re-typed-constant trap as the roadZ() copy
+  // v132.6 took out of this file, and swapping 3.2 for 24 would only reload it. Assert the
+  // RELATIONSHIP: which road, how far off it, and which side. No literal offset appears.
   {
-    const g=SITES.find(Sq=>Sq.grand), p=global.__G.roadPoint(0.5);
-    check("the Grand Bazaar is the one on the Kings Road",
-      !!g&&near(g.p(),{x:p.x,z:p.z+3.2}));
-  }
-  {
-    const vk=SITES.filter(Sq=>Sq.team!==undefined);
-    check("each team bazaar sits on its own branch of the Viking road",
-      vk.length===2&&vk.every(Sq=>near(Sq.p(),global.__G.vikingPoint(Sq.team,0.42))));
+    const nearestOn=(fn)=>(b)=>{let bt=0,bd=1e9;
+      for(let i=0;i<=600;i++){const q=fn(i/600), d=Math.hypot(b.x-q.x,b.z-q.z);
+        if(d<bd){bd=d;bt=i/600;}}
+      return {t:bt,d:bd,q:fn(bt)};};
+    {
+      const g=SITES.find(Sq=>Sq.grand), b=g&&g.p();
+      const h=g&&nearestOn(t=>global.__G.roadPoint(t))(b);
+      check("the Grand Bazaar stands beside its road, at the middle of the Kings Road",
+        !!g&&Math.abs(h.t-0.5)<0.03);
+      check("…far enough off the spine that the ribbon misses the plaza",
+        !!g&&h.d>=g.plaza+6);
+      check("…and on the +z side — blue's right, facing red",
+        !!g&&b.z>h.q.z);
+    }
+    {
+      const vk=SITES.filter(Sq=>Sq.team!==undefined);
+      const at=vk.map(Sq=>{const b=Sq.p();
+        return {S:Sq,b,h:nearestOn(t=>global.__G.vikingPoint(Sq.team,t))(b)};});
+      check("each team bazaar stands beside its OWN branch of the Viking road",
+        vk.length===2&&at.every(a=>Math.abs(a.h.t-0.42)<0.03));
+      check("…far enough off the spine that the track misses the plaza",
+        at.every(a=>a.h.d>=a.S.plaza+4));
+      check("…and on the -z side — outside the arc, away from the Kings Road",
+        at.every(a=>a.b.z<a.h.q.z));
+    }
   }
   const dTo=(tc)=>neutralMarkets.map(m=>Math.hypot(m.x-tc[0],m.z-tc[1])).sort((a,b)=>a-b);
   const d0=dTo(TP[0]), d1=dTo(TP[1]);
@@ -2690,7 +2713,7 @@ global.__G.setGameOver(false);
     // v132.0 26 -> 27 with the map rework: MAP.x/MAP.z moved, so every node moved, and the netcode
   // indexes nodes positionally. The assertion is that the number MOVED WITH THE WORLD, which is the
   // thing a peer actually needs — a stale literal here is how two builds shake hands and disagree.
-  check("v132 wire: PROTO is 29 — the envelope delta OMITS fields, which an older peer misreads",NET.PROTO===29);
+  check("v132 wire: PROTO is 30 — the envelope delta OMITS fields, which an older peer misreads",NET.PROTO===30);
     // the version stamp is READ from the page, not frozen in the recorder. Every log John
     // field-tested on v125.1 said ver:"v98", because that literal was written in v98 and never
     // touched again — a flight recorder you have to take somebody's word about.
@@ -3094,8 +3117,8 @@ global.__G.setGameOver(false);
   const w=G.NET.packWorld(1);
   let snapAres=null;
   try{G.NET._lastRow=null;const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
-  check("v115/v132 net: PROTO 29 (the envelope delta omits fields) and `ares` still rides both payloads",
-    G.NET.PROTO===29&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
+  check("v115/v132 net: PROTO 30 (the envelope delta omits fields) and `ares` still rides both payloads",
+    G.NET.PROTO===30&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
     Array.isArray(snapAres)&&Math.abs(snapAres[0]-42.5)<0.06);
   G.ageResT[0]=0;
 

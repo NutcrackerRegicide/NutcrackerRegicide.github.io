@@ -1330,6 +1330,22 @@ const TREE_STANDS=[];
   // three stands sit deliberately ON the v113 flanking lanes (07-ai's LANE_Z = 0, ±46, ±88 — keep
   // these in step if those move), so a band that swings wide moves through real cover
   stand(64,46,30); stand(120,88,26); stand(18,-88,29);
+  // v132.12 THE CAMP THICKETS. John: "more tucked into heavily wooded areas. for example this camp
+  // is pretty much just in the open." Siting a camp INTO existing forest cannot work — the 14 wild
+  // stands below are rejection-sampled against clearOf(), which tests the camps, so moving a camp
+  // reshuffles the forest you sited into. And the hand stands above mirror through map CENTRE,
+  // (x,z)->(-x,-z), so no x-mirrored pair of camps can sit in them on both sides. So the wood is
+  // PLACED, and the camp's own r+4 clearance punches the hollow out of the middle: dense from 15 to
+  // ~24, gone by 30, around a 9.5 trampled disc.
+  // TWO CALLS FOR THE PAIR, AND THAT IS THE TRICK: stand() pushes (x,z) and (-x,-z), so (65,77) and
+  // (65,-77) together yield all four of (+-65,+-77) — a set closed under the trees' 180-degree
+  // convention AND under the roads' x-mirror one. Neither convention is bent and both camps of the
+  // pair get identical cover.
+  stand(0,-72,30);                      // the lone camp (its mirror lands at (0, 72), also useful)
+  stand(65,77,30); stand(65,-77,30);    // -> (+-65, +-77): the pair, both halves
+  // THE CAP BELOW STAYS AT 24. Six of the wild stands become camp thickets; stand COUNT is what
+  // sets meadow gap size at fixed coverage (v132.0 measured that the hard way), so holding the
+  // count holds the meadows.
   // ...and the rest of the wild wood wherever it fits, no two stands sitting on top of each other
   let guard=0;
   // v132.0 FEWER STANDS ON A BIGGER MAP, WHICH IS THE OPPOSITE OF THE OBVIOUS MOVE.
@@ -1887,6 +1903,9 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
   // that term was aliasing rather than nibbling the edge. kingsRoad's own note records falling into
   // exactly this at SUB=4; I copied its 6 without re-deriving it for a different wander.
   const N=40, SUB=10, M=N*SUB, TILE=11.5, HW0=2.55;
+  // half a cross-section step: 241 units over M=400 is 0.58 apart, so 0.34 brackets the gap a chord
+  // has to span. See the drape note at the vertex push below.
+  const _VHS=0.34;
   const _ss=(a,b,v)=>{const t=Math.max(0,Math.min(1,(v-a)/(b-a)));return t*t*(3-2*t);};
 
   // Authored as sRGB bytes AS THEY SHOULD COME OFF THE COMPOSER on sunlit ground, then divided
@@ -1974,7 +1993,18 @@ const RIDGE_GAPS=[]; let RIDGE_FAR_MESH=null;
         const px=c.x+nx*s*ww, pz=c.z+nz*s*ww;
         // +0.035, UNDER the King's Road's +0.06 — see the junction note in the patch header. The
         // beach at +0.05 is over both, which is why the far end needs no seam work.
-        pos.push(px,groundY(px,pz)+0.035,pz);
+        // v132.14 …AND THE CHORD BETWEEN TWO VERTICES HAS TO CLEAR THE RIDGE BETWEEN THEM. Every
+        // vertex sits exactly 0.035 above groundY and always did; the sag is in the SEGMENT. Where
+        // the road crosses the rim of a bazaar's terrain flat — a crease, and groundY's own header
+        // warns the drawn mesh rides up to 0.12 above the function across one — the chord had 0.0004
+        // of clearance left. Take the max of groundY here and half a cross-section step forward and
+        // back along the tangent: identical on flat ground, and over a ridge the ends rise to meet
+        // it so the chord clears by construction. Local and bounded by the crease, where lifting the
+        // constant would pay everywhere (and cannot go far: the beach sits at 0.05).
+        const gy=Math.max(groundY(px,pz),
+                          groundY(px+tx*_VHS,pz+tz*_VHS),
+                          groundY(px-tx*_VHS,pz-tz*_VHS));
+        pos.push(px,gy+0.035,pz);
         uv.push(0.5+s*0.5, arc/TILE);           // u edge-locked across, v on arc length
       }
     }
