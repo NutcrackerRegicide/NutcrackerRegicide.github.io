@@ -1187,6 +1187,182 @@ function helmGallic(R,tc,A,o){
 // bottom edge stops 0.06 H above the chin and THE CARVED BEARD HANGS OUT BENEATH IT. The unit
 // loses its eyes and its mouth and keeps its beard, which is the larger silhouette carrier of the
 // two, and the reference art's Norse figure does exactly this under a mail coif.
+// v131.26 THE SEVENTH SHAPE — THE HOUNDSKULL BASCINET, and it exists because John ruled it in:
+// "knight mask is clipping and knight should have full closed face helmet", then chose "give the
+// knight his own seventh shape" over reusing one of the six or leaving it open-faced.
+//
+// WHAT WAS THERE WAS NOT A HELMET SHAPE AT ALL. The knight wore a hand-rolled sphere (r 0.52,
+// scaled 0.95/1.15/0.95) with a flat box stuck on the front as a visor -- and that box is 0.74
+// wide while the dome, at the visor's own depth of z 0.40, is only 2*sqrt(0.494^2 - 0.40^2) =
+// 0.58 across. The visor's corners punched 0.08 out through the skull on each side. That is the
+// clipping, and it was geometric rather than a z-fight: there was nothing to bring into line.
+//
+// WHY A SNOUT. §6.5a's whole argument is that ages must differ in SHAPE, and §H A1b measures it as
+// silhouette IoU between pairs. The six existing shapes are all variations on "roundish mass above
+// the beard": hide dome, tusk cone (points UP), Negau bell (wide-footed), Gallic (neck flare),
+// great helm (tall flat bucket), shako (flared cylinder). NONE of them projects FORWARD. A
+// houndskull's snout does, which buys separation in the side view that no amount of re-proportioning
+// the seventh roundish blob could -- and it is the correct period answer for a Medieval knight,
+// which is the age the great helm already owns from the other end.
+//
+// SIXTEEN SEGMENTS AND A 0.59 CIRCUMRADIUS, matched to the skull's own count and phase, for the
+// reason helmGreatHelm records in detail: the head is a 16-gon of circumradius 0.5515, and a lathe
+// with fewer sides lets the head's vertices punch out between the helm's flats. This is that fix
+// applied on the way in rather than after a render.
+function helmHoundskull(R,tc,A,o){
+  o=o||{};
+  const M=texturedMat("metal",A?A.metal:0xc2c9d4), D=plainMat(0x0c0c10);
+  // >>> v131.27 THE HEAD FRAME, NOT THE HAT FRAME. <<<
+  // The first cut added every part to R.hat, and R.hat is headHatCarrier's group — scaled
+  // (NC_HATSC, NC_HEADH/1.15, NC_HATSC) = (1, 0.826, 1) so that the thirty LEGACY hats in this file,
+  // every one of them hand-fitted to the old 1.15-tall egg, still land on the new lathe head.
+  // Feeding NEW head-frame constants (NC_HATY) into that frame silently multiplies every y by 0.826,
+  // and a non-uniform parent scale also SHEARS anything rotated, which the snout is on two axes.
+  // helmGreatHelm adds to R.head for exactly this reason; so does this. Head-local y: 0 = chin,
+  // NC_HEADH 0.95 = crown, lathe circumradius NC_HEADRC 0.5515.
+  //
+  // >>> A SPHERE CANNOT COVER THIS HEAD, AND THE OCCLUSION CENSUS IS WHAT PROVED IT. <<<
+  // The dome was an ellipsoid, r 0.60 stretched 1.02 and centred at 0.50, and by every bounding-box
+  // measure it enclosed the skull: it spanned -0.11 to 1.11 against a head of 0 to 0.95, with 0.037
+  // of radial clearance at the equator. tools/knighthelm.js fired 812 rays inward anyway and 156 of
+  // them reached bare wood — every single one at head-local y 0.89, none anywhere else.
+  // The cause is that the head is NOT a sphere. Its lathe holds FULL radius from y 0.19 to 0.78 and
+  // then domes over hard (profile r 1.00 -> 0.90 -> 0.55 -> 0 across the last 0.17 of height), and
+  // an ellipsoid wide enough to clear the straight flank is already collapsing at the crown: at
+  // y 0.89 it gives 0.462 against the head's own 0.461. Coincident surfaces, and the coarse 9-band
+  // sphere tessellation then cut inside on every facet. No amount of re-centring fixes it — widen
+  // the ellipsoid until the crown clears and the equator becomes a barrel.
+  // SO THE HELM IS A LATHE THAT FOLLOWS THE HEAD'S OWN PROFILE, offset outward. Same 16 segments,
+  // same pi/16 phase, so vertices align and the clearance is the plain radial difference rather
+  // than something that swings between +0.009 and -0.010 (helmGreatHelm's v131.2 note). Clearance
+  // is 0.049 at the flank, 0.040 at the shoulder of the crown — the great helm ships at 0.0385 —
+  // and opens to 0.25 over the dome. Authored against NC_HEADRC/NC_HEADH so it tracks the head if
+  // either constant ever moves.
+  // 1.20 ACROSS AND NOT MORE. §H A1b scored the great helm against the Negau bell at 0.802 when the
+  // bucket grew to 1.25, "because two blocks of the same width are one block". The great helm is
+  // 1.157; this is 1.20; the separation between them is the SNOUT, not the girth.
+  // The rim stops at y 0.195 rather than swallowing the jaw: the beard is a lathe on R.head raked
+  // forward and down (§6.3c) and it already covers everything below — the census records 573 first
+  // hits on the beard and zero on the skull under the crown.
+  const RC=NC_HEADRC, HH=NC_HEADH;
+  const hp2=(r,y)=>new THREE.Vector2(RC*r,HH*y);
+  // A BELLY, NOT A CYLINDER. The first cut ran the flank dead vertical at r 0.600 from y 0.105 to
+  // 0.620 and rendered as a barrel — which is the GREAT HELM's shape, and §H A1b fails a pair that
+  // reads the same. Widest at y 0.42 and drawing in above and below costs nothing and keeps every
+  // clearance at or above the 0.0385 the great helm has shipped on since v131.2.
+  const domeGeo=new THREE.LatheGeometry([
+    hp2(1.061,0.053),                                       // r 0.585 y 0.050 — the rim, open at the neck
+    hp2(1.115,0.079), hp2(1.061,0.111),                     // its lip, standing 0.03 proud
+    hp2(1.088,0.442),                                       // the belly, 0.049 off the head
+    hp2(1.066,0.874), hp2(0.988,1.005),                     // the shoulder — 0.038 clear at its tightest
+    hp2(0.780,1.132), hp2(0.435,1.205), hp2(0,1.232)        // …and over the crown, 0.22 above it
+  ],NC_HEADSEG);
+  domeGeo.rotateY(Math.PI/NC_HEADSEG);                      // phase-locked to headGeo's own rotation
+  const sk=_noSh(new THREE.Mesh(domeGeo,M)); sk.name="helm.dome"; R.head.add(sk);
+  // AND THE FACE GEOMETRY COMES OFF, exactly as helmGreatHelm does it — this was simply omitted.
+  // The moustache bar stands at z 0.47 with 0.26 of depth, so its front face is at 0.60 against
+  // 0.588 of dome at that height, and its two curled tips at x +-0.36 sit at z 0.55 where the dome
+  // has only 0.424 to give. The first render showed them as a bare tan band straight across the
+  // face under the brow band — not a clipping artefact but a moustache worn OUTSIDE a closed helm.
+  // Cheeks, eyes, brows and teeth are paint on the skull and the solid hides them; these three
+  // boxes were the only face geometry. Removed before mergeUnitBody() runs, so nothing is orphaned.
+  if(R.face)for(const p of R.face)if(p.parent)p.parent.remove(p);
+  // THE AVENTAIL, AND IT IS A REAR HALF-SKIRT FOR A REASON. With the rim closed at y 0.050 the
+  // census still found 64 rays reaching wood — every one of them from BELOW AND BEHIND, entering
+  // under the rim and landing on the nape at y 0.08-0.12, z negative. A beard covers the throat and
+  // the jaw; nothing covers the back of the neck, which is the exact hole a real bascinet hangs
+  // mail over. A full skirt would land inside the beard and stripe it (see the note below), so this
+  // one opens 63 degrees at the FRONT — theta 0 is +z in r128's cylinder — and wraps everything
+  // else.
+  // IT HUGS AND IT IS LONG, rather than short and flared. A short skirt at r 0.66 left one ray in
+  // 812 still threading the annulus between its bottom edge and the cuirass — and the fix for that
+  // is not a wider flare, which at 1.36 across against a 1.20 helm stops reading as mail and starts
+  // reading as a ruff, and fouls the pauldrons at x 0.27 on the way. 0.600 to 0.625 over 0.52 of
+  // drop takes the hem to head-local -0.46, inside the cuirass (r 0.56-0.60), and closes the angle
+  // completely: a ray shallow enough to get under the hem now has to climb 0.49 in 0.44 of run to
+  // find any skull at all, and there is none below the chin pole to find.
+  const av=_noSh(new THREE.Mesh(new THREE.CylinderGeometry(0.600,0.625,0.52,NC_HEADSEG,1,true,0.55,Math.PI*2-1.10),M));
+  av.position.y=-0.20; av.name="helm.aventail"; R.head.add(av);
+  // NO GORGET, AND THAT IS DELIBERATE. The beard is a lathe on R.head raked forward and down
+  // (§6.3c) and it is the nutcracker signature the great helm keeps too; a metal collar at the
+  // throat lands inside it and slices it into stripes, which is the identical failure the
+  // broadsword's lamellar plates caused at z 0.556 and which §6.3c's rake exists to prevent. The
+  // helm sits ON the beard.
+  // >>> THE VISOR, AND IT HAS TO BE THE SIZE OF A FACE. <<<
+  // The first cut made it a 0.34-radius pyramid — a muzzle narrower than the skull, which is what a
+  // real one is — and rendered, it was a thumbnail-sized wart on the front of a plain bucket. From
+  // the side, the shape that is supposed to be the ENTIRE argument for a seventh helmet read as
+  // 0.30 of grey wedge on a 1.20 barrel, i.e. as the great helm with a chip on it. A houndskull's
+  // visor is not an accessory: it is a beak that covers the whole face, hinged at the temples, from
+  // the brow down past the chin.
+  // A CONE'S BASE MUST NOT BE BURIED, WHICH IS WHY THE FIRST TWO TRIES BOTH CAME OUT AS A WART.
+  // The base sat at z 0.07 and the helm's surface is at z 0.60, so the helm cut the pyramid 63% of
+  // the way to its own apex — and what emerged was whatever was left of a linear taper at that
+  // point: 0.19 of radius over 0.32 of run. Widening the base does not help, because a base wide
+  // enough to matter (0.75) puts its corners at radius 0.75 against a 0.60 helm and grows wings.
+  // The lever is the RUN. Push the apex out to z 1.12 and the helm now cuts at 53% instead of 63%,
+  // so 0.27 of radius over 0.52 of run emerges — 0.55 across and 0.43 of a helm-width long, which
+  // is a beak. Base radius 0.58 keeps its corners at 0.581 against a 0.600 lathe, inside by 0.019.
+  // NO rotation.y, AND THAT IS THE THIRD THING THAT WAS WRONG WITH THIS SHAPE. r128 lays a cylinder
+  // or cone's first radial vertex on +z and steps round from there, so a 4-gon base ALREADY has its
+  // corners on the axes; the pi/4 inherited from the great helm's phase-matching then rotated them
+  // OFF the axes onto the diagonals, and the visor ran on its apothem — 0.410 where the geometry
+  // says 0.58, a 29% loss in both width and height. Two rounds of "make it bigger" were spent
+  // fighting a rotation.
+  // A 0.07 FLAT AT THE TIP RATHER THAN A POINT: a houndskull is blunt, and a needle apex on a
+  // low-poly figure is one triangle wide at 40px and aliases into a spark.
+  const vis=_noSh(new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.58,1.10,4),M));
+  vis.rotation.x=Math.PI/2+0.10;
+  vis.position.set(0,0.425,0.573); vis.name="helm.visor"; R.head.add(vis);
+  // THE VISOR'S FOUR CORNERS, in head-local space, read off that cone: the apex forward, the two
+  // hinge corners at the temples, a crown corner buried in the dome and a chin corner buried in the
+  // aventail. Everything else on the face is placed BARYCENTRICALLY on these, so the slots and the
+  // breaths travel with the visor instead of being stranded the next time it is re-proportioned —
+  // which has now happened twice.
+  const VA=new THREE.Vector3(0,0.370,1.120), VR=new THREE.Vector3(0.58,0.480,0.025),
+        VT=new THREE.Vector3(0,1.057,0.083), VB=new THREE.Vector3(0,-0.097,-0.033);
+  const _on=(Q,a,b)=>VA.clone().addScaledVector(VR.clone().sub(VA),a).addScaledVector(Q.clone().sub(VA),b);
+  const _out=(Q)=>{const n=VR.clone().sub(VA).cross(Q.clone().sub(VA)).normalize();
+                   return n.x<0?n.negate():n;};                     // outward = away from the ridge
+  // >>> ONLY THE TIP OF THE VISOR IS ACTUALLY OUTSIDE THE HELM, AND THAT BOUNDS WHERE ANYTHING
+  // CAN GO ON IT. <<< Both hinge corners are buried — VR sits at radius 0.581 and VT at 0.083,
+  // against a lathe of 0.600 — so the emergent beak is a small triangle near the apex, running to
+  // a ~0.56 along the VA->VR edge and b ~0.50 along VA->VT. The first placement put the slots at
+  // (0.34, 0.30), radius 0.479, which is 0.12 INSIDE the dome: three renders in a row showed a helm
+  // with no eyes at all and nothing wrong with the slot geometry. Everything below is chosen to
+  // land near the centroid of the EMERGENT triangle and its radius is stated so the next edit can
+  // check it against the lathe rather than rediscovering this.
+  // THE OCULARIUM: one slot each side of the ridge, on the visor's upper faces where a houndskull's
+  // actually are. §6.5a's entire tell for a closed helm is that you can still see WHERE the eyes
+  // are, and helmGreatHelm records at length what happens when one is covered — "two black
+  // rectangles at the far edges of a blue ring, reading as studs". Radius 0.665 against a 0.600
+  // lathe. The long axis is yawed 1.085 to lie along the VA->VR edge, which is the direction the
+  // beak's own facet runs; a box is symmetric under a half-turn so the same magnitude mirrors.
+  {const p=_on(VT,0.24,0.20).addScaledVector(_out(VT),0.030);
+   for(const sx of [-1,1]){
+     const sl=_noSh(box(0.26,0.075,0.10,D));
+     sl.position.set(sx*p.x,p.y,p.z); sl.rotation.y=sx*1.085; sl.rotation.z=sx*0.09;
+     sl.name="helm.slit"; R.head.add(sl);
+   }}
+  // breaths: the pierced holes down the visor's lower RIGHT face only, which is how they were
+  // actually cut — the left is the side a couched lance crosses and was left solid. Radii 0.79,
+  // 0.70 and 0.605, so the last one clears the lathe by 0.005 and the row stops there.
+  {const n=_out(VB);
+   for(let i=0;i<3;i++){
+     const p=_on(VB,0.18+i*0.05,0.12+i*0.04).addScaledVector(n,0.020);
+     const br=_noSh(box(0.055,0.055,0.055,D));
+     br.position.copy(p); br.name="helm.breath"; R.head.add(br);
+   }}
+  // the team band round the brow, ABOVE the slits — §2.5 wants the colour where the eye already is
+  const bd=_noSh(cyl(0.615,0.635,0.10,tc,16));
+  bd.position.y=0.76; bd.name="helm.band"; R.head.add(bd);
+  // the comb: the only thing shared with the great helm, which is why it is thin and gold. Sunk at
+  // the front (the lathe's crown is 1.033 at the comb's z 0.47 end, the comb's underside 0.97) and
+  // 0.07 proud over the middle, and it stops at z -0.05 because the knight's plume base seats at
+  // head-local 1.173 / z -0.08 and a crest through a plume socket is two gold things fighting.
+  const comb=_noSh(box(0.07,0.26,0.52,plainMat(0xd9a92e)));
+  comb.position.set(0,1.10,0.21); comb.name="helm.comb"; R.head.add(comb);
+}
 function helmGreatHelm(R,tc,A,o){
   o=o||{};
   // 1.78 TALL AND 1.12 ACROSS, AND THE HEIGHT IS NOT INDULGENCE. It reads as an enormous hat and
@@ -4392,11 +4568,11 @@ function _buildBodyRaw(u){
         const sp=new THREE.Mesh(new THREE.BoxGeometry(0.46-i*0.07,0.09,0.56-i*0.07),i===0?plainMat(0xd9a92e):texturedMat("metal",0xc2c9d4));
         sp.position.set(sx*(1+i*0.08),1.1-i*0.09,0); sp.castShadow=false; R.torso.add(sp);
       }
-      const gh=noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.52,9,7),texturedMat("metal",0xc2c9d4)));
-      gh.position.y=0.75; gh.scale.set(0.95,1.15,0.95); R.hat.add(gh); // rounded great bascinet
-      const visor=noShadow(box(0.74,0.4,0.22,0xaeb6c0)); visor.position.set(0,0.78,0.4); R.hat.add(visor);
-      const slitK=noShadow(box(0.56,0.06,0.06,0x0c0c10)); slitK.position.set(0,0.88,0.52); R.hat.add(slitK);
-      const browG=noShadow(box(0.78,0.09,0.14,0xd9a92e)); browG.position.set(0,1.04,0.38); R.hat.add(browG);
+      // v131.26 the SEVENTH shape (§6.5a as amended): a closed houndskull bascinet. What was here
+      // was a sphere with a 0.74-wide box on the front, and the dome is only 0.58 across at that
+      // box's depth — the visor's corners came through the skull by 0.08 a side, which is John's
+      // "knight mask is clipping". Closed-faced, per his ruling.
+      helmHoundskull(R,tc,AGEPAL[4],{});
       const plumeBase=noShadow(cyl(0.1,0.12,0.12,0xd9a92e,6)); plumeBase.position.set(0,1.42,-0.08); R.hat.add(plumeBase);
       for(let i=0;i<3;i++){const pl=noShadow(cone(0.085,0.66-Math.abs(i-1)*0.12,i===1?0xcfc6ae:tc,5));
         pl.position.set((i-1)*0.13,1.72,-0.14-Math.abs(i-1)*0.04); pl.rotation.x=-0.38; R.hat.add(pl);} // gathered plumes, swept back

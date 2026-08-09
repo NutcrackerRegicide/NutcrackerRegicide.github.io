@@ -683,6 +683,14 @@ function moveUnit(u,dx,dz,dt){
       continue;
     }
     if(b.def.gate&&b.team===u.team)continue; // your own gates stand open for you
+    // v131.24 A BODY ON THE WALKWAY IS ABOVE THIS WALL, NOT INSIDE IT. The wall's box is thin
+    // (hw 1.30) and the ramp lies entirely outside it, so the climb was always unobstructed -- what
+    // blocked the walk ALONG the terreplein was this box, at deck height, where there is nothing.
+    // Player only, per the owner's scoping, so bots keep colliding with walls exactly as before.
+    if(b.def.wall&&u.isPlayer&&typeof wallFloorAt==="function"){
+      const wf=wallFloorAt(nx,nz);
+      if(wf!==null&&u.root.position.y>wf-1.2)continue;   // standing on it, or stepping onto it
+    }
     if(b.def.wall){ // walls are LONG: oriented-box collision, not a circle
       const rot=b.rot||0,c=Math.cos(rot),sn=Math.sin(rot);
       const dx0=nx-b.x,dz0=nz-b.z;

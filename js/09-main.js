@@ -331,7 +331,12 @@ function updateUnitCommon(u,dt){
   }
   if(u.swing>0)u.swing-=dt;
   if(u.attackAnimT>0)u.attackAnimT-=dt;
-  if(!u.garrison)u.root.position.y=terrainHeight(u.root.position.x,u.root.position.z); // hug the hills
+  if(!u.garrison){
+    // v131.24 …unless the player is on a wall walkway, which is a floor the terrain knows nothing
+    // about. Same exemption shape the garrison already uses, and player-only by the owner's scoping.
+    const _wf=(u.isPlayer&&typeof wallFloorAt==="function")?wallFloorAt(u.root.position.x,u.root.position.z):null;
+    u.root.position.y=(_wf!==null)?_wf:terrainHeight(u.root.position.x,u.root.position.z); // hug the hills
+  }
   if(u.bar&&!u.isPlayer){ // bars earn their place: only the wounded show one
     const show=u.alive&&u.hp<u.maxHp-0.5;
     u.bar.bg.visible=u.bar.fg.visible=show;

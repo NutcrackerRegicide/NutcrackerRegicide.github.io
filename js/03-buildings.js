@@ -394,6 +394,46 @@ const BSCALE={storage_pit:0.95,farm:0.6375,watch_tower:0.75};
 // one. Read the same numbers `buildingMesh` uses; the smoketest's 6 < y < 14 window covers all six.
 function watchTowerH(age){return age>=5?9.2:(age===4?15.5:14);}
 function watchDeck(age,bs){return {y:(watchTowerH(age|0)+0.25)*(bs||1),r:2.5};}
+// v131.24 THE WALL WALKWAY. John: "add ramps and make tops of walls walkable surface so people can
+// shoot from the top", scoped by him to the PLAYER only -- no AI pathing onto walls, no attackers
+// taking one. So this is a floor query and nothing else: no navmesh, no waypoints, no new unit
+// state beyond the one field 09-main.js already keys terrain-hugging off.
+//
+// ONLY THE AGE-5 CURTAIN, and that is measured, not chosen (tools/wallspec.js, every age):
+//   the Classical wall's walkway is 0.80 wide -- narrower than a 1.30 body, so nothing can stand
+//   on it; the Medieval gate has NO deck at all, so a curtain run there breaks at every gate;
+//   the Enlightenment rampart is 4.40 wide with its top at 4.00, because AGES §F.6 makes it squat
+//   and thick "to survive artillery rather than to loom". The history and the gameplay agree.
+//
+// The numbers below are the model's own, from the age>=5 branch of the wall builder:
+//   terreplein  box(12.5,0.6,4.4) at (0,3.7,-1.2)  -> top 4.00, x +/-6.25, z -3.40..1.00
+//   ramp        rise 4.00 over run 8.00 at z -5.40..-3.40, from x -6.00 (ground) to x +2.00 (deck)
+// Returns the world Y of the walkable surface at (x,z), or null for "there is no floor here".
+const WALL_DECK_Y=4.0, WALL_DECK_HX=6.25, WALL_DECK_Z0=-3.4, WALL_DECK_Z1=1.0;
+// The ramp band OVERLAPS the deck by 0.6 in z and its top 0.8 in x is FLAT, both deliberately.
+// Measured on the first cut: the player climbed to +3.99 and then one more pace put him at +0.59,
+// a four-unit drop off a knife edge, because the ramp ended exactly where the deck began and the
+// two only touched along a line. A landing is what a real ramp has; this is the cheapest version
+// of one -- clamp the rise at the top of the run, and let the two surfaces share a strip.
+const WALL_RAMP_Z0=-5.4, WALL_RAMP_Z1=-2.8, WALL_RAMP_X0=-6.0, WALL_RAMP_RUN=8.0, WALL_RAMP_FLAT=0.8;
+function wallFloorAt(x,z){
+  if(typeof buildings==="undefined")return null;
+  for(const b of buildings){
+    if(!b.alive||!b.built||!b.def.wall)continue;
+    const a=Math.max((b.def.age||0),
+      Math.min(5,(typeof teamAge!=="undefined"&&teamAge[b.team])||0));
+    if(a<5)continue;                                  // only the star-fort curtain carries a deck
+    const rot=b.rot||0,c=Math.cos(rot),sn=Math.sin(rot);
+    const dx=x-b.x,dz=z-b.z;
+    const lx=dx*c-dz*sn, lz=dx*sn+dz*c;
+    if(Math.abs(lx)<=WALL_DECK_HX&&lz>=WALL_DECK_Z0&&lz<=WALL_DECK_Z1)
+      return b.root.position.y+WALL_DECK_Y;
+    if(lz>=WALL_RAMP_Z0&&lz<=WALL_RAMP_Z1&&lx>=WALL_RAMP_X0&&lx<=WALL_RAMP_X0+WALL_RAMP_RUN)
+      return b.root.position.y+WALL_DECK_Y*
+        Math.min(1,(lx-WALL_RAMP_X0)/(WALL_RAMP_RUN-WALL_RAMP_FLAT));   // flat landing at the top
+  }
+  return null;
+}
 // v131.3 THE GARRISON SKIN. Hides the cap of the tower THIS client's player is standing in and
 // restores the last one it touched. Purely render state — no simulation reads it — so a guest and
 // the host may disagree about it for ever without desyncing; applyLOD already uses .visible as
@@ -2263,6 +2303,34 @@ function buildingMesh(type,team,age,hx,hz){
       const glac=box(12.5,1.4,5.0,0x7f8a4e); glac.rotation.x=0.22; glac.castShadow=false;
       glac.position.set(0,0.5,3.9); g.add(glac);                     // the sloped glacis
       const ban=box(1.1,1.5,0.1,tc); ban.castShadow=false; ban.position.set(0,4.0,1.9); g.add(ban);
+      // v131.18 THE RAMP UP TO THE TERREPLEIN. John: "back of enlightenment fortified walls can you
+      // add ramps and make tops of walls walkable surface so people can shoot from the top."
+      //
+      // The terreplein is already a real walkway and always was — `terre` above is 12.5 x 4.4 with
+      // its top at 3.7+0.3 = 4.00, and 4.4 of standable width against a 1.30 body. What it never
+      // had was a way up. Measured across all six ages (tools/wallspec.js), this is the ONLY age
+      // where that is true: the Classical wall's walkway is 0.80 wide — narrower than a body — and
+      // the Medieval gate has no deck at all, so a curtain run there would break at every gate.
+      // §F.6's own logic is why: the star-fort curtain is squat and thick "to survive artillery
+      // rather than to loom", so it is 4.6 tall where the Medieval wall is 9.4, and wide enough to
+      // work guns on. The history and the gameplay want the same shape.
+      //
+      // ALONG THE INNER FACE, NOT OUT THE BACK. A perpendicular ramp needs an 8.0 run behind the
+      // wall and every segment of a curtain would grow a tail into its own courtyard. Run it in x
+      // instead and it lives inside the segment's own 12.5 length. Rise 4.00 over a run of 8.00 is
+      // 1:2, atan(0.5) = 0.46365 rad; the slab's own length is hypot(8,4) = 8.9443, and centred at
+      // x=-2.0, y=2.0 its ends land at (-6.0, 0.0) and (+2.0, 4.0) — ground to walkway exactly.
+      // z=-4.4 puts it just behind the terreplein's inner edge at -3.4, so it meets the deck rather
+      // than overlapping it.
+      const RRISE=4.0, RRUN=8.0, RANG=Math.atan2(RRISE,RRUN);
+      const ramp=new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(RRUN,RRISE),0.4,2.0),
+        texturedMat("metal",P.stone));
+      ramp.rotation.z=RANG; ramp.position.set(-2.0,RRISE/2,-4.4);
+      ramp.castShadow=true; ramp.receiveShadow=true; g.add(ramp);
+      // a low kerb on the open side, so the ramp reads as a ramp and not as a leaning slab
+      const kerb=new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(RRUN,RRISE),0.34,0.26),aWall(age));
+      kerb.rotation.z=RANG; kerb.position.set(-2.0,RRISE/2+0.30,-5.33);
+      kerb.castShadow=false; g.add(kerb);
     }else{
       // §F.5 THE MEDIEVAL FORTIFIED WALL. "TALL AND THIN IS CORRECT FOR THIS AGE" — height beats
       // ladders and every siege answer is still muscle-powered. Sloping batter at the base,
@@ -2352,16 +2420,60 @@ function buildingMesh(type,team,age,hx,hz){
       const rev=new THREE.Mesh(new THREE.BoxGeometry(12.5,3.4,2.4),aWall(age));
       rev.rotation.x=-0.12; rev.position.set(0,1.7,0.4); rev.castShadow=true; rev.receiveShadow=true; g.add(rev);
       const core=box(12.5,3.6,3.4,0x7a6a4a); core.castShadow=false; core.position.set(0,1.8,-2.0); g.add(core);
-      const portal=new THREE.Mesh(new THREE.BoxGeometry(5.2,5.0,2.9),texturedMat("metal",P.stone));
-      portal.position.set(0,2.5,0.4); portal.castShadow=true; g.add(portal);
-      for(let i=0;i<5;i++){const rust=box(5.4,0.3,3.1,_dk(P.stone,0.14)); rust.castShadow=false;
-        rust.position.set(0,0.9+i*1.0,0.4); g.add(rust);}            // the rustication courses
-      const arch=cyl(1.3,1.3,0.6,P.dark,10); arch.rotation.x=Math.PI/2; arch.castShadow=false;
-      arch.position.set(0,3.1,1.9); g.add(arch);
-      const door=box(2.6,3.1,0.4,P.dark); door.castShadow=false; door.position.set(0,1.55,1.9); g.add(door);
-      const arms=box(1.5,0.9,0.2,GOLD); arms.castShadow=false; arms.position.set(0,4.5,1.95); g.add(arms); // the royal arms and date stone
-      const bridge=box(3.4,0.34,4.6,PLANK); bridge.castShadow=false; bridge.position.set(0,1.0,4.4); g.add(bridge);
-      const ban=box(1.4,0.9,0.1,tc); ban.castShadow=false; ban.position.set(0,5.2,0.6); g.add(ban);
+      // v131.25 JOHN, TWICE: "enlightenment fortified gate in general needs to be taller similar to
+      // medieval fortified gate", and "gate solid and visually looks like you should not be able to
+      // pass through it fix this". Both were literally true. The portal was ONE SOLID BOX
+      // (5.2 x 5.0 x 2.9) with a flat dark disc and a flat dark slab stuck on its front face —
+      // there was no opening anywhere in the mesh, and nothing on the gate stood above 5.6 while
+      // the Medieval gatehouse it is supposed to succeed reaches 10.4.
+      //
+      // A MONUMENTAL GATE ON A LOW RAMPART IS THE HISTORICALLY RIGHT ANSWER, which is the happy
+      // part: §F.6 already calls the gate "often the only decorative masonry on the whole
+      // enceinte", and Vauban's gates ARE architectural set pieces standing proud of a curtain
+      // deliberately kept flat. So the rampart keeps its low silhouette and the gatehouse rises
+      // out of it — the contrast is the point, not a violation of it.
+      //
+      // AND IT IS BUILT AS A PASSAGE, NOT AS A FACE WITH A PICTURE OF ONE. Two piers with a real
+      // gap between them, a lintel across, and the leaves set BACK inside the reveal so the
+      // opening has visible depth from any angle. You can see through it, which is the only way a
+      // player believes he can walk through it.
+      const GH=9.4, PW=2.5, PGAP=3.4;            // gatehouse height, pier width, clear passage
+      for(const s of [-1,1]){
+        const pier=new THREE.Mesh(new THREE.BoxGeometry(PW,GH,3.0),texturedMat("metal",P.stone));
+        pier.position.set(s*(PGAP/2+PW/2),GH/2,0.4); pier.castShadow=true; pier.receiveShadow=true; g.add(pier);
+        for(let i=0;i<7;i++){const rust=box(PW+0.2,0.3,3.2,_dk(P.stone,0.14)); rust.castShadow=false;
+          rust.position.set(s*(PGAP/2+PW/2),0.9+i*1.2,0.4); g.add(rust);}   // rustication, per pier
+      }
+      const lint=new THREE.Mesh(new THREE.BoxGeometry(PGAP+2*PW+0.4,1.3,3.2),texturedMat("metal",P.stone));
+      lint.position.set(0,GH-0.65,0.4); lint.castShadow=true; g.add(lint);
+      // the reveal: a recessed head to the passage, set back from the front face so the opening
+      // reads as a tunnel with depth rather than as a disc painted on a wall
+      const head=cyl(PGAP/2,PGAP/2,0.5,_dk(P.stone,0.22),12); head.rotation.x=Math.PI/2;
+      head.castShadow=false; head.position.set(0,GH-1.3,0.1); g.add(head);
+      // the leaves, SET BACK 1.5 into the reveal and left ajar, which is what says "this opens"
+      for(const s of [-1,1]){
+        const leaf=box(PGAP/2-0.1,GH-2.6,0.22,P.dark); leaf.castShadow=false;
+        leaf.position.set(s*(PGAP/4+0.05),(GH-2.6)/2,-0.55); leaf.rotation.y=s*0.22; g.add(leaf);
+      }
+      const arms=box(1.5,0.9,0.2,GOLD); arms.castShadow=false; arms.position.set(0,GH-2.2,2.05); g.add(arms);
+      const bridge=box(PGAP,0.34,4.6,PLANK); bridge.castShadow=false; bridge.position.set(0,1.0,4.4); g.add(bridge);
+      const ban=box(1.4,0.9,0.1,tc); ban.castShadow=false; ban.position.set(0,GH+0.6,0.6); g.add(ban);
+      // AND THE WALKWAY RUNS THROUGH. The age-5 curtain carries a terreplein at 4.00 (see the wall
+      // branch) and this gate had none at all, so a walkway would have ended at every gate — which
+      // is the exact defect that ruled the Medieval gate out of being walkable in the first place.
+      // Same height, same depth, split either side of the passage.
+      for(const s of [-1,1]){
+        const gt=box((12.5-PGAP)/2,0.6,4.4,0x8a7a58); gt.castShadow=false;
+        gt.position.set(s*(PGAP/2+(12.5-PGAP)/4),3.7,-1.2); g.add(gt);
+      }
+      // AND IT BRIDGES THE PASSAGE. wallFloorAt returns one deck height across a segment's whole
+      // width, so leaving the gateway open at deck level would walk the player over the opening on
+      // nothing. A gate passage is VAULTED and the rampart walk runs across the top of it — that is
+      // what a gatehouse is — so the vault is both the honest architecture and the floor.
+      const vault=box(PGAP+0.4,0.6,4.4,0x8a7a58); vault.castShadow=false;
+      vault.position.set(0,3.7,-1.2); g.add(vault);
+      const soff=box(PGAP+0.4,0.3,4.4,_dk(P.stone,0.26)); soff.castShadow=false;
+      soff.position.set(0,3.25,-1.2); g.add(soff);           // the vault's underside, seen from below
     }else{
       // §F.5 THE GREAT TWIN-TOWERED GATEHOUSE, and by this period the gatehouse and not the keep
       // is the strongest part of a castle: two projecting DRUM towers, a vaulted passage between
