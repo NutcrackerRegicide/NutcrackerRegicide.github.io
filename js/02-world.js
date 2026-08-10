@@ -424,39 +424,56 @@ function makeNode(type,x,z,amount){
 // BLUE AND RED ARE IDENTICAL TO THE UNIT: 9220 food / 6600 gold / 1200 stone each, plus 1900 / 900 /
 // 1800 on the axis. tools/nodeplan.js asserts that rather than trusting the arithmetic here.
 (function placeNodes(){
-  for(const side of [-1,1]){
+  // v132.25 ONE DRAW, TWO PILES. This loop used to run over `side` with the jitter INSIDE it, so
+  // blue's pile and red's pile of the same cluster each drew their own randoms: the same nominal
+  // coordinate, two different places, up to 8 apart — and the forward clusters drew x from a
+  // TWENTY-unit range independently per side. tools/nodefair.js measures the consequence by walking
+  // the map: four ranks of the food profile and two of the gold held DIFFERENT AMOUNTS, meaning the
+  // k-th nearest pile was not the same kind of pile for the two teams, and one side's tightest pair
+  // of piles sat 1.0 apart against the other's 3.1 because a draw happened to stack two.
+  // Every pile is now placed from ONE offset, mirrored. sx/sz are the full widths of the jitter box,
+  // so (75, 40, 20, 27) is the old `65 + random*20` and `40 +- 13.5` exactly.
+  const pair=(type,x,z,amt,sx,sz)=>{
+    const px=x+(Math.random()-0.5)*(sx||0), pz=z+(Math.random()-0.5)*(sz||0);
+    makeNode(type, px,pz,amt);
+    if(Math.abs(px)>0.001)makeNode(type,-px,pz,amt);   // an axis pile is its own mirror
+  };
+  {
     // base clusters
     for(const [bx,bz] of [[140,-38],[148,32],[125,-58]])
-      for(let i=0;i<3;i++)makeNode("food",side*bx+(Math.random()-0.5)*8,bz+(Math.random()-0.5)*8,380);
+      for(let i=0;i<3;i++)pair("food",bx,bz,380,8,8);
     // v132.24 (155,-10) -> (168,-44): off the throne, and it could not simply step outward — the
     // corridor beside a throne is narrow now, with the King's Road leaving at z~+6 and the Viking
     // branch leaving toward -36, and (159,-13) measured 8.0 from the Viking spine, i.e. inside a
     // road. Out past the branch instead: 44.6 from the throne, 15.0 from the Viking spine, the same
     // distance band as the base FOOD cluster at (140,-38).
     for(const [gx,gz] of [[135,52],[168,-44]])
-      for(let i=0;i<3;i++)makeNode("gold",side*gx+(Math.random()-0.5)*8,gz+(Math.random()-0.5)*8,300);
+      for(let i=0;i<3;i++)pair("gold",gx,gz,300,8,8);
     // forward (contested) clusters
-    for(let i=0;i<3;i++)makeNode("food",side*(65+Math.random()*20),40+(Math.random()-0.5)*27,650);
-    for(let i=0;i<3;i++)makeNode("gold",side*(70+Math.random()*20),-42+(Math.random()-0.5)*25,600);
+    for(let i=0;i<3;i++)pair("food",75,40,650,20,27);
+    for(let i=0;i<3;i++)pair("gold",80,-42,600,20,25);
     // v132.24 THE VIKING ROAD'S HINTERLAND. Offset ~17 from the branch spine, which is the offset
     // the team bazaar itself uses (vikingOffset(team,0.42,18)), so the road reads as a road with
     // things along it rather than a line drawn across empty grass. x-mirrored, NOT 180-degree,
     // because BOTH branches run into the -z half: a 180-degree copy of a Viking-road cluster lands
     // in the +z half where that team has no Viking road at all. The convention belongs to the thing
     // being served, and this world carries both.
-    for(let i=0;i<2;i++)makeNode("gold",side*148+(Math.random()-0.5)*10,-79+(Math.random()-0.5)*10,600);
-    for(let i=0;i<2;i++)makeNode("food",side*102+(Math.random()-0.5)*10,-127+(Math.random()-0.5)*10,650);
+    for(let i=0;i<2;i++)pair("gold",148,-79,600,10,10);
+    for(let i=0;i<2;i++)pair("food",102,-127,650,10,10);
     // v132.24 the southern flank, past the camp pair at (+-65, 77): 28.1 clear of the nearest edge
-    makeNode("food",side*95,102,650);
+    pair("food",95,102,650,0,0);
     // v132.24 THE GRAND BAZAAR'S RING — this is the old centre prize, same nine piles and the same
     // amounts, mirrored and moved north of the road to the market it belongs to.
-    makeNode("gold",side*22,58,900); makeNode("gold",side*44,42,900);
-    makeNode("food",side*30,24,950); makeNode("food",side*52,30,950);
+    pair("gold",22,58,900,0,0); pair("gold",44,42,900,0,0);
+    pair("food",30,24,950,0,0); pair("food",52,30,950,0,0);
   }
-  // STONE: a scarce critical mineral — SIX piles on the whole map (was five). All but the deep one
-  // keep stone's own 180-degree mirror, which is the convention it has always used.
-  makeNode("stone",-148,26,500); makeNode("stone",148,-26,500);   // one near each team, off the road
-  makeNode("stone",-88,-32,700); makeNode("stone",88,32,700);     // midpoints, off the road
+  // STONE: a scarce critical mineral — SIX piles on the whole map (was five).
+  // v132.25 …AND ON THE SAME MIRROR AS EVERYTHING ELSE. Stone was the last thing still using the
+  // 180-degree convention, (-148,26)/(148,-26), for no reason but inheritance — it put one team's
+  // near pile in the +z half and the other's in -z, which is a different relationship to two roads
+  // that are themselves x-mirrored. One convention for the whole world.
+  pair("stone",148,26,500,0,0);    // one near each team, off the road
+  pair("stone",88,32,700,0,0);     // midpoints, off the road
   makeNode("stone",0,-30,900);                                    // center (clear of the bazaar)
   // v132.24 THE SIXTH PILE, and it is deep on purpose. Five was a scarcity statement made when the
   // map was 26% smaller and had one road; the deep half now has a road, two bazaars and a prize
@@ -534,7 +551,11 @@ const NEUTRAL_MARKET_SITES=[];
     // 1.8x a small shrub wants, which on a disc this size would paint a stain across the meadow.
     // Numbers into an array carry no uuid, so this stays inside the window for free (§G.4).
     PROP_FEET.push([x,z,8.4*B.scale]);
-    neutralMarkets.push({x,z});
+    // v132.26 …and the record carries the ownership state. Fields on an object literal cost no
+    // Math.random() and no uuid, so this stays inside the seeded window for free, exactly as the
+    // note above says of PROP_FEET.
+    neutralMarkets.push({x,z,grand:!!B.grand,plaza:B.plaza,owner:-1,cap:0,capTeam:-1,
+                         what:B.what,i:neutralMarkets.length});
   }
 })();
 
@@ -1382,28 +1403,26 @@ const TREE_STANDS=[];
     for(const p of PONDS){const dx=x-p[0],dz=z-p[1],rr=p[2]+3.5;if(dx*dx+dz*dz<rr*rr)return false;}
     return true;
   };
-  // Every stand is placed ONCE and mirrored through the map's centre, (x,z) -> (-x,-z) — the same
-  // 180° symmetry the two thrones sit on, so neither team can ever draw the better wood.
-  const stand=(x,z,r)=>{TREE_STANDS.push({x,z,r},{x:-x,z:-z,r});};
+  // v132.25 EVERY STAND IS MIRRORED LEFT-RIGHT NOW, (x,z) -> (-x, z), AND THAT IS THE WHOLE WORLD
+  // ON ONE CONVENTION. It used to be the 180-degree one, (x,z) -> (-x,-z), on the argument that the
+  // thrones sit on that symmetry — true, but they sit on BOTH, because (+-175, 0) is invariant
+  // under either. Everything else on this map — the two roads, the three bazaars, the interior
+  // camps, every resource pile — is x-mirrored, and two fair systems on different mirrors make an
+  // unfair map: clearOf() below deletes trees near every non-wood node, so an x-mirrored cluster
+  // carves a hole in a 180-degree forest in a place that has no counterpart. That is what measured
+  // as BLUE 1 / RED 12 wood nodes within 60 of a throne in v132.24, and it is why the home woods
+  // needed four calls and the cap needed raising. Both of those go away here.
+  // Axis stands are their own mirror; pushing them twice would double their density.
+  const stand=(x,z,r)=>{TREE_STANDS.push({x,z,r}); if(Math.abs(x)>0.001)TREE_STANDS.push({x:-x,z,r});};
   // THE HOME WOODS: timber inside every team's reach.
-  // v132.24 FOUR CALLS, NOT TWO, AND THE SECOND PAIR IS A FAIRNESS FIX WITH A NUMBER ON IT. Wood
-  // nodes within 60 of a throne measured BLUE 1, RED 12. Both the woods and the nodes are mirrored
-  // — through DIFFERENT MIRRORS. stand() uses the trees' 180-degree convention, (x,z)->(-x,-z);
-  // placeNodes uses the roads' x-mirror, (x,z)->(-x,z). Each is fair on its own. Their INTERACTION
-  // is not: clearOf() above deletes trees within TREE_CLEAR_NODE of every non-wood node, so red's
-  // base food cluster lands inside red's home wood and eats it while blue's lands 86 units from
-  // blue's. Neither list is wrong; the pair is.
-  // The answer is not a new convention — it is the trick v132.12 already used for the camp
-  // thickets. stand(148,48) and stand(148,-48) together yield all four of (+-148, +-48), a set
-  // closed under BOTH mirrors, and then it does not matter which one the nodes use. No node moves
-  // for it and no forest is re-rolled by a convention change.
-  // THE CAP BELOW IS STILL 24, so these four displace four wild stands rather than adding coverage,
-  // and the meadows stay exactly where v132.0 measured them.
-  stand(148,48,31);  stand(148,-48,31);
-  stand(122,-58,28); stand(122,58,28);
-  // three stands sit deliberately ON the v113 flanking lanes (07-ai's LANE_Z = 0, ±46, ±88 — keep
-  // these in step if those move), so a band that swings wide moves through real cover
-  stand(64,46,30); stand(120,88,26); stand(18,-88,29);
+  // v132.25 TWO CALLS AGAIN. v132.24 needed four — (+-148, +-48) and (+-122, +-58), a set closed
+  // under BOTH mirrors — purely because the stands and the nodes disagreed about which mirror this
+  // world uses. They agree now, so one call does what four did.
+  stand(148,48,31); stand(122,-58,28);
+  // three stands sit deliberately ON the flanking lanes (07-ai's LANE_Z — keep these in step if
+  // those move), so a band that swings wide moves through real cover.
+  // v132.24 moved the lanes to 0 / +-48 / +-106 to clear the interior camps; these follow.
+  stand(64,48,30); stand(120,106,26); stand(18,-106,29);
   // v132.12 THE CAMP THICKETS. John: "more tucked into heavily wooded areas. for example this camp
   // is pretty much just in the open." Siting a camp INTO existing forest cannot work — the 14 wild
   // stands below are rejection-sampled against clearOf(), which tests the camps, so moving a camp
@@ -1411,12 +1430,12 @@ const TREE_STANDS=[];
   // (x,z)->(-x,-z), so no x-mirrored pair of camps can sit in them on both sides. So the wood is
   // PLACED, and the camp's own r+4 clearance punches the hollow out of the middle: dense from 15 to
   // ~24, gone by 30, around a 9.5 trampled disc.
-  // TWO CALLS FOR THE PAIR, AND THAT IS THE TRICK: stand() pushes (x,z) and (-x,-z), so (65,77) and
-  // (65,-77) together yield all four of (+-65,+-77) — a set closed under the trees' 180-degree
-  // convention AND under the roads' x-mirror one. Neither convention is bent and both camps of the
-  // pair get identical cover.
-  stand(0,-72,30);                      // the lone camp (its mirror lands at (0, 72), also useful)
-  stand(65,77,30); stand(65,-77,30);    // -> (+-65, +-77): the pair, both halves
+  // v132.25 ONE CALL FOR THE PAIR. v132.12 needed two — (65,77) and (65,-77), so the set was closed
+  // under both mirrors — for the same reason the home woods needed four. stand() is x-mirrored now
+  // and the camp pair is x-mirrored, so stand(65,77) IS the pair. The lone camp sits on the axis and
+  // stand() no longer doubles it.
+  stand(0,-72,30);      // the lone camp
+  stand(65,77,30);      // -> (+-65, 77): the pair
   // THE CAP BELOW STAYS AT 24. Six of the wild stands become camp thickets; stand COUNT is what
   // sets meadow gap size at fixed coverage (v132.0 measured that the hard way), so holding the
   // count holds the meadows.
@@ -1431,20 +1450,11 @@ const TREE_STANDS=[];
   // Raising the radii instead was tried and is worse (17/19/12 of 127): bigger discs at the same
   // count is simply more coverage. Gap SIZE is a function of stand COUNT at fixed coverage, so the
   // count is the lever. 24 lets the clash test settle back around the 22 the old map carried.
-  // v132.24 24 -> 26, AND IT IS NOT A CHANGE OF MIND ABOUT THE PARAGRAPH ABOVE. This cap counts
-  // HAND stands and WILD stands together, and stage 5 added four hand entries — the two extra home
-  // woods that close (+-148, +-48) and (+-122, +-58) under both mirrors — so at 24 the WILD count
-  // fell from 8 to 4 and took the forest with it. Swept, not guessed (tools/_standcap.js):
-  //     cap 24  522 trees      cap 26  573      cap 28  681      cap 30  700
-  // against 612 before stage 5. The remainder of the loss is the thirteen new resource clusters,
-  // each of which clears trees under clearOf(), and THAT part is correct and stays: a clearing
-  // around a resource cluster is what a resource cluster looks like.
-  // 26 lands the tree count within 6% of where it was and leaves the meadow probe at 41-46/127
-  // clear against 28/127 before — more open country than the map had, which is what thirteen new
-  // clearings buy. (That probe drifts a few counts run to run: it fires late in the smoketest,
-  // after that run's own buildings are standing.) 28 would overshoot the most wood this map has
-  // ever carried.
-  while(TREE_STANDS.length<26&&guard++<6000){
+  // v132.24 raised this to 26 to pay for four extra hand stands; v132.25 gave those back by putting
+  // the whole world on one mirror, so the cap returns to what v132.0 measured. Re-swept after the
+  // convention change (tools/_standcap.js) rather than assumed — the numbers in this file are worth
+  // exactly as much as the last time they were measured.
+  while(TREE_STANDS.length<24&&guard++<6000){
     const x=6+Math.random()*(MAP.x-36), z=(Math.random()*2-1)*(MAP.z-28), r=23+Math.random()*21;
     if(!clearOf(x,z))continue;
     let clash=false;
@@ -1453,11 +1463,22 @@ const TREE_STANDS=[];
     if(!clash)stand(x,z,r);
   }
   const STEP=7.4, EDGE=4, LONE=0.03; // 3% of open country carries a lone tree — meadows stay open
-  for(let gx=-MAP.x+EDGE;gx<=MAP.x-EDGE;gx+=STEP){
+  // v132.25 HALF THE MAP IS PLANTED AND MIRRORED, rather than the whole map being scattered and
+  // hoped to come out even. The grid itself was never symmetric — (MAP.x*2 - 2*EDGE) is 432 and
+  // STEP is 7.4, so the columns end 2.8 short on one side — and every cell drew its own jitter and
+  // its own density roll, so even with mirrored stands the two halves were only statistically
+  // alike. tools/nodefair.js walked the map and measured the difference: a mean rank-wise error of
+  // 9.5 across 573 trees, and 250 of them inside a red walk of 170 against 217 for blue.
+  // BOTH ENDS MUST BE CLEAR, which is what makes the result exactly congruent rather than nearly.
+  // clearOf() is itself x-mirror symmetric in everything except the three ponds, so the price is
+  // three small mirrored discs of missing trees — 0.7% of the map — and the forest is the same
+  // forest for both teams instead of merely the same size.
+  // The density needs no mirroring: TREE_STANDS is exactly x-mirror closed, so dens(-x,z)=dens(x,z).
+  for(let gx=0;gx<=MAP.x-EDGE;gx+=STEP){
     for(let gz=-MAP.z+EDGE;gz<=MAP.z-EDGE;gz+=STEP){
       const x=gx+(Math.random()-0.5)*STEP*0.9, z=gz+(Math.random()-0.5)*STEP*0.9;
       if(Math.abs(x)>MAP.x-EDGE||Math.abs(z)>MAP.z-EDGE)continue;
-      if(!clearOf(x,z))continue;
+      if(!clearOf(x,z)||!clearOf(-x,z))continue;
       let dens=0;
       for(const s of TREE_STANDS){
         const dd=Math.sqrt(_d2(x,z,s.x,s.z));
@@ -1466,6 +1487,7 @@ const TREE_STANDS=[];
       dens=Math.min(1,dens*1.45+LONE);
       if(Math.random()>dens)continue;
       makeTree(x,z);
+      if(Math.abs(x)>0.001)makeTree(-x,z);
     }
   }
 })();
@@ -2420,8 +2442,44 @@ const BAZAAR_MAT=toonMat({vertexColors:true});
         ROOF=0xB4543A, ROOFD=0x7E3624, GOLDT=0xCFB53B, LANT=0xD8D2AC, SLOT=0x2A2018,
         AWNA=0x8E1F1F, AWNB=0xC9863C, CRATE=0xB08A5A, BARREL=0x7A5A34, SACK=0xC9B78A,
         AMPH=0xA8623A, CLOTHA=0x3A5A7A, ROPE=0x9A8A6A;
+  // v132.26 THE OWNERSHIP MARKS, and they are built HERE rather than with the plinth because this
+  // loop runs BELOW the seeded handback — a mesh constructed above it would mint uuids inside the
+  // window and move every node on the wire (§G.4). Two marks, because they answer two different
+  // questions from two different distances:
+  //   THE RING   a flat disc at the plaza's rim, in the owner's colour. Read from the third-person
+  //              camera, standing on the square, it is the thing that tells you whose ground this is.
+  //   THE ARC    the same ring drawn as a partial sweep in the CAPTURING team's colour while a
+  //              capture is running. Rebuilt only when the fraction moves more than 2%, so a
+  //              twelve-second capture costs about fifty geometry rebuilds and not seven hundred.
+  //   THE BANNER a pole and a cloth at the square's edge, for the silhouette at map distance.
+  const _bazMark=(m)=>{
+    const R=m.plaza||9, g=new THREE.Group();
+    // THE BAND STRADDLES THE PLINTH RIM, 0.94R to 1.06R. The first cut ran it from 0.86R to R,
+    // which is UNDER the deck: the plinth is 8.2/8.6 scaled and the plaza radius is the same
+    // number, so the whole ring lay on flagstones the canopy shades and the roof hides from above.
+    // Half on the stone and half on the grass reads from any angle, and it stays inside the disc
+    // terrainHeight flattens under each plaza, so it never sinks into a slope.
+    const ring=new THREE.Mesh(new THREE.RingGeometry(R*0.94,R*1.06,48),
+      new THREE.MeshBasicMaterial({color:TEAMCOL[2],transparent:true,opacity:0.30,
+        side:THREE.DoubleSide,depthWrite:false}));
+    ring.rotation.x=-Math.PI/2; ring.position.y=0.09; g.add(ring);
+    const arc=new THREE.Mesh(new THREE.RingGeometry(R*0.94,R*1.06,48,1,0,0.001),
+      new THREE.MeshBasicMaterial({color:TEAMCOL[0],transparent:true,opacity:0.85,
+        side:THREE.DoubleSide,depthWrite:false}));
+    arc.rotation.x=-Math.PI/2; arc.position.y=0.11; arc.visible=false; g.add(arc);
+    const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.16,0.19,11,7),
+      new THREE.MeshLambertMaterial({color:0x6b5334}));
+    pole.position.set(R*0.80,5.5,0); pole.castShadow=true; g.add(pole);
+    const cloth=new THREE.Mesh(new THREE.BoxGeometry(2.8,1.9,0.14),
+      new THREE.MeshLambertMaterial({color:TEAMCOL[2]}));
+    cloth.position.set(R*0.80+1.5,9.6,0); g.add(cloth);
+    g.position.set(m.x,terrainHeight(m.x,m.z),m.z);
+    scene.add(g);
+    m.mark={g,ring,arc,cloth,R,shownCap:-1,shownOwner:-2,shownCapTeam:-2};
+  };
   for(const S of NEUTRAL_MARKET_SITES){
     const x=S.x, z=S.z, SC=S.scale||1;
+    {const m=neutralMarkets.find(q=>Math.abs(q.x-x)<0.01&&Math.abs(q.z-z)<0.01); if(m)_bazMark(m);}
     const BP=[];
     const put=(geo,color,mtx)=>BP.push({geo,matrix:mtx,color});
 

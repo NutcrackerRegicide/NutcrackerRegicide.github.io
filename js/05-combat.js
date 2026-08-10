@@ -213,6 +213,97 @@ function hasLOS(x1,z1,x2,z2,ignore){
 }
 
 // ---------- combat ----------
+// ==================== v132.26 THE BAZAARS CHANGE HANDS ====================
+// Host-authoritative: a guest reads owner/cap off the wire and draws them, and never runs this.
+// See 00-data.js for the rules and the reasoning; this is only their arithmetic.
+// GARRISONED BODIES DO NOT COUNT. A unit up a watch tower or on a rampart is not in the collision
+// world at all (v132.22), and a tower standing beside a plaza would otherwise capture the square
+// under it for ever with nobody on the ground.
+// NEITHER DO CREEPS: NEUTRAL is a team index like any other and wolves standing in a market would
+// otherwise freeze it as "contested" for as long as the camp lives.
+const _bazAcc=[0,0];
+function bazaarTick(dt){
+  if(typeof neutralMarkets==="undefined"||!neutralMarkets.length)return;
+  for(const m of neutralMarkets){
+    const R=(m.plaza||9)+BAZ_CAP_R, R2=R*R;
+    let n0=0,n1=0;
+    for(const u of units){
+      if(!u.alive||u.team===NEUTRAL||u.garrison)continue;
+      if(dist2(u.root.position.x,u.root.position.z,m.x,m.z)>R2)continue;
+      if(u.team===BLUE)n0++; else n1++;
+    }
+    if(n0&&n1)continue;                                  // contested: frozen
+    if(!n0&&!n1)continue;                                // empty: frozen, no decay
+    const T0=n0?BLUE:RED;
+    if(m.owner===T0){                                    // the owner scrubs out an attacker
+      if(m.capTeam!==-1&&m.capTeam!==T0){
+        m.cap-=dt/BAZ_CAP_T;
+        if(m.cap<=0){m.cap=0;m.capTeam=-1;}
+      }
+      continue;
+    }
+    if(m.capTeam!==T0){m.capTeam=T0;m.cap=0;}
+    m.cap+=dt/BAZ_CAP_T;
+    if(m.cap>=1){
+      const was=m.owner;
+      m.owner=T0; m.cap=0; m.capTeam=-1;
+      bazaarTaken(m,T0,was);
+    }
+  }
+  // the income. Fractional yield is banked and paid in whole units, because stock is read with
+  // Math.floor everywhere and a 0.4 that never becomes a 1 is a resource nobody can spend.
+  for(const t of [BLUE,RED]){
+    const y=bazaarYield(t);
+    if(!y){_bazAcc[t]=0;continue;}
+    _bazAcc[t]+=y*dt;
+    // THE EPSILON IS FLOAT ERROR, NOT GENEROSITY. Ten seconds at +1/s is three hundred additions
+    // of 1/30, which lands on 9.999999999999998 — so tools/bazaars.js, reading the STOCKPILE
+    // rather than the yield function, measured 9 where 10 was owed. The remainder carries forward,
+    // so nothing was being lost over a match; it was arriving one late, for ever. 1e-9 cancels the
+    // accumulated error and is far below anything a player can observe.
+    const whole=Math.floor(_bazAcc[t]+1e-9);
+    if(whole>0){
+      _bazAcc[t]-=whole;
+      stock[t].food+=whole; stock[t].gold+=whole; stock[t].stone+=whole; stock[t].wood+=whole;
+      if(t===MYTEAM&&typeof updateResHud==="function")updateResHud();
+    }
+  }
+}
+// announced on both machines: the host calls this from bazaarTick, a guest from applySnap when the
+// owner byte it receives disagrees with the one it is drawing.
+function bazaarTaken(m,team,was){
+  const who=(m.what==="grand")?"the Grand Bazaar":(m.what==="blue"?"the western bazaar":"the eastern bazaar");
+  const mine=(team===MYTEAM);
+  if(typeof msg==="function")
+    msg((mine?"You take ":"The enemy takes ")+who+"! "+
+        (mine?("+"+bazaarYield(team)+" of every resource a second."):""),mine?"blue":"warn");
+  if(typeof Sound!=="undefined")try{Sound.play(mine?"ui_confirm":"ui_open",{x:m.x,z:m.z});}catch(_){}
+  if(typeof puff==="function")try{puff(m.x,4.5,m.z,TEAMCOL[team],2.4,1.1);}catch(_){}
+}
+// the marks are pure render state — a guest and the host may disagree about them for ever without
+// desyncing — so they are driven once a frame from whatever the sim says, not from the flip.
+function bazaarDraw(){
+  if(typeof neutralMarkets==="undefined")return;
+  for(const m of neutralMarkets){
+    const k=m.mark; if(!k)continue;
+    if(k.shownOwner!==m.owner){
+      k.shownOwner=m.owner;
+      const c=TEAMCOL[m.owner<0?2:m.owner];
+      k.ring.material.color.setHex(c); k.cloth.material.color.setHex(c);
+      k.ring.material.opacity=(m.owner<0)?0.30:0.42;
+    }
+    const showing=(m.capTeam>=0&&m.cap>0.01);
+    if(k.arc.visible!==showing)k.arc.visible=showing;
+    if(showing){
+      if(k.shownCapTeam!==m.capTeam){k.shownCapTeam=m.capTeam;k.arc.material.color.setHex(TEAMCOL[m.capTeam]);}
+      if(Math.abs(k.shownCap-m.cap)>0.02){
+        k.shownCap=m.cap;
+        k.arc.geometry.dispose();
+        k.arc.geometry=new THREE.RingGeometry(k.R*0.94,k.R*1.06,48,1,Math.PI/2,-m.cap*Math.PI*2);
+      }
+    }
+  }
+}
 function dealDamage(att,victim,dmg){
   if(typeof NET!=="undefined"&&NET.mode==="guest")return; // host owns all damage
   if(!victim.alive||gameOver)return;

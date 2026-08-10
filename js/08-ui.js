@@ -54,6 +54,12 @@ function showScoreboard(on){
   el.style.display="block";
 }
 function updateResHud(){
+  // v132.26 the bazaar income, shown only when there is one. A number that is always +0 teaches the
+  // eye to stop reading that corner.
+  {const el=document.getElementById("bazyield");
+   if(el){const y=(typeof bazaarYield==="function")?bazaarYield(MYTEAM):0;
+     el.style.display=y?"":"none";
+     if(y)document.getElementById("rbaz").textContent="+"+y;}}
   document.getElementById("rfood").textContent=Math.floor(stock[MYTEAM].food);
   document.getElementById("rgold").textContent=Math.floor(stock[MYTEAM].gold);
   document.getElementById("rstone").textContent=Math.floor(stock[MYTEAM].stone);
@@ -136,9 +142,15 @@ function drawMinimap(){
     mm.fillStyle=n.type==="food"?"#c0392b":n.type==="gold"?"#e0a92e":n.type==="stone"?"#9aa2ad":"#3f6d2f";
     mm.fillRect(px(n.x)-1.5,pz(n.z)-1.5,3,3);
   }
-  mm.fillStyle="#ffd24a";
-  for(const m of neutralMarkets){mm.fillRect(px(m.x)-2.5,pz(m.z)-2.5,5,5);
-    mm.strokeStyle="#7a5a10";mm.lineWidth=1;mm.strokeRect(px(m.x)-2.5,pz(m.z)-2.5,5,5);}
+  // v132.26 a bazaar is drawn in its OWNER'S colour, gold while it is nobody's, and the Grand is
+  // drawn bigger because it is worth three times either of the others.
+  for(const m of neutralMarkets){
+    const s=m.grand?7:5;
+    mm.fillStyle=(m.owner===BLUE)?"#3d6ef2":(m.owner===RED)?"#d94a3d":"#ffd24a";
+    mm.fillRect(px(m.x)-s/2,pz(m.z)-s/2,s,s);
+    mm.strokeStyle=(m.owner<0)?"#7a5a10":"#ffffff";mm.lineWidth=1;
+    mm.strokeRect(px(m.x)-s/2,pz(m.z)-s/2,s,s);
+  }
   if(typeof townBoards!=="undefined"){mm.fillStyle="#f0e6c8"; // the quest boards: parchment specks by each throne
     for(const tb of townBoards)mm.fillRect(px(tb.x)-1.5,pz(tb.z)-1.5,3,3);}
   for(const b of buildings){

@@ -993,7 +993,37 @@ const MODEL_MANIFEST={}; // imported models retired — characters use generated
 
 // ---------- trade ----------
 // neutral bazaars: near / center / deep — risk scales with distance, gold scales harder
-const neutralMarkets=[]; // populated by world gen: {x,z}
+const neutralMarkets=[]; // populated by world gen: {x,z,grand,plaza,owner,cap,capTeam}
+// ==================== v132.26 THE CAPTURABLE BAZAARS ====================
+// John: "stand in plaza as you recommend but it doesn't decay back to neutral. But the opposing
+// team can come and capture it." And: "hold your bazaar, plus 1 of every resource per second. Hold
+// the grand bazaar - plus 3. Hold all 3 bazaars - plus 8."
+//
+// STICKY OWNERSHIP IS THE DESIGN AND IT SHAPES THE REST. A control point that bleeds back to
+// neutral asks you to garrison ground you already took, which on a map this size means parking a
+// band on a plaza for the whole match — the exact behaviour v113 wrote HOLD_TOUR to stop the AI
+// doing. So you keep a bazaar until somebody comes and takes it. The price is that a capture has to
+// be REVERSIBLE while it is running, or a defender who arrives at 90% can only watch it fall:
+//   one team alone, not theirs   -> cap climbs; at 1.0 it flips
+//   one team alone, already theirs -> cap FALLS. This is the only thing that lowers it.
+//   both teams present           -> frozen. Contested means contested.
+//   nobody                       -> frozen, per the ruling.
+// BAZ_CAP_R is a MARGIN on the plaza's own radius, not a radius of its own: the Grand's plaza is
+// 11.4 and the two on the Viking roads are 8.6, so a fixed number would make the big one easier to
+// stand outside of and the small ones easier to hold. Each bazaar is captured from its own square.
+const BAZ_CAP_T=12;      // seconds of uncontested presence to flip one
+const BAZ_CAP_R=1.5;     // …standing this far outside the plinth still counts as being on the square
+const BAZ_YIELD_SIDE=1, BAZ_YIELD_GRAND=3, BAZ_YIELD_ALL=8;
+// THE SWEEP IS WORTH MORE THAN THE SUM. 1 + 1 + 3 is 5; holding every bazaar on the map pays 8.
+// Worth keeping in view when tuning: +8 of EVERY resource per second is 32 a second, and a villager
+// gathers well under one — so the sweep is worth something like thirty villagers. That is the point
+// of an objective that requires controlling the whole map, and it is why this is one constant.
+function bazaarYield(team){
+  if(!neutralMarkets.length)return 0;
+  let held=0,y=0;
+  for(const m of neutralMarkets)if(m.owner===team){held++;y+=m.grand?BAZ_YIELD_GRAND:BAZ_YIELD_SIDE;}
+  return (held===neutralMarkets.length)?BAZ_YIELD_ALL:y;
+}
 // ==================== v132.1 THE TWO ROUTES, AND THE ONE LIST OF BAZAAR SITES ====================
 // These live in 00-data rather than 02-world for one reason: 01-engine's terrainHeight() has to
 // FLATTEN the ground under every plaza, and it used to do that from three hand-typed coordinates

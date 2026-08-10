@@ -680,7 +680,20 @@ function bandHoldPoint(team,idx){ // castles first, then denying a bazaar, then 
   const own=buildings.filter(b=>b.alive&&b.built&&b.team===team&&b.type==="castle");
   if(own.length){const c=own[idx%own.length];const hr=(bSurf(c.def)+3)*0.7071; // +4,+4 was 5.66 out; a castle blocks to 19.8
     return {x:c.x+hr,z:c.z+hr,why:"castle"};}
-  if(neutralMarkets.length){const m=neutralMarkets[idx%neutralMarkets.length];return {x:m.x+3,z:m.z+3,why:"bazaar"};}
+  // v132.26 A BAZAAR IS WORTH TAKING NOW, AND THIS USED TO STAND THREE UNITS OUTSIDE IT. The old
+  // line dealt bazaars round-robin by band index and posted the band at (m.x+3, m.z+3) — outside
+  // the plaza on the small ones, so a hold band would have stood beside a capturable objective for
+  // the whole match without ever capturing it. It stands ON the square now, and it prefers a
+  // square this team does not already hold: the Grand first, because it pays three times either of
+  // the others, then whichever of the rest is nearest this throne.
+  if(neutralMarkets.length){
+    const want=neutralMarkets.filter(m=>m.owner!==team);
+    const pool=want.length?want:neutralMarkets;
+    pool.sort((a,b)=>(b.grand?1:0)-(a.grand?1:0)||
+      dist2(a.x,a.z,TCPOS[team][0],TCPOS[team][1])-dist2(b.x,b.z,TCPOS[team][0],TCPOS[team][1]));
+    const m=pool[idx%pool.length];
+    return {x:m.x,z:m.z,why:"bazaar",baz:m};
+  }
   const tc=TCPOS[team],et=TCPOS[1-team];
   return {x:tc[0]+(et[0]-tc[0])*0.35,z:tc[1]+(et[1]-tc[1])*0.35,why:"road"};
 }
@@ -777,7 +790,12 @@ function manageBands(D){
           if(dist2(e.root.position.x,e.root.position.z,cx,cz)<HOLD_WATCH*HOLD_WATCH){bd.lastContact=T;break;}
         }
       }
-      if(T>bd.holdUntil&&T-(bd.lastContact||0)>HOLD_QUIET){ // relieved — march on
+      // v132.26 …AND A BAND MID-CAPTURE IS NOT RELIEVED. The tour clock exists so a band does not
+      // stand on quiet ground for ever; a bazaar that is 60% taken is not quiet ground, and being
+      // marched off it at 59% would waste the whole tour and hand the square back.
+      const _bz=bd.point&&bd.point.baz;
+      const _taking=_bz&&(_bz.owner!==team)&&(_bz.capTeam===team||_bz.cap>0.02);
+      if(T>bd.holdUntil&&T-(bd.lastContact||0)>HOLD_QUIET&&!_taking){ // relieved — march on
         let role="econ",least=1e9;
         for(const r of ["econ","patrol","assassin"]){
           const n=D.bands.filter(b=>b.role===r).length;

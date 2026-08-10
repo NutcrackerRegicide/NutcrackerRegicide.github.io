@@ -24,10 +24,9 @@ var NET={
   // v132.9 29 -> 30: the Viking road's bow was reversed. The spine moved, so its clearance corridor
   // moved, so the trees moved; and the two team bazaars are defined ON the spine, so they moved too
   // and took their own clearance with them. Every node index downstream is different.
-  PROTO:31,             // v132.24 stage 5: 69 non-wood nodes where there were 56, and nodes[] is
-                        // indexed POSITIONALLY on the wire, so every index after the first change
-                        // means something different. A bump costs one line; a silent desync costs
-                        // a match.             // bumped whenever the wire format changes OR the generated world does.
+  PROTO:33,             // v132.26 the capturable bazaars: `bz` is a new field in BOTH payloads and
+                        // an older peer neither sends nor reads it, so two builds would disagree
+                        // about who owns the Grand Bazaar while both drew it as neutral.             // bumped whenever the wire format changes OR the generated world does.
                         // v127: 25 → 26. The envelope (stock0/stock1/carry/ares) went from
                         // "every snapshot" to "when it changes, plus the 1Hz keyframe". A v126
                         // guest reads s.stock0.f with no guard, so an absent field would write
@@ -1340,7 +1339,8 @@ NET.packWorld=function(uid){
     blds:buildings.map(b=>[b.id,b.team,b.type,r1(b.x),r1(b.z),r1(b.rot||0),
       b.built?1:0,b.progress,Math.round(b.hp),b.alive?1:0,r1(b.crop||0)]),
     nodes:nodes.map(n=>Math.max(0,Math.round(n.amount))),
-    camps:campStates.map(s=>[s.chest?s.chestKind:null,s.chestB?s.chestKindB:null])}; // standing chests (both slots) for the late joiner
+    camps:campStates.map(s=>[s.chest?s.chestKind:null,s.chestB?s.chestKindB:null]), // standing chests (both slots) for the late joiner
+    bz:neutralMarkets.map(m=>[m.owner,Math.round(m.cap*100),m.capTeam])}; // v132.26 who holds each bazaar
 };
 // ---- v95 THE WIRE DIET (v99: +the cargo byte) ----
 // Unit rows travel as PACKED BINARY: 18 bytes each in one ArrayBuffer instead of a
@@ -1507,6 +1507,13 @@ NET.packSnap=function(){
     }
     if(brows.length){s.bb=NET.packBldRows(brows);s.bn=brows.length;}
   }
+  // v132.26 THE BAZAARS, AND ONLY WHEN THEY MOVE. Three markets is nine small numbers and their
+  // state changes a handful of times a match, so shipping it every snapshot would be exactly the
+  // waste the rest of this function is built to avoid. The key is the wire row itself, so a capture
+  // creeping up by half a percent does not re-ship it — the same trick the building rows use.
+  {const bzk=neutralMarkets.map(m=>m.owner+","+Math.round(m.cap*100)+","+m.capTeam).join("|");
+   if(full||NET._lastBz!==bzk){NET._lastBz=bzk;
+     s.bz=neutralMarkets.map(m=>[m.owner,Math.round(m.cap*100),m.capTeam]);}}
   if(NET._fx.length)s.fx=NET._fx.splice(0,NET._fx.length); // batched arrow theatre rides the snap
   // wire-size estimate for the guest's KB/s readout. v127: it used to add a flat 140 for the
   // envelope and never counted `carry` at all, which was harmless while every envelope field
@@ -1728,6 +1735,12 @@ NET.applyWorld=function(w){
     nodes[i].amount=w.nodes[i];
     if(w.nodes[i]<=0)_real_depleteNode(nodes[i]);
   }
+  // v132.26 …and so does the state of the three bazaars. Guarded, because an older host does not
+  // send it and a joiner that reads w.bz[i] blind would throw on the first frame.
+  if(w.bz)for(let i=0;i<w.bz.length&&i<neutralMarkets.length;i++){
+    const [o,c,ct]=w.bz[i]||[-1,0,-1];
+    neutralMarkets[i].owner=o; neutralMarkets[i].cap=c/100; neutralMarkets[i].capTeam=ct;
+  }
   if(w.camps)for(let i=0;i<w.camps.length&&i<campStates.length;i++){ // standing chests greet the joiner
     const [kA,kB]=w.camps[i]||[null,null];
     if(kA)_chestShow(campStates[i],kA,false); else _chestHide(campStates[i],false);
@@ -1818,6 +1831,14 @@ NET.applySnap=function(s){
   // v127: the treasury is a DELTA now — absent means unchanged, not zero. The old line read
   // s.stock0.f unguarded, which is precisely why PROTO had to move: an old guest meeting a lean
   // snapshot would have written NaN into the stockpile and every HUD figure downstream of it.
+  // v132.26 the bazaars. A guest never runs bazaarTick — the host owns the sim — so this IS the
+  // guest's copy of who holds what, and it is also where the guest learns a bazaar changed hands:
+  // comparing against the owner it was drawing is the only edge it can see.
+  if(s.bz)for(let i=0;i<s.bz.length&&i<neutralMarkets.length;i++){
+    const m=neutralMarkets[i], [o,c,ct]=s.bz[i]||[-1,0,-1];
+    if(m.owner!==o&&typeof bazaarTaken==="function"&&o>=0){m.owner=o;bazaarTaken(m,o,m.owner);}
+    m.owner=o; m.cap=c/100; m.capTeam=ct;
+  }
   if(s.stock0){stock[BLUE].food=s.stock0.f;stock[BLUE].gold=s.stock0.g;stock[BLUE].stone=s.stock0.s;stock[BLUE].wood=s.stock0.w;}
   if(s.stock1){stock[RED].food=s.stock1.f;stock[RED].gold=s.stock1.g;stock[RED].stone=s.stock1.s;stock[RED].wood=s.stock1.w;}
   for(const rec of NET.readSnapRows(s)){ // v95: rows arrive as packed binary

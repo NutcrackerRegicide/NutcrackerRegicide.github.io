@@ -704,6 +704,7 @@ function tickBody(skipRender){
     tickBoardBang(dt); // v99: the questless "!" over the board
     if(typeof Sound!=="undefined")Sound.tick(dt); // v100: ambience bed + nearby-march driver
     campTick(dt); // creep camps: chests, steals, the three-minute clock
+    bazaarTick(dt); // v132.26 the three bazaars change hands, and pay whoever holds them
     updateTowers(dt);
     updateProjectiles(dt);
     updateEffects(dt);
@@ -765,6 +766,7 @@ function renderFrame(dt){
     return;
   }
   const p=player.root.position;
+  if(typeof bazaarDraw==="function")bazaarDraw(); // v132.26 pure render state, host and guest alike
   if(typeof setGarrisonView==="function")setGarrisonView(player.garrison||null); // see 03-buildings.js
   if(siegeAim){ // THE SKILL SHOT: rise above the engine, mark the fall of the stone
     const fx=-Math.sin(camYaw),fz=-Math.cos(camYaw);
