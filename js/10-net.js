@@ -24,7 +24,10 @@ var NET={
   // v132.9 29 -> 30: the Viking road's bow was reversed. The spine moved, so its clearance corridor
   // moved, so the trees moved; and the two team bazaars are defined ON the spine, so they moved too
   // and took their own clearance with them. Every node index downstream is different.
-  PROTO:30,             // bumped whenever the wire format changes OR the generated world does.
+  PROTO:31,             // v132.24 stage 5: 69 non-wood nodes where there were 56, and nodes[] is
+                        // indexed POSITIONALLY on the wire, so every index after the first change
+                        // means something different. A bump costs one line; a silent desync costs
+                        // a match.             // bumped whenever the wire format changes OR the generated world does.
                         // v127: 25 → 26. The envelope (stock0/stock1/carry/ares) went from
                         // "every snapshot" to "when it changes, plus the 1Hz keyframe". A v126
                         // guest reads s.stock0.f with no guard, so an absent field would write

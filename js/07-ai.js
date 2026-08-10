@@ -584,8 +584,19 @@ function engageNearest(u,dt,leash){
 // LANE_TURNIN of the objective's x, then it turns in and commits. Armies converge on a base
 // from the north field, the south field and the map perimeter instead of one funnel.
 // The lanes ROTATE, so a defender can't learn one axis and camp it.
-const LANE_Z=[0,46,-46,88,-88];  // road · near flanks · deep perimeter (MAP.z half-extent is 125,
-                                 // and the creep pockets all sit BEYOND 117 — 88 stays clear of them)
+// v132.24 THE LANES BELIEVED IN THE OLD MAP, and the comment that used to stand here said so out
+// loud: "MAP.z half-extent is 125, and the creep pockets all sit BEYOND 117 — 88 stays clear of
+// them". MAP.z is 152 now, and stage 4 put three creep camps in the OPEN INTERIOR, which is exactly
+// the ground a flanking lane is for. A band on lane 88 carries a +-9 jitter from assignLane, so it
+// runs 79..97 — and the camp pair at (+-65, 77) has r 11 and an aggro ring reaching z 85.5. Every
+// wide band was marching into wolves.
+//   0      the King's Road, unchanged
+//   +-48   the near flanks. 39..57 with jitter, against an aggro ring reaching 63.5 — 6.5 clear.
+//   +-106  the deep perimeter. 97..115, against 85.5 — 11.5 clear. It is 0.70 of the half-extent
+//          where 88 was 0.58, so the raid finally uses the depth stage 1 added, and the deep lane
+//          runs past the Viking bazaars — a raid on that flank now threatens the new economy.
+// LANE_EDGE (MAP.z-10 = 142) still clamps everything short of the border fringe.
+const LANE_Z=[0,48,-48,106,-106];
 const LANE_TURNIN=62;            // inside this much x of the objective, stop sweeping and drive in
 const LANE_EDGE=MAP.z-10;        // never steer into the border fringe
 function laneFor(u){
@@ -604,7 +615,10 @@ function laneTarget(u,tx,tz){ // where this unit should be heading RIGHT NOW to 
 }
 function assignLane(D,bd){ // deal the next lane; the two armies start on opposite hands
   D._laneN=(D._laneN||0)+1;
-  const order=(D.team===BLUE)?[46,-46,88,0,-88]:[-46,46,-88,0,88];
+  // v132.24 in step with LANE_Z above — this list is the DEALING ORDER and a stale copy of it deals
+  // lanes that no longer exist, which is a silent no-op rather than an error (bd.laneZ would just be
+  // a z nobody clears).
+  const order=(D.team===BLUE)?[48,-48,106,0,-106]:[-48,48,-106,0,106];
   const base=order[D._laneN%order.length];
   bd.laneZ=base?base+((bd.id%7)-3)*3:0; // jitter the flanks so two bands never stack; the road stays the road
   bd.laneUntil=T+45+(bd.id%5)*9;

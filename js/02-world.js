@@ -397,24 +397,76 @@ function makeNode(type,x,z,amount){
   const node={type,x,z,y:ny,amount:amount||(type==="food"?950:850),mesh:g,r:2.2};
   nodes.push(node); return node;
 }
+// ==================== v132.24 STAGE 5: THE NODES MEET THE MAP THEY ARE STANDING ON ====================
+// Sited by tools/nodeplan.js, which validates every coordinate below against the LIVE world — both
+// road spines, the nine camps, the three bazaar plazas, the ponds, walkable() and the terrain's own
+// slope — and surveyed by tools/mapsurvey.js, which is what found the four problems:
+//
+//   THE DEEP HALF HAD NO ECONOMY. Every pile sat in the band z = -60..+60. Stage 1 made the map
+//   21.6% deeper and stages 2-3 ran a second road system through the half that gained the depth, so
+//   the team bazaars at (+-128, -104) stood FIFTY units from the nearest thing worth mining.
+//
+//   SEVEN PILES WERE ON THE KING'S ROAD, one of them 1.5 from the spine of a road 11.8 wide.
+//
+//   THE CENTRE PRIZE WAS THE ONE UNMIRRORED THING ON THE MAP — nine piles scattered at random in a
+//   +-15 by +-20 box. This seed put four on blue's side and five on red's: 950 food and 900 gold of
+//   permanent asymmetry, straddling the road the Grand Bazaar moved away from in stage 2.
+//
+//   AND A GOLD CLUSTER SAT ON THE THRONE. (155,-10) is 14.5 from a town centre whose r is 11, and
+//   these piles jitter +-4 in each axis, so the worst draw puts gold 8.8 from the throne's centre —
+//   inside the building. This seed's nearest landed at 17.8, which is luck: ANY edit to this
+//   function re-rolls every jitter after it, so today's safe draw is not preserved by leaving a
+//   coordinate alone.
+//
+// THE BUDGET IS +31% FOOD, +31% GOLD, +27% STONE against a map that grew 26% and an economy that
+// did not — resource DENSITY had fallen 21%. All of the growth is deep and contested; nothing
+// inside anybody's safe radius moves except off the road and off the throne.
+// BLUE AND RED ARE IDENTICAL TO THE UNIT: 9220 food / 6600 gold / 1200 stone each, plus 1900 / 900 /
+// 1800 on the axis. tools/nodeplan.js asserts that rather than trusting the arithmetic here.
 (function placeNodes(){
   for(const side of [-1,1]){
     // base clusters
     for(const [bx,bz] of [[140,-38],[148,32],[125,-58]])
       for(let i=0;i<3;i++)makeNode("food",side*bx+(Math.random()-0.5)*8,bz+(Math.random()-0.5)*8,380);
-    for(const [gx,gz] of [[135,52],[155,-10]])
+    // v132.24 (155,-10) -> (168,-44): off the throne, and it could not simply step outward — the
+    // corridor beside a throne is narrow now, with the King's Road leaving at z~+6 and the Viking
+    // branch leaving toward -36, and (159,-13) measured 8.0 from the Viking spine, i.e. inside a
+    // road. Out past the branch instead: 44.6 from the throne, 15.0 from the Viking spine, the same
+    // distance band as the base FOOD cluster at (140,-38).
+    for(const [gx,gz] of [[135,52],[168,-44]])
       for(let i=0;i<3;i++)makeNode("gold",side*gx+(Math.random()-0.5)*8,gz+(Math.random()-0.5)*8,300);
     // forward (contested) clusters
     for(let i=0;i<3;i++)makeNode("food",side*(65+Math.random()*20),40+(Math.random()-0.5)*27,650);
     for(let i=0;i<3;i++)makeNode("gold",side*(70+Math.random()*20),-42+(Math.random()-0.5)*25,600);
+    // v132.24 THE VIKING ROAD'S HINTERLAND. Offset ~17 from the branch spine, which is the offset
+    // the team bazaar itself uses (vikingOffset(team,0.42,18)), so the road reads as a road with
+    // things along it rather than a line drawn across empty grass. x-mirrored, NOT 180-degree,
+    // because BOTH branches run into the -z half: a 180-degree copy of a Viking-road cluster lands
+    // in the +z half where that team has no Viking road at all. The convention belongs to the thing
+    // being served, and this world carries both.
+    for(let i=0;i<2;i++)makeNode("gold",side*148+(Math.random()-0.5)*10,-79+(Math.random()-0.5)*10,600);
+    for(let i=0;i<2;i++)makeNode("food",side*102+(Math.random()-0.5)*10,-127+(Math.random()-0.5)*10,650);
+    // v132.24 the southern flank, past the camp pair at (+-65, 77): 28.1 clear of the nearest edge
+    makeNode("food",side*95,102,650);
+    // v132.24 THE GRAND BAZAAR'S RING — this is the old centre prize, same nine piles and the same
+    // amounts, mirrored and moved north of the road to the market it belongs to.
+    makeNode("gold",side*22,58,900); makeNode("gold",side*44,42,900);
+    makeNode("food",side*30,24,950); makeNode("food",side*52,30,950);
   }
-  // STONE: a scarce critical mineral — exactly 5 piles on the whole map
-  makeNode("stone",-148,12,500); makeNode("stone",148,-12,500);   // one near each team
-  makeNode("stone",-88,-18,700); makeNode("stone",88,18,700);     // midpoints
+  // STONE: a scarce critical mineral — SIX piles on the whole map (was five). All but the deep one
+  // keep stone's own 180-degree mirror, which is the convention it has always used.
+  makeNode("stone",-148,26,500); makeNode("stone",148,-26,500);   // one near each team, off the road
+  makeNode("stone",-88,-32,700); makeNode("stone",88,32,700);     // midpoints, off the road
   makeNode("stone",0,-30,900);                                    // center (clear of the bazaar)
-  // center prize
-  for(let i=0;i<4;i++)makeNode("gold",(Math.random()-0.5)*30,(Math.random()-0.5)*40,900);
-  for(let i=0;i<5;i++)makeNode("food",(Math.random()-0.5)*35,(Math.random()-0.5)*45,950);
+  // v132.24 THE SIXTH PILE, and it is deep on purpose. Five was a scarcity statement made when the
+  // map was 26% smaller and had one road; the deep half now has a road, two bazaars and a prize
+  // corridor and had no stone at all. Stone gates walls, towers and castles, so the fortification
+  // resource being the one you march for is the right pressure. 12 clear of the bay camp's edge —
+  // beside the boss, not behind it.
+  makeNode("stone",0,-132,900);
+  // the axis prizes: equidistant from both thrones by construction
+  makeNode("food",0,66,950);                                      // behind the Grand Bazaar
+  makeNode("gold",0,-120,900); makeNode("food",0,-104,950);       // the bay prize
 })();
 
 // ================= WHERE THE GROUND ACTUALLY IS, WHICH IS NOT WHERE terrainHeight() SAYS =================
@@ -1321,12 +1373,34 @@ const TREE_STANDS=[];
     for(const C of CREEP_SITES)if(_d2(x,z,C.x,C.z)<(C.r+4)*(C.r+4))return false;
     for(const m of neutralMarkets)if(_d2(x,z,m.x,m.z)<TREE_CLEAR_BAZAAR*TREE_CLEAR_BAZAAR)return false;
     for(const n of nodes)if(n.type!=="wood"&&_d2(x,z,n.x,n.z)<TREE_CLEAR_NODE*TREE_CLEAR_NODE)return false;
+    // v132.24 …AND THE PONDS, which this has never tested. tools/mapsurvey.js found five trees
+    // standing in water, one of them 3.3 units inside the edge. foliageClear() has tested the ponds
+    // since v131.30 unified every foliage layer onto one predicate — but the FOREST is not a
+    // foliage layer and was never put on it, so the one thing on the map with a trunk kept growing
+    // in the water. p[2]+3.5 rather than foliageClear's +2.4 because a tree is a wider object than
+    // a fern and its contact shadow reaches further.
+    for(const p of PONDS){const dx=x-p[0],dz=z-p[1],rr=p[2]+3.5;if(dx*dx+dz*dz<rr*rr)return false;}
     return true;
   };
   // Every stand is placed ONCE and mirrored through the map's centre, (x,z) -> (-x,-z) — the same
   // 180° symmetry the two thrones sit on, so neither team can ever draw the better wood.
   const stand=(x,z,r)=>{TREE_STANDS.push({x,z,r},{x:-x,z:-z,r});};
-  stand(148,48,31); stand(122,-58,28);   // THE HOME WOODS: timber inside every team's reach
+  // THE HOME WOODS: timber inside every team's reach.
+  // v132.24 FOUR CALLS, NOT TWO, AND THE SECOND PAIR IS A FAIRNESS FIX WITH A NUMBER ON IT. Wood
+  // nodes within 60 of a throne measured BLUE 1, RED 12. Both the woods and the nodes are mirrored
+  // — through DIFFERENT MIRRORS. stand() uses the trees' 180-degree convention, (x,z)->(-x,-z);
+  // placeNodes uses the roads' x-mirror, (x,z)->(-x,z). Each is fair on its own. Their INTERACTION
+  // is not: clearOf() above deletes trees within TREE_CLEAR_NODE of every non-wood node, so red's
+  // base food cluster lands inside red's home wood and eats it while blue's lands 86 units from
+  // blue's. Neither list is wrong; the pair is.
+  // The answer is not a new convention — it is the trick v132.12 already used for the camp
+  // thickets. stand(148,48) and stand(148,-48) together yield all four of (+-148, +-48), a set
+  // closed under BOTH mirrors, and then it does not matter which one the nodes use. No node moves
+  // for it and no forest is re-rolled by a convention change.
+  // THE CAP BELOW IS STILL 24, so these four displace four wild stands rather than adding coverage,
+  // and the meadows stay exactly where v132.0 measured them.
+  stand(148,48,31);  stand(148,-48,31);
+  stand(122,-58,28); stand(122,58,28);
   // three stands sit deliberately ON the v113 flanking lanes (07-ai's LANE_Z = 0, ±46, ±88 — keep
   // these in step if those move), so a band that swings wide moves through real cover
   stand(64,46,30); stand(120,88,26); stand(18,-88,29);
@@ -1357,7 +1431,20 @@ const TREE_STANDS=[];
   // Raising the radii instead was tried and is worse (17/19/12 of 127): bigger discs at the same
   // count is simply more coverage. Gap SIZE is a function of stand COUNT at fixed coverage, so the
   // count is the lever. 24 lets the clash test settle back around the 22 the old map carried.
-  while(TREE_STANDS.length<24&&guard++<6000){
+  // v132.24 24 -> 26, AND IT IS NOT A CHANGE OF MIND ABOUT THE PARAGRAPH ABOVE. This cap counts
+  // HAND stands and WILD stands together, and stage 5 added four hand entries — the two extra home
+  // woods that close (+-148, +-48) and (+-122, +-58) under both mirrors — so at 24 the WILD count
+  // fell from 8 to 4 and took the forest with it. Swept, not guessed (tools/_standcap.js):
+  //     cap 24  522 trees      cap 26  573      cap 28  681      cap 30  700
+  // against 612 before stage 5. The remainder of the loss is the thirteen new resource clusters,
+  // each of which clears trees under clearOf(), and THAT part is correct and stays: a clearing
+  // around a resource cluster is what a resource cluster looks like.
+  // 26 lands the tree count within 6% of where it was and leaves the meadow probe at 41-46/127
+  // clear against 28/127 before — more open country than the map had, which is what thirteen new
+  // clearings buy. (That probe drifts a few counts run to run: it fires late in the smoketest,
+  // after that run's own buildings are standing.) 28 would overshoot the most wood this map has
+  // ever carried.
+  while(TREE_STANDS.length<26&&guard++<6000){
     const x=6+Math.random()*(MAP.x-36), z=(Math.random()*2-1)*(MAP.z-28), r=23+Math.random()*21;
     if(!clearOf(x,z))continue;
     let clash=false;
