@@ -264,7 +264,10 @@ function bazaarTick(dt){
     const whole=Math.floor(_bazAcc[t]+1e-9);
     if(whole>0){
       _bazAcc[t]-=whole;
-      stock[t].food+=whole; stock[t].gold+=whole; stock[t].stone+=whole; stock[t].wood+=whole;
+      // v132.27 FOOD, GOLD AND TIMBER — NOT STONE. See BAZ_YIELD_RES in 00-data.js: stone is the
+      // one resource whose scarcity is a stated design rule and a smoketest assertion, and a tap
+      // that pays it for standing still cancels both.
+      for(const r of BAZ_YIELD_RES)stock[t][r]+=whole;
       if(t===MYTEAM&&typeof updateResHud==="function")updateResHud();
     }
   }
@@ -276,7 +279,7 @@ function bazaarTaken(m,team,was){
   const mine=(team===MYTEAM);
   if(typeof msg==="function")
     msg((mine?"You take ":"The enemy takes ")+who+"! "+
-        (mine?("+"+bazaarYield(team)+" of every resource a second."):""),mine?"blue":"warn");
+        (mine?("+"+bazaarYield(team)+" food, gold and timber a second."):""),mine?"blue":"warn");
   if(typeof Sound!=="undefined")try{Sound.play(mine?"ui_confirm":"ui_open",{x:m.x,z:m.z});}catch(_){}
   if(typeof puff==="function")try{puff(m.x,4.5,m.z,TEAMCOL[team],2.4,1.1);}catch(_){}
 }

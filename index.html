@@ -87,8 +87,10 @@ if("serviceWorker" in navigator && location.protocol.startsWith("http")){
   <span class="res"><span class="dot wood"></span><span id="rwood">0</span></span>
   <!-- v132.26 THE BAZAAR INCOME. Hidden until there is one: a chip that always reads +0 teaches
        the eye to stop looking at that corner, and this is the one number that tells you the
-       objective is paying. It counts EVERY resource — +3 means +3 food AND +3 gold AND +3 stone
-       AND +3 wood a second — so it sits after the four it applies to rather than among them. -->
+       objective is paying.
+       v132.27 it is per-resource and it is THREE resources — +2 means +2 food AND +2 gold AND +2
+       timber a second, and no stone. Stone stays scarce, which is why the chip sits after the four
+       counters rather than among them: it does not apply to all of them. -->
   <span class="res" id="bazyield" style="display:none;border-left:1px solid rgba(255,255,255,.22);padding-left:9px;margin-left:3px">🏛&nbsp;<span id="rbaz">+0</span><span style="opacity:.62">/s</span></span>
 </div>
 <div id="roster" class="panel"></div>
@@ -190,7 +192,7 @@ if("serviceWorker" in navigator && location.protocol.startsWith("http")){
   </div>
   <div id="whoami">You fight as <b id="myname">—</b>
     <button id="btnrename" class="renamebtn" type="button" title="change your name">✎</button></div>
-  <p class="verstamp">v132.26 — THE BAZAAR WAR</p>
+  <p class="verstamp">v132.27 — THE TRICKLE COMES DOWN</p>
 </div>
 
 <!-- ====================== SCREEN 3 — HOST, JOIN, THE HALL =======================

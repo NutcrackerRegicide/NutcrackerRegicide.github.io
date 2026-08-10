@@ -28,7 +28,7 @@
    If this ever misbehaves, unregistering it in devtools returns the site to plain HTTP loading —
    nothing in the game depends on it being there.                                              */
 
-const VERSION="v132.26";
+const VERSION="v132.27";
 const CACHE="regicide-"+VERSION;
 
 // The shell: enough to boot and show something. Deliberately NOT the whole 29 MB — a first visit

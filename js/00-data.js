@@ -1013,16 +1013,29 @@ const neutralMarkets=[]; // populated by world gen: {x,z,grand,plaza,owner,cap,c
 // stand outside of and the small ones easier to hold. Each bazaar is captured from its own square.
 const BAZ_CAP_T=12;      // seconds of uncontested presence to flip one
 const BAZ_CAP_R=1.5;     // …standing this far outside the plinth still counts as being on the square
-const BAZ_YIELD_SIDE=1, BAZ_YIELD_GRAND=3, BAZ_YIELD_ALL=8;
-// THE SWEEP IS WORTH MORE THAN THE SUM. 1 + 1 + 3 is 5; holding every bazaar on the map pays 8.
-// Worth keeping in view when tuning: +8 of EVERY resource per second is 32 a second, and a villager
-// gathers well under one — so the sweep is worth something like thirty villagers. That is the point
-// of an objective that requires controlling the whole map, and it is why this is one constant.
+// v132.27 KEYED ON THE COUNT, NOT ON WHICH ONES. John: "the bazaar trickle rates feel way
+// overtuned — hold 1 bazaar 1 wood, food, gold per second; hold 2, 2; hold all 3, 4."
+// v132.26 paid per bazaar and weighted the Grand (side 1, Grand 3, all three 8). This is indexed by
+// how many you hold and nothing else, so a swept map pays 12 resources a second where it paid 32.
+// THE GRAND NO LONGER PAYS MORE THAN EITHER OF THE OTHERS, and that is a design change rather than
+// a number: it is still the bigger building, still at the middle of the map and still the hardest
+// of the three to hold, and it is now worth exactly what the pair on the Viking roads are worth.
+// If it should keep a premium, this array is the place to say so.
+// STILL SUPERLINEAR, which is the part worth keeping: 1 / 2 / 4 DOUBLES at the sweep rather than
+// adding a third, so taking the last bazaar is worth more than taking the second. An objective that
+// pays linearly in how much of it you hold is one nobody contests the last of.
+const BAZ_YIELD_BY_HELD=[0,1,2,4];
+// AND STONE IS NOT IN IT. "Stone needs to remain scarce" (John) is a rule this file already states
+// about the map — placeNodes calls it "a scarce critical mineral" and tools/smoketest.js asserts
+// there are exactly six piles on the whole map, one of them deep on the axis so that somebody has
+// to march for it. A tap that pays stone for standing still is that rule cancelled: at v132.26's
+// +8 a swept map paid 480 stone a minute against 4,200 on the entire map. Food, gold and timber.
+const BAZ_YIELD_RES=["food","gold","wood"];
 function bazaarYield(team){
   if(!neutralMarkets.length)return 0;
-  let held=0,y=0;
-  for(const m of neutralMarkets)if(m.owner===team){held++;y+=m.grand?BAZ_YIELD_GRAND:BAZ_YIELD_SIDE;}
-  return (held===neutralMarkets.length)?BAZ_YIELD_ALL:y;
+  let held=0;
+  for(const m of neutralMarkets)if(m.owner===team)held++;
+  return BAZ_YIELD_BY_HELD[Math.min(held,BAZ_YIELD_BY_HELD.length-1)]||0;
 }
 // ==================== v132.1 THE TWO ROUTES, AND THE ONE LIST OF BAZAAR SITES ====================
 // These live in 00-data rather than 02-world for one reason: 01-engine's terrainHeight() has to
