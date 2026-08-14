@@ -119,6 +119,7 @@ function collectCampChest(st,e,slotB){
 }
 function campNewWave(st){ // fresh fangs: roll the pack anew
   st.waiting=false;
+  st.part=null; // v132.28: a new pack, a new list — nobody carries credit across waves
   if(st.boss){ // THE RAID LANDS: the chieftain and all ten raiders storm ashore
     for(let k=0;k<st.creeps.length;k++){
       const u=st.creeps[k], post=u.bot.post;
@@ -174,6 +175,7 @@ function campTick(dt){ // host/solo only — guests watch it all arrive by snaps
     let alive=0; for(const c of st.creeps)if(c.alive)alive++;
     if(alive===0){ // pack wiped: drop the loot, start the clock
       st.waiting=true; st.respawnAt=T+(st.boss?BOSS_RESPAWN:CAMP_RESPAWN);
+      campPayParticipants(st); // v132.28: XP to everyone who fought it, before the loot lands
       if(st.boss){ // the raid is broken: TWIN chests — 500 food and 500 gold
         spawnCampChest(st,"food",false);
         spawnCampChest(st,"gold",true);
@@ -182,6 +184,37 @@ function campTick(dt){ // host/solo only — guests watch it all arrive by snaps
         if(typeof NET!=="undefined"&&NET.mode==="host")NET.bcast({t:"note",m,tone:"gold"});
       }else spawnCampChest(st,st.kind==="wolf"?"food":"gold",false);
     }
+  }
+}
+// v132.28 THE RECKONING. Called once, on the frame the last creep falls. Pays every human who
+// put damage into the pack: 1 for a wild camp, CAMP_XP_BOSS for the Viking raid — as BOTH XP and
+// levels (John's ruling), matching what a finished quest pays. Level clamps at XP_MAX_LVL, XP
+// does not. Note the raid pays 15 of a 25 cap, so two raids close a player's Town Board for the
+// rest of that life — questPick refuses at the cap (09-main.js).
+const CAMP_XP=1, CAMP_XP_BOSS=15;
+function campPayParticipants(st){
+  const list=st.part; st.part=null;
+  if(!list||!list.length)return;
+  const gain=st.boss?CAMP_XP_BOSS:CAMP_XP;
+  for(const u of list){
+    if(!u||!u.alive)continue;                       // a corpse holds no XP — death already took it
+    if(typeof isHuman!=="function"||!isHuman(u))continue;
+    // v132.28.1 (John): participation advances the player exactly as a finished quest does —
+    // XP *and* level. Level clamps at the cap the same way completeQuest clamps it; XP does not
+    // clamp, because it is a spendable currency and an uncapped XP faucet is what keeps the forge
+    // reachable once the level cap is reached.
+    u.xp=(u.xp||0)+gain;
+    const _lv0=u.lvl||0;
+    u.lvl=Math.min(XP_MAX_LVL,_lv0+gain);
+    const _got=u.lvl-_lv0;                    // report what was ACTUALLY gained, not the nominal award
+    if(typeof questNotify==="function")
+      questNotify(u,(st.boss?"⚑ THE RAID IS BROKEN":"⚑ CAMP CLEARED")+" — +"+_got+" level"+
+        (_got===1?"":"s")+" & +"+gain+" XP for your part in it. Spend the XP at the Blacksmith."+
+        (u.lvl>=XP_MAX_LVL&&_got>0?" You are at the LEVEL CAP — the Town Board has no more work for you this life.":""),"gold");
+    if(typeof questProgress==="function")questProgress(u,"camp_wipe"); // CAMP BREAKER, for every participant
+    if(typeof syncQuest==="function")syncQuest(u);
+    if(typeof syncBuffs==="function")syncBuffs(u);
+    if(u.isPlayer&&typeof updateQuestHud==="function")updateQuestHud();
   }
 }
 // creep brain: guard the camp, savage intruders, never step past the pocket's edge

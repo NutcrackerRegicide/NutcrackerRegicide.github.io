@@ -5,6 +5,109 @@ function puff(x,y,z,color,scale,life){
   s.position.set(x,y,z); const sc=scale||0.7; s.scale.set(sc,sc,1); scene.add(s);
   effects.push({s,t:life||0.35});
 }
+// ---------- v132.29 THE LEVEL AURA ----------
+// One pooled Points for every mote in the game. Lazily built, so nothing here is constructed
+// inside the seeded world-gen window (invariant #2 — a uuid costs four randoms).
+let _auraPts=null,_auraGeo=null,_auraPos=null,_auraCol=null,_auraMat=null;
+let _auraLife=null,_auraVel=null,_auraNext=0,_auraLive=0,_auraBase=null;
+function _auraDot(){ // a soft radial dot, built as raw bytes — canvas is stubbed in the harness
+  const N=16,data=new Uint8Array(N*N*4);
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    const dx=(x+0.5)/N-0.5, dy=(y+0.5)/N-0.5;
+    const r=Math.sqrt(dx*dx+dy*dy)*2;
+    const a=Math.max(0,1-r); const v=Math.round(255*a*a); // squared falloff: a soft core, no rim
+    const i=(y*N+x)*4; data[i]=255;data[i+1]=255;data[i+2]=255;data[i+3]=v;
+  }
+  const t=new THREE.DataTexture(data,N,N,THREE.RGBAFormat);
+  t.needsUpdate=true; return t;
+}
+function auraInit(){
+  if(_auraPts)return;
+  _auraPos=new Float32Array(AURA_MAX*3);
+  _auraCol=new Float32Array(AURA_MAX*3);
+  _auraBase=new Float32Array(AURA_MAX*3);   // the mote's OWN colour, never scaled — see auraTick
+  _auraLife=new Float32Array(AURA_MAX);
+  _auraVel=new Float32Array(AURA_MAX*3);
+  _auraGeo=new THREE.BufferGeometry();
+  _auraGeo.setAttribute("position",new THREE.BufferAttribute(_auraPos,3));
+  _auraGeo.setAttribute("color",new THREE.BufferAttribute(_auraCol,3));
+  _auraMat=new THREE.PointsMaterial({size:AURA_SIZE,sizeAttenuation:false,vertexColors:true,
+    transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,map:_auraDot()});
+  _auraPts=new THREE.Points(_auraGeo,_auraMat);
+  _auraPts.frustumCulled=false;   // the pool spans the map; culling it as one blob would pop
+  _auraPts.renderOrder=3;
+  scene.add(_auraPts);
+}
+function auraEmit(x,y,z,r,g,b){
+  auraInit();
+  // claim the next slot round-robin. A full pool overwrites the OLDEST mote, which is the one
+  // closest to fading anyway — so the ceiling degrades gracefully instead of dropping new work.
+  const i=_auraNext; _auraNext=(_auraNext+1)%AURA_MAX;
+  if(_auraLife[i]<=0)_auraLive++;
+  const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*AURA_R;
+  _auraPos[i*3]=x+Math.cos(a)*rr; _auraPos[i*3+1]=y+Math.random()*0.5; _auraPos[i*3+2]=z+Math.sin(a)*rr;
+  _auraVel[i*3]=(Math.random()-0.5)*0.35;
+  _auraVel[i*3+1]=AURA_RISE*(0.75+Math.random()*0.5);
+  _auraVel[i*3+2]=(Math.random()-0.5)*0.35;
+  _auraBase[i*3]=r; _auraBase[i*3+1]=g; _auraBase[i*3+2]=b;
+  _auraCol[i*3]=r; _auraCol[i*3+1]=g; _auraCol[i*3+2]=b;
+  _auraLife[i]=AURA_LIFE;
+}
+function auraTint(u,out){ // team colour at level 1 → gold at the cap
+  const t=Math.max(0,Math.min(1,(u.lvl||0)/XP_MAX_LVL));
+  const ease=t*t;                         // hold the team read low, let gold arrive late
+  const tc=(typeof TEAMCOL!=="undefined"&&TEAMCOL[u.team]!==undefined)?TEAMCOL[u.team]:0xffffff;
+  const r0=((tc>>16)&255)/255, g0=((tc>>8)&255)/255, b0=(tc&255)/255;
+  const r1=((AURA_GOLD>>16)&255)/255, g1=((AURA_GOLD>>8)&255)/255, b1=(AURA_GOLD&255)/255;
+  const k=0.55+ease*(AURA_HOT-0.55);      // dim at level 1, driven past 1.0 at the cap for bloom
+  out[0]=(r0+(r1-r0)*ease)*k; out[1]=(g0+(g1-g0)*ease)*k; out[2]=(b0+(b1-b0)*ease)*k;
+  return t;
+}
+const _auraRGB=[0,0,0];
+function auraTick(dt){
+  // ---- advance and fade what is already in the air ----
+  if(_auraPts){
+    for(let i=0;i<AURA_MAX;i++){
+      if(_auraLife[i]<=0)continue;
+      _auraLife[i]-=dt;
+      if(_auraLife[i]<=0){ _auraCol[i*3]=0;_auraCol[i*3+1]=0;_auraCol[i*3+2]=0; _auraLive--; continue; }
+      _auraPos[i*3]+=_auraVel[i*3]*dt;
+      _auraPos[i*3+1]+=_auraVel[i*3+1]*dt;
+      _auraPos[i*3+2]+=_auraVel[i*3+2]*dt;
+      // FADE FROM THE STORED BASE, never by compounding the live colour. Multiplying the
+      // current colour each tick decays it geometrically: a mote was down to a third of its
+      // brightness within half a second, so at any instant only the five or six youngest motes
+      // read at all and a 34/sec emitter photographed as a handful of sparks. Powers below 1
+      // HOLD the mote near full brightness for most of its life, then drop it quickly.
+      const f=Math.pow(_auraLife[i]/AURA_LIFE,0.55);
+      _auraCol[i*3]=_auraBase[i*3]*f;
+      _auraCol[i*3+1]=_auraBase[i*3+1]*f;
+      _auraCol[i*3+2]=_auraBase[i*3+2]*f;
+    }
+    _auraGeo.attributes.position.needsUpdate=true;
+    _auraGeo.attributes.color.needsUpdate=true;
+  }
+  // ---- emit ----
+  if(typeof camera==="undefined"||!camera)return;
+  const cx=camera.position.x, cz=camera.position.z;
+  for(const u of units){
+    if(!u.alive||!isHuman(u)||!(u.lvl>0))continue;
+    // RANGE (John, per the v125 scouting precedent): full strength close, gone by AURA_FAR.
+    const d=Math.hypot(u.root.position.x-cx,u.root.position.z-cz);
+    if(d>=AURA_FAR){u._auraAcc=0;continue;}
+    const near=d<=AURA_NEAR?1:(AURA_FAR-d)/(AURA_FAR-AURA_NEAR);
+    const t=auraTint(u,_auraRGB);
+    const rate=(AURA_RATE_LO+(AURA_RATE_HI-AURA_RATE_LO)*t)*near;
+    u._auraAcc=(u._auraAcc||0)+rate*dt;
+    let n=Math.floor(u._auraAcc); if(n<=0)continue;
+    if(n>6)n=6;                            // one unit cannot monopolise the pool in a long frame
+    u._auraAcc-=n;
+    for(let k=0;k<n;k++)
+      auraEmit(u.root.position.x,u.root.position.y+0.35,u.root.position.z,_auraRGB[0],_auraRGB[1],_auraRGB[2]);
+  }
+}
+function auraStats(){return{live:_auraLive,max:AURA_MAX,built:!!_auraPts,
+  geo:_auraGeo,mat:_auraMat,pts:_auraPts};}
 function cannonPlume(f,mx,my,mz){ // the gun speaks: a flash and a modest roll of smoke
   const dx=Math.sin(f),dz=Math.cos(f);
   puff(mx,my,mz,0xffe9a8,0.9,0.14); // the muzzle flash
@@ -186,6 +289,10 @@ function updateProjectiles(dt){
   }
 }
 function updateEffects(dt){
+  // v132.29: the level aura rides here because BOTH frame paths provably call updateEffects —
+  // tickBody (09-main.js) and NET.guestFrame (10-net.js:2133). Putting it in tickBody alone is
+  // trap #12, the v128.8 ribbon a guest could never clear.
+  auraTick(dt);
   for(let i=effects.length-1;i>=0;i--){
     const e=effects[i]; e.t-=dt;
     e.s.scale.multiplyScalar(1+dt*4); e.s.material.opacity=Math.max(0,e.t*2.5);
@@ -226,11 +333,14 @@ function bazaarTick(dt){
   if(typeof neutralMarkets==="undefined"||!neutralMarkets.length)return;
   for(const m of neutralMarkets){
     const R=(m.plaza||9)+BAZ_CAP_R, R2=R*R;
-    let n0=0,n1=0;
+    let n0=0,n1=0; const h0=[],h1=[]; // v132.28: h0/h1 are the HUMANS in the plaza this tick —
+    // the loop counted heads and threw the names away, so a capture knew its team but not its
+    // captors. Only populated for the Grand Bazaar, which is the only one a quest asks about.
     for(const u of units){
       if(!u.alive||u.team===NEUTRAL||u.garrison)continue;
       if(dist2(u.root.position.x,u.root.position.z,m.x,m.z)>R2)continue;
-      if(u.team===BLUE)n0++; else n1++;
+      if(u.team===BLUE){n0++; if(m.grand&&isHuman(u))h0.push(u);}
+      else{n1++; if(m.grand&&isHuman(u))h1.push(u);}
     }
     if(n0&&n1)continue;                                  // contested: frozen
     if(!n0&&!n1)continue;                                // empty: frozen, no decay
@@ -247,6 +357,11 @@ function bazaarTick(dt){
     if(m.cap>=1){
       const was=m.owner;
       m.owner=T0; m.cap=0; m.capTeam=-1;
+      // v132.28 LORD OF THE CROSSROADS: everyone of the taking team standing in the Grand
+      // Bazaar's plaza on the frame it flips. Standing there IS the capture, so presence at
+      // the flip is the whole of the deed.
+      if(m.grand&&typeof questProgress==="function")
+        for(const _u of (T0===BLUE?h0:h1))questProgress(_u,"cap_grand");
       bazaarTaken(m,T0,was);
     }
   }
@@ -370,6 +485,16 @@ function dealDamage(att,victim,dmg){
   if(victim.bot&&victim.bot.camp&&att&&!att.def&&att.team!==undefined&&att.team!==NEUTRAL){
     victim.bot.camp.wake=T+CAMP_WAKE;
     victim.bot.camp.threat=att;
+    // v132.28 PARTICIPATION. Any damage to any member puts a human on the camp's list; the
+    // pack is cleared by whoever fought it, not by whoever landed the last blow. Bots are not
+    // recorded — they never quest and hold no XP (the isHuman gate is the same one questProgress
+    // uses). The list lives on the CAMP STATE, so it survives the death of any individual creep
+    // and is cleared when the next wave lands.
+    if(typeof isHuman==="function"&&isHuman(att)){
+      const _st=victim.bot.camp;
+      if(!_st.part)_st.part=[];
+      if(_st.part.indexOf(att)<0)_st.part.push(att);
+    }
   }
   // v100 SOUND — impact, keyed to the attacker: siege thud · arrow strike · melee clash.
   // (host/solo only — dealDamage returns early on guests; their impacts ride swings & deaths)
@@ -427,12 +552,15 @@ function killUnit(u,killer){
     let loot=null;
     if(u.cls==="oxcart"&&u.carry&&u.carry.wood>0){
       stock[killer.team].wood+=u.carry.wood; loot=u.carry.wood+" wood";
+      if(typeof questProgress==="function"&&isHuman(killer))questProgress(killer,"plunder_ox"); // v132.28 HIGHWAYMAN
     }else if(u.cls==="trader"&&u.tradeLoaded){ // the haul's earned value so far
       const g=Math.round(tradeGold(Math.hypot(u.root.position.x-u.tradeLoaded.x,u.root.position.z-u.tradeLoaded.z)));
-      if(g>0){stock[killer.team].gold+=g; loot=g+" gold";}
+      if(g>0){stock[killer.team].gold+=g; loot=g+" gold";
+        if(typeof questProgress==="function"&&isHuman(killer))questProgress(killer,"plunder_tr");} // v132.28 ROAD AGENT
     }else if(u.bot&&u.bot.role==="cart"&&u.tradePhase==="back"&&u.tradeTarget&&u.bot.home){
       const g=Math.round(tradeGold(Math.hypot(u.bot.home.x-u.tradeTarget.x,u.bot.home.z-u.tradeTarget.z)));
-      if(g>0){stock[killer.team].gold+=g; loot=g+" gold";}
+      if(g>0){stock[killer.team].gold+=g; loot=g+" gold";
+        if(typeof questProgress==="function"&&isHuman(killer))questProgress(killer,"plunder_tr");} // v132.28 ROAD AGENT
     }
     if(loot){
       updateResHud();
@@ -462,6 +590,10 @@ function killUnit(u,killer){
     if(u.team===NEUTRAL)questProgress(killer,"kill_creep");
     else if(u.cls==="villager")questProgress(killer,"kill_vil");
     else if(!u.isKing&&MIL_LINES.includes(CLS[u.cls].line))questProgress(killer,"kill_mil");
+    // v132.28 HORSEBANE: the spear line cutting down a horseman. "anticav" is the same line key
+    // rps() reads for the 3.8x counter (00-data.js:351), so the quest and the bonus agree.
+    if(CLS[killer.cls]&&CLS[killer.cls].line==="anticav"&&CLS[u.cls]&&CLS[u.cls].mounted)
+      questProgress(killer,"counter_cav");
   }
   // v109 THE VOICES: kill-streak bloodlust — a human's 3rd quick kill (8s window) draws a growl, self-heard
   if(killer&&!killer.def&&isHuman(killer)&&killer.team!==u.team&&typeof Sound!=="undefined"){
@@ -484,9 +616,15 @@ function killUnit(u,killer){
   if(u.isPlayer||u.remote)u.tradeLoaded=null;
   if(isHuman(u)&&typeof releaseWarband==="function"&&releaseWarband(u)) // v95: the band answers no dead horn
     msg(u.isPlayer?"Your warband returns to guard the King.":u.name+"'s warband returns to the King.","warn");
-  if(isHuman(u)&&((u.lvl||0)>0||(u.xp||0)>0||u.quest||(u.buffs&&Object.keys(u.buffs).length))){
+  // v132.28: the guard now tests EVERYTHING the wipe below clears. It used to test only
+  // lvl/xp/quest/buffs, so a fresh player holding nothing but a drawn draft — or banked rerolls,
+  // or a standing forge offer — died without losing them. The two lists must stay identical.
+  if(isHuman(u)&&((u.lvl||0)>0||(u.xp||0)>0||u.quest||(u.buffs&&Object.keys(u.buffs).length)||
+     u.questDraft||(u.qRerolls||0)>0||u.smithOffer||u._scoutOut)){
     // ---- v87 DEATH TAKES ITS DUE: level, XP, quest and every blacksmith buff ----
     u.lvl=0; u.xp=0; u.buffs={}; u.quest=null; u.questDraft=null; u.qRerolls=0; u._scoutOut=false; u.smithOffer=null; // v99: death also wipes the standing draft + banked rerolls
+    u._rrCycle=false; // v132.28.2: re-arm the reroll grant, or a player who died QUESTLESS would
+                      // carry the spent cycle into the new life and never be granted one
     if(typeof questNotify==="function"){
       questNotify(u,"💀 Death takes its due — your level, XP and blacksmith buffs are lost.","warn");
       syncQuest(u); syncBuffs(u);
@@ -497,9 +635,8 @@ function killUnit(u,killer){
   if(u.bot&&u.bot.role==="creep"){ // camp creeps: the camp manager rules their rebirth
     u.respawnT=Infinity;
     if(killer===player)msg("You slew a "+CLS[u.cls].name+"!","gold");
-    if(killer&&!killer.def&&isHuman(killer)&&u.bot.camp&&!u.bot.camp.waiting&&
-       u.bot.camp.creeps.every(c=>!c.alive)&&typeof questProgress==="function")
-      questProgress(killer,"camp_wipe"); // CAMP BREAKER: this blow felled the last of the pack
+    // v132.28: CAMP BREAKER no longer belongs to the last blow — campTick pays every
+    // participant when the pack falls (07-ai.js). One event, one rule, one place.
     return;
   }
   const involves=u.isPlayer||killer===player;
@@ -546,7 +683,12 @@ function respawnUnit(u){
   u.chargeTo=null; u.rally=false; u.rallyBy=null; // the dead answer no horn — a respawned villager forgets the band
   if(u.isPlayer){
     document.getElementById("deathoverlay").style.display="none";
-    updatePlayerHud(); msg("You respawn as a Villager. Re-arm at the Barracks.","blue");
+    updatePlayerHud();
+    // v132.28: the quest panel was never repainted on respawn, so a wiped level, quest and buff
+    // list stayed on screen — reading as if death had cost nothing — until some later quest
+    // event happened to redraw it.
+    if(typeof updateQuestHud==="function")updateQuestHud();
+    msg("You respawn as a Villager. Re-arm at the Barracks.","blue");
   }
 }
 // ---------- THE PRIEST'S MIRACLE — resurrection ----------

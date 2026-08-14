@@ -876,35 +876,72 @@ function isHuman(u){return !!(u&&(u.isPlayer||u.remote));}
 // The Town Board by each Town Center hands out random quests (E). A finished quest
 // pays +1 Level and +1 XP (the monsters pay 2). XP is the ONLY player-personal
 // currency: spend it at the Blacksmith (Iron Age) for a random stacking buff.
-// Death wipes level, XP and every buff. Max level 20. Bots never quest.
-const XP_MAX_LVL=20, BUFF_MAX_STACK=3, BOARD_REACH=5; // v99: the reroll cooldown died — the board DRAFTS three, and rerolls are banked one per level
+// Death wipes level, XP and every buff. Max level 25. Bots never quest.
+// v132.28: every quest carries an `age` — the earliest AGES index the board may post it at.
+// The board deals only from what your team's age has unlocked, so the Stone Age never offers
+// "Build a Castle". Ages: 0 Stone · 1 Bronze · 2 Iron · 3 Classical · 4 Medieval · 5 Enlightenment.
+const XP_MAX_LVL=25, BUFF_MAX_STACK=3, BOARD_REACH=5, QUEST_REROLL_MAX=3;
+// ---------- v132.29 THE LEVEL AURA — every dial in one place ----------
+// Rising motes off a levelled player: team-tinted at low level, gold at the cap. Cosmetic only,
+// never on the wire, never simulation. See tools/patch-aura.js for the reasoning.
+const AURA_MAX=320,        // mote slots for the WHOLE scene — one pooled Points, one draw call
+      AURA_NEAR=34,        // full strength within this distance of the camera
+      AURA_FAR=62,         // invisible beyond it — John: you should have to get close (v125)
+      AURA_RATE_LO=2.6,    // motes/sec at level 1
+      AURA_RATE_HI=34.0,   // motes/sec at the cap
+      AURA_LIFE=1.45,      // seconds a mote lives
+      AURA_RISE=1.55,      // units/sec it climbs
+      AURA_R=0.78,         // emission radius around the unit
+      AURA_GOLD=0xFFC64A,  // the cap colour — warm, agrees with the §2 palette
+      AURA_HOT=1.38,       // cap multiplier: just past the 0.86 bloom threshold (§4.6) and NO
+                           // further — 3.2 clipped every channel and rendered the gold as white
+      AURA_SIZE=11.0;      // SCREEN-space mote size, in pixels (sizeAttenuation is OFF).
+                           // The tuning history matters: 0.42 world-space was flatly
+                           // invisible, 0.9 was thin, and 1.3 read ONLY in extreme close-up. Sizing
+                           // for the FAR end (2.3) then blew the near end out: with the composer off
+                           // — which is every mobile player, 12-touch.js:191 — the raw discs washed
+                           // over the nutcracker faces and broke the §5 silhouette priority.
+                           // A world-space mote cannot serve both ends of a 34..62 range gate, so
+                           // it is screen-space now: a constant pixel footprint that reads at the
+                           // far edge without swallowing the unit at the near one.
+// v99: the reroll cooldown died — the board DRAFTS three and you take ONE.
+// v132.28.2: rerolls are banked ONCE PER QUEST OPPORTUNITY (start of a life, finishing a quest,
+// respawning), to a ceiling of QUEST_REROLL_MAX. The old "one per LEVEL gained" rule is retired —
+// participation now grants levels, and that rule would have paid 15 rerolls for one Viking raid.
 const RALLY_CAP=5; // v89: G rallies your five NEAREST soldiers — the Bannerman buff adds one per stack
-const QUESTS=[ // {id,name,desc,ev,n,xp} — ev is the progress event; xp doubles as levels gained
-  {id:"food100", name:"Provisioner",         desc:"Bank 100 food",                          ev:"dep_food",  n:100,xp:1},
-  {id:"wood100", name:"Lumberjack",          desc:"Bank 100 wood",                          ev:"dep_wood",  n:100,xp:1},
-  {id:"stone100",name:"Quarryman",           desc:"Bank 100 stone",                         ev:"dep_stone", n:100,xp:2},
-  {id:"gold100", name:"Prospector",          desc:"Bank 100 gold",                          ev:"dep_gold",  n:100,xp:1},
-  {id:"farm5",   name:"Green Thumb",         desc:"Build 5 farms",                          ev:"build_farm",n:5,  xp:1},
-  {id:"house5",  name:"Town Planner",        desc:"Build 5 houses",                         ev:"build_house",n:5, xp:1},
-  {id:"market1", name:"Merchant Prince",     desc:"Build a Market",                         ev:"build_market",n:1,xp:1},
-  {id:"castle1", name:"Castellan",           desc:"Build a Castle",                         ev:"build_castle",n:1,xp:2},
-  {id:"walls4",  name:"Mason of the Line",   desc:"Build 4 wall segments",                  ev:"build_wall",n:4,  xp:1},
-  {id:"burn3",   name:"Crop Burner",         desc:"Raze 3 enemy farms",                     ev:"raze_farm", n:3,  xp:1},
-  {id:"raze3",   name:"Demolitionist",       desc:"Raze 3 enemy buildings (farms aside)",   ev:"raze_bld",  n:3,  xp:2},
-  {id:"vil3",    name:"Terror of the Fields",desc:"Kill 3 enemy villagers",                 ev:"kill_vil",  n:3,  xp:1},
-  {id:"mil3",    name:"Soldier's Work",      desc:"Kill 3 enemy military units",            ev:"kill_mil",  n:3,  xp:1},
-  {id:"creep5",  name:"Wolfsbane",           desc:"Slay 5 wild creatures",                  ev:"kill_creep",n:5,  xp:1},
-  {id:"camp1",   name:"Camp Breaker",        desc:"Land the blow that wipes a wild camp",   ev:"camp_wipe", n:1,  xp:2},
-  {id:"chest1",  name:"Treasure Hunter",     desc:"Claim a camp chest (steals count)",      ev:"chest",     n:1,  xp:1},
-  {id:"trade3s", name:"Peddler",             desc:"Sell 3 loads from the NEAREST bazaar",   ev:"trade_short",n:3, xp:1},
-  {id:"trade2m", name:"Caravan Master",      desc:"Sell 2 loads from the MIDDLE bazaar",    ev:"trade_mid", n:2,  xp:2},
-  {id:"trade1l", name:"Silk Road",           desc:"Sell a load from the FARTHEST bazaar",   ev:"trade_long",n:1,  xp:2},
-  {id:"harv5",   name:"Reaper",              desc:"Harvest 5 ripe farm crops",              ev:"harvest",   n:5,  xp:1},
-  {id:"parry5",  name:"Perfect Guard",       desc:"Parry 5 attacks",                        ev:"parry",     n:5,  xp:1},
-  {id:"train5",  name:"Master-at-Arms",      desc:"Take up arms 5 times (any class)",       ev:"train",     n:5,  xp:1},
-  {id:"res2",    name:"Battlefield Medic",   desc:"Resurrect 2 fallen allies (Priest)",     ev:"res",       n:2,  xp:1},
-  {id:"pistol1", name:"Last Shot",           desc:"Kill an enemy with the dragoon pistol",  ev:"pistol",    n:1,  xp:1},
-  {id:"scout1",  name:"Eyes on the Throne",  desc:"Get within 25 of the enemy Town Center, then return home ALIVE", ev:"scout", n:1, xp:2}
+const QUESTS=[ // {id,name,desc,ev,n,xp,age} — ev is the progress event; xp doubles as levels gained
+  {id:"food100", name:"Provisioner",         desc:"Bank 100 food",                          ev:"dep_food",  n:100,xp:1,age:0},
+  {id:"wood100", name:"Lumberjack",          desc:"Bank 100 wood",                          ev:"dep_wood",  n:100,xp:1,age:0},
+  {id:"stone100",name:"Quarryman",           desc:"Bank 100 stone",                         ev:"dep_stone", n:100,xp:2,age:0},
+  {id:"gold100", name:"Prospector",          desc:"Bank 100 gold",                          ev:"dep_gold",  n:100,xp:1,age:0},
+  {id:"farm5",   name:"Green Thumb",         desc:"Build 5 farms",                          ev:"build_farm",n:5,  xp:1,age:1},
+  {id:"house5",  name:"Town Planner",        desc:"Build 5 houses",                         ev:"build_house",n:5, xp:1,age:0},
+  {id:"market1", name:"Merchant Prince",     desc:"Build a Market",                         ev:"build_market",n:1,xp:1,age:3},
+  {id:"castle1", name:"Castellan",           desc:"Build a Castle",                         ev:"build_castle",n:1,xp:2,age:4},
+  {id:"walls4",  name:"Mason of the Line",   desc:"Build 4 wall segments",                  ev:"build_wall",n:4,  xp:1,age:2},
+  {id:"burn3",   name:"Crop Burner",         desc:"Raze 3 enemy farms",                     ev:"raze_farm", n:3,  xp:1,age:0},
+  {id:"raze3",   name:"Demolitionist",       desc:"Raze 3 enemy buildings (farms aside)",   ev:"raze_bld",  n:3,  xp:2,age:0},
+  {id:"vil3",    name:"Terror of the Fields",desc:"Kill 3 enemy villagers",                 ev:"kill_vil",  n:3,  xp:1,age:0},
+  {id:"mil3",    name:"Soldier's Work",      desc:"Kill 3 enemy military units",            ev:"kill_mil",  n:3,  xp:1,age:0},
+  {id:"creep5",  name:"Wolfsbane",           desc:"Slay 5 wild creatures",                  ev:"kill_creep",n:5,  xp:1,age:0},
+  {id:"camp1",   name:"Camp Breaker",        desc:"Participate in defeating a wild creep camp", ev:"camp_wipe", n:1, xp:1,age:0},
+  {id:"chest1",  name:"Treasure Hunter",     desc:"Claim a camp chest (steals count)",      ev:"chest",     n:1,  xp:1,age:0},
+  {id:"trade3s", name:"Peddler",             desc:"Sell 3 loads from the NEAREST bazaar",   ev:"trade_short",n:3, xp:1,age:3},
+  {id:"trade2m", name:"Caravan Master",      desc:"Sell 2 loads from the GRAND bazaar",     ev:"trade_mid", n:2,  xp:2,age:3},
+  {id:"trade1l", name:"Silk Road",           desc:"Sell a load from the FARTHEST bazaar",   ev:"trade_long",n:1,  xp:2,age:3},
+  {id:"harv5",   name:"Reaper",              desc:"Harvest 5 ripe farm crops",              ev:"harvest",   n:5,  xp:1,age:1},
+  {id:"train5",  name:"Master-at-Arms",      desc:"Take up arms 5 times (any class)",       ev:"train",     n:5,  xp:1,age:0},
+  {id:"res2",    name:"Battlefield Medic",   desc:"Resurrect 2 fallen allies (Priest)",     ev:"res",       n:2,  xp:2,age:3},
+  {id:"pistol1", name:"Last Shot",           desc:"Kill an enemy with the dragoon pistol",  ev:"pistol",    n:1,  xp:1,age:5},
+  {id:"scout1",  name:"Eyes on the Throne",  desc:"Get within 25 of the enemy Town Center, then return home ALIVE", ev:"scout", n:1, xp:2,age:0},
+  // ---- v132.28: the seven new postings (ids/names mine; desc, n, xp and age are John's) ----
+  {id:"oxplun1", name:"Highwayman",          desc:"Plunder an enemy ox cart",               ev:"plunder_ox",n:1,  xp:2,age:0},
+  {id:"trplun1", name:"Road Agent",          desc:"Plunder an enemy trader or trade cart",  ev:"plunder_tr",n:1,  xp:2,age:3},
+  {id:"oxwood",  name:"Timber Haul",         desc:"Gather 300 wood with an ox cart",        ev:"ox_wood",   n:300,xp:1,age:0},
+  {id:"grand1",  name:"Lord of the Crossroads",desc:"Capture the Grand Bazaar",             ev:"cap_grand", n:1,  xp:3,age:0},
+  {id:"heal200", name:"Field Surgeon",       desc:"Heal 200 HP of allies (Priest)",         ev:"heal_hp",   n:200,xp:2,age:3},
+  {id:"horse1",  name:"Horsebane",           desc:"Cut down a mounted enemy with a spear line unit", ev:"counter_cav",n:1,xp:1,age:0},
+  {id:"tower2",  name:"Watchwarden",         desc:"Build 2 Guard Towers",                   ev:"build_tower",n:2, xp:1,age:3}
 ];
 const BUFFS=[ // random at the Blacksmith, 1 XP each, stacking to ×3
   {id:"dmg",    name:"Honed Edge",       desc:"+5% damage"},

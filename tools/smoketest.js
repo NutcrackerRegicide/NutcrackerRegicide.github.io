@@ -6,6 +6,14 @@ const fs=require('fs'),path=require('path');
 const ROOT=path.join(__dirname,'..');
 global.window=global;
 const THREE=require('three'); global.THREE=THREE;
+// ---- v132.28: a DETERMINISTIC harness, so a red is a regression and not a dice roll ----
+// Must run before the bundle is evaluated: 02-world.js captures Math.random at load time as
+// __realRandom, installs its own mulberry32 for world gen, and restores the capture afterwards.
+const SMOKE_SEED=(process.env.SMOKE_SEED?parseInt(process.env.SMOKE_SEED,10):0x5E1F)|0;
+function __smokeRng(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);
+  t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+Math.random=__smokeRng(SMOKE_SEED);
+console.log('harness RNG seeded:',SMOKE_SEED);
 // ---- DOM stubs ----
 function mkEl(){return{style:{},classList:{toggle(){},add(){},remove(){}},innerHTML:"",textContent:"",
   dataset:{},children:[],firstChild:null,addEventListener(){},appendChild(){},removeChild(){},
@@ -35,7 +43,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "tradeGold,tick,teamAge,stock,updateBot,tryMeleeAttack,tryAttack,setGameOver,launchLob,BLUE,RED,lineUnitFor,CLS,clock,isSiege,nodes,validFor,teamTC,terrainHeight,TCPOS,makeBuilding,buildingMesh,BLD,NET,player,keys,directors,wallLineSegments,placeGateOnWall,kings,healTick,snapToWallEnd,dealDamage,restyleBuildings,rebuildRoads,roadGroups,nearestFriendlySite,BSCALE,moveToward,steerAroundBuildings,restyleUnits,drainVisualQueue,syncNameTags,manageBands,killUnit,respawnUnit,resurrectUnit,updatePriestChannel,tryResurrect,RES_CHARGE,RES_CD,"+
   "campStates,campTick,campNewWave,updateCreep,inCampGround,CAMPS,CAMP_R,CAMP_RESPAWN,CREEP_N,NEUTRAL,MAP,moveUnit,"+
   "orderCharge,toggleRally,toggleRallyFor,rallyCapFor,RALLY_CAP,CHARGE_DIST,camera,rps,setClass,economyTick,"+
-  "QUESTS,BUFFS,XP_MAX_LVL,BUFF_MAX_STACK,BOARD_REACH,townBoards,boardFor,questPick,questRedraw,cargoFrac,updateCargoVisual,"+
+  "QUESTS,BUFFS,XP_MAX_LVL,BUFF_MAX_STACK,BOARD_REACH,QUEST_REROLL_MAX,townBoards,boardFor,questDraft,questPick,questRedraw,cargoFrac,updateCargoVisual,"+
   "buffSt,carryCap,grantBuff,applyBuffStats,useTownBoard,useBlacksmith,questProgress,questTick,"+
   "bazaarTier,addConstructionHit,damageBuilding,interactCandidateD2,ageBuff,isHuman,showScoreboard,smithOffer,smithPick,"+
   "closeMenus,cancelPlacing,releaseWarband,rallyLeaderFor,shootArrow:(a,b)=>shootArrow(a,b),"+
@@ -58,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_GOLD,TEAMCOL};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -332,7 +340,7 @@ const house=makeBuilding(1,"house",62.5,20,true);
 const hh0=house.hp; tryMeleeAttack(ram);
 check("ram deals 8× to buildings ("+Math.round(hh0-house.hp)+" dmg)",(hh0-house.hp)>ram.dmg*6);
 check("catapult outranges guard towers ("+CLS.catapult.rng+" vs 18)",CLS.catapult.rng>18);
-check("stone: exactly 5 piles on the map",nodes.filter(n=>n.type==="stone").length===5);
+check("stone: exactly 6 piles on the map (v132.24 re-sited them and added the deep axis pile)",nodes.filter(n=>n.type==="stone").length===6);
 const woods=nodes.filter(n=>n.type==="wood").length;
 check("forests planted ("+woods+" choppable trees)",woods>=60);
 check("castle mesh has geometry",buildingMesh("castle",0).children.length>=8);
@@ -841,11 +849,54 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
     check("collection quests trimmed to 100 (v91)",
     QUESTS.filter(q=>q.ev.startsWith("dep_")).length===4&&
     QUESTS.filter(q=>q.ev.startsWith("dep_")).every(q=>q.n===100));
-  check("quest & buff tables at strength ("+QUESTS.length+" quests / "+BUFFS.length+" buffs, unique ids, xp 1-2)",
+  const _xpLo=Math.min.apply(null,QUESTS.map(q=>q.xp)), _xpHi=Math.max.apply(null,QUESTS.map(q=>q.xp));
+  check("quest & buff tables at strength ("+QUESTS.length+" quests / "+BUFFS.length+" buffs, unique ids, xp "+_xpLo+"-"+_xpHi+")",
     QUESTS.length>=20&&BUFFS.length>=20&&
     new Set(QUESTS.map(q=>q.id)).size===QUESTS.length&&
     new Set(BUFFS.map(b=>b.id)).size===BUFFS.length&&
-    QUESTS.every(q=>q.n>=1&&(q.xp===1||q.xp===2)));
+    QUESTS.every(q=>q.n>=1&&q.xp>=1&&q.xp<=3));
+  // v132.28: the event key is the join between a quest and the 24 call sites that feed it.
+  // Two quests sharing one ev would both advance off a single action — a silent double-pay.
+  check("v132.28 quests: every progress event is unique ("+new Set(QUESTS.map(q=>q.ev)).size+"/"+QUESTS.length+")",
+    new Set(QUESTS.map(q=>q.ev)).size===QUESTS.length);
+  check("v132.28 quests: every posting carries a numeric age in 0..5",
+    QUESTS.every(q=>typeof q.age==="number"&&q.age>=0&&q.age<=5));
+  check("v132.28 quests: Perfect Guard is gone (John's ruling)",
+    !QUESTS.some(q=>q.id==="parry5"||q.ev==="parry"));
+  check("v132.28 quests: max level is 25",XP_MAX_LVL===25);
+  {
+    // THE FILTER ITSELF. Draft many boards at each age against a scratch unit and assert the
+    // gate holds. Sampling is deliberate — questDraft is random, so one draw proves nothing.
+    const {questDraft,teamAge}=global.__G;
+    let leaked=null, tooShort=null, pools=[];
+    const saveAge=teamAge[0];
+    for(let age=0;age<=5;age++){
+      teamAge[0]=age;
+      const seen=new Set();
+      for(let k=0;k<300;k++){
+        const scratch={team:0};
+        const trio=questDraft(scratch);
+        if(trio.length<3&&tooShort===null)tooShort=age;
+        for(const qi of trio){ seen.add(qi); if(QUESTS[qi].age>age&&!leaked)leaked=age+":"+QUESTS[qi].id; }
+      }
+      pools.push(seen.size);
+    }
+    teamAge[0]=saveAge;
+    check("v132.28 age gate: 1800 boards dealt, nothing above the team's age was ever posted"+
+      (leaked?" (LEAKED "+leaked+")":""),leaked===null);
+    check("v132.28 age gate: a full trio is dealable at every age (shortest board age: "+
+      (tooShort===null?"none":tooShort)+")",tooShort===null);
+    check("v132.28 age gate: the pool GROWS with age ("+pools.join(" -> ")+") — the filter is not a no-op",
+      pools[5]>pools[0]&&pools.every((p,i)=>i===0||p>=pools[i-1]));
+  }
+  {
+    // the v99 contract under the new non-empty cache guard
+    const {questDraft}=global.__G;
+    const u={team:0};
+    const a=questDraft(u).slice(), b=questDraft(u).slice();
+    check("v99/v132.28 draft: the trio STANDS until taken (two reads agree: ["+a+"] / ["+b+"])",
+      a.length===b.length&&a.every((v,i)=>v===b[i]));
+  }
   check("a Town Board stands beside each throne",
     townBoards.length===2&&[0,1].every(t=>{const b=boardFor(t);
       return b&&Math.hypot(b.x-TCPOS[t][0],b.z-TCPOS[t][1])<30;}));
@@ -896,11 +947,33 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
   qh.quest={i:QUESTS.findIndex(q=>q.ev==="build_castle"),prog:0}; // a 2-XP monster
   questProgress(qh,"build_castle");
   check("hard quests pay DOUBLE (castle → +2 levels)",qh.lvl===3&&qh.xp===3&&!qh.quest);
-  // v99: every level gained banks a board reroll — and a redraw spends one for a fresh trio
-  check("levels bank rerolls, one per level ("+(qh.qRerolls||0)+")",qh.qRerolls===3);
-  useTownBoard(qh); // post a trio…
-  check("a banked reroll wipes and reposts the board",
-    global.__G.questRedraw(qh)===true&&qh.qRerolls===2&&qh.questDraft&&qh.questDraft.length===3);
+  // ---- v132.28.2: rerolls are earned ONCE PER QUEST OPPORTUNITY, capped, and no longer by level ----
+  {
+    const QT=global.__G.questTick, CAPR=global.__G.QUEST_REROLL_MAX;
+    // LEVELS ALONE MUST NOT BANK. qh is sitting on 3 levels from the two quests above.
+    qh.qRerolls=0; qh.quest={i:0,prog:0}; qh._rrCycle=false; QT(0.1);
+    const lvlBanked=qh.qRerolls||0;
+    check("v132.28.2 rerolls: LEVELS alone bank nothing — holding a quest at level "+(qh.lvl||0)+
+      " banked "+lvlBanked,lvlBanked===0);
+    // ONE per opportunity, and only one however long you stand there.
+    qh.quest=null; QT(0.1); QT(0.1); QT(0.1); QT(0.1);
+    check("v132.28.2 rerolls: becoming questless banks exactly ONE, however many ticks pass ("+
+      (qh.qRerolls||0)+")",(qh.qRerolls||0)===1);
+    // taking a posting RE-ARMS the cycle, so the next opportunity grants again
+    qh.quest={i:0,prog:0}; QT(0.1);
+    qh.quest=null; QT(0.1);
+    check("v132.28.2 rerolls: taking a posting re-arms the grant — a second opportunity banks a "+
+      "second ("+(qh.qRerolls||0)+")",(qh.qRerolls||0)===2);
+    // THE CAP: drive ten more opportunities and it must not pass the ceiling
+    for(let k=0;k<10;k++){qh.quest={i:0,prog:0};QT(0.1);qh.quest=null;QT(0.1);}
+    check("v132.28.2 rerolls: 12 opportunities, capped at "+CAPR+" ("+(qh.qRerolls||0)+")",
+      (qh.qRerolls||0)===CAPR&&CAPR===3);
+    qh.quest=null; qh.questDraft=null;
+    useTownBoard(qh); // post a trio…
+    const rr0=qh.qRerolls||0;
+    check("a banked reroll wipes and reposts the board",
+      global.__G.questRedraw(qh)===true&&qh.qRerolls===rr0-1&&qh.questDraft&&qh.questDraft.length===3);
+  }
   qh.questDraft=null; // clean slate for the forge tests
   // ---- the forge: spend to the 3-stack cap, never past it ----
   const FULL=BUFFS.length*BUFF_MAX_STACK; // every buff to the cap
@@ -1357,6 +1430,91 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   shore.respawnAt=-1; tick();
   check("the NEXT raid sweeps unclaimed twin chests away",
     shore.chest===null&&shore.chestB===null&&shore.creeps.filter(c=>c.alive).length===11);
+  // ---- v132.28: PARTICIPATION — who gets paid when a pack falls ----
+  {
+    const campIdx=G.QUESTS.findIndex(q=>q.id==="camp1");
+    const mkHuman=(team,x,z,nm,peer)=>{
+      const u=G.makeUnit(team,"clubman",x,z,{name:nm});
+      u.bot=null; u.remote=peer; u.xp=0; u.lvl=0; u.quest=null; u.questDraft=null; u.qRerolls=0; u.buffs={};
+      return u;
+    };
+    // ---------- THE VIKING RAID (11 ashore from the sweep above) ----------
+    const poker  =mkHuman(0,shore.x+6,shore.z,"Poker","p-peer");    // ONE point of damage, then nothing
+    const closer =mkHuman(0,shore.x-6,shore.z,"Closer","c-peer");   // does all the killing
+    const ghost  =mkHuman(0,shore.x+9,shore.z,"Ghost","g-peer");    // fights, then dies before the wipe
+    // a BOT: keeps its bot and carries no remote, so isHuman() is false for it
+    const drone  =G.makeUnit(0,"clubman",shore.x+12,shore.z,{name:"Drone",bot:{role:"citizen"}});
+    drone.xp=0;
+    const raiders=shore.creeps.filter(c=>c.alive);
+    const capped=mkHuman(0,shore.x+3,shore.z,"Capped","k-peer");
+    capped.lvl=20; capped.xp=0;                    // 5 short of the cap, about to be paid 15
+    G.dealDamage(poker,raiders[0],1);
+    G.dealDamage(ghost,raiders[0],1);
+    G.dealDamage(drone,raiders[0],1);
+    G.dealDamage(capped,raiders[0],1);
+    const listed=(shore.part||[]).slice();
+    ghost.alive=false; ghost.respawnT=Infinity; ghost.corpse=true; // held dead: a bare alive=false is revived by the respawn clock within the tick
+    for(const c of shore.creeps)if(c.alive)G.dealDamage(closer,c,999999);
+    warTicks(1);
+    check("v132.28 participation: the list holds ONLY humans — no bots, no towers ("+listed.length+
+      " listed: "+listed.map(x=>x&&x.name).join("/")+")",
+      listed.length>0&&listed.every(x=>G.isHuman(x))&&!listed.some(x=>x&&x.def));
+    check("v132.28 participation: a BOT that fought the raid is not paid (xp "+(drone.xp||0)+")",
+      (drone.xp||0)===0);
+    check("v132.28 participation: a participant DEAD at the wipe collects nothing (xp "+(ghost.xp||0)+")",
+      (ghost.xp||0)===0);
+    check("v132.28 raid: ONE point of damage earns a full share — the poker was paid "+(poker.xp||0)+
+      " XP without landing a blow",(poker.xp||0)===15);
+    check("v132.28 raid: the finisher is paid the SAME as the poker ("+(closer.xp||0)+" vs "+(poker.xp||0)+
+      ") — participation, not a kill bounty",(closer.xp||0)===15&&(closer.xp||0)===(poker.xp||0));
+    check("v132.28 raid: participation pays LEVELS as well as XP — the poker went to level "+
+      (poker.lvl||0)+" on "+(poker.xp||0)+" XP",(poker.lvl||0)===15&&(poker.xp||0)===15);
+    check("v132.28 raid: level is CLAMPED at the cap ("+G.XP_MAX_LVL+") — a level-20 participant "+
+      "paid 15 landed on level "+(capped.lvl||0)+" (unclamped would be 35)",(capped.lvl||0)===G.XP_MAX_LVL);
+    check("v132.28 raid: …but XP is NOT clamped, so the forge stays reachable at the cap "+
+      "(capped player holds "+(capped.xp||0)+" XP)",(capped.xp||0)===15);
+    check("v132.28 participation: the list is CLEARED on payout, so a second tick cannot double-pay",
+      !shore.part||shore.part.length===0);
+    const xpAfter=poker.xp; warTicks(2);
+    check("v132.28 participation: …and it stays paid-once across further ticks ("+xpAfter+" -> "+poker.xp+")",
+      poker.xp===xpAfter);
+
+    // ---------- A WILD CAMP pays 1, and CAMP BREAKER completes for a non-finisher ----------
+    const cw=CS.find(c=>!c.boss&&c.creeps.filter(k=>k.alive).length>=2)||CS[1];
+    if(cw.waiting||cw.creeps.filter(k=>k.alive).length<2){cw.respawnAt=-1;tick();}
+    const helper=mkHuman(0,cw.x+4,cw.z,"Helper","h-peer");
+    const ender =mkHuman(0,cw.x-4,cw.z,"Ender","e-peer");
+    helper.quest={i:campIdx,prog:0};                         // holding CAMP BREAKER, will not land the last blow
+    const alive=cw.creeps.filter(k=>k.alive);
+    G.dealDamage(helper,alive[0],1);
+    // ---- STAGE 1: fell all BUT ONE. A camp that is merely mauled must pay nobody. ----
+    for(let i=0;i<alive.length-1;i++)if(alive[i].alive)G.dealDamage(ender,alive[i],999999);
+    warTicks(1);
+    const standing=cw.creeps.filter(k=>k.alive).length;
+    check("v132.28 wild camp: a camp MAULED but not cleared pays NOTHING — "+standing+
+      " creep still standing, ender xp "+(ender.xp||0)+" lvl "+(ender.lvl||0)+
+      ", helper quest "+(helper.quest?"still held":"COMPLETE"),
+      standing>=1&&(ender.xp||0)===0&&(ender.lvl||0)===0&&
+      (helper.xp||0)===0&&(helper.lvl||0)===0&&!!helper.quest);
+    check("v132.28 wild camp: …and the participation list is still OPEN while a creep lives ("+
+      ((cw.part||[]).length)+" listed)",(cw.part||[]).length>=1);
+    // ---- STAGE 2: fell the last one. Now everything lands. ----
+    for(const c of cw.creeps)if(c.alive)G.dealDamage(ender,c,999999);
+    warTicks(1);
+    check("v132.28 wild camp: a participant is paid 1 XP and 1 LEVEL (xp "+(ender.xp||0)+
+      ", lvl "+(ender.lvl||0)+")",(ender.xp||0)>=1&&(ender.lvl||0)>=1);
+    check("v132.28 wild camp: CAMP BREAKER completes for a player who did NOT land the last blow "+
+      "(quest "+(helper.quest===null?"complete":"still held")+", lvl "+(helper.lvl||0)+")",
+      helper.quest===null&&(helper.lvl||0)>=1);
+    check("v132.28 wild camp: a wild pack pays LESS than the raid ("+(ender.xp||0)+" vs 15)",
+      (ender.xp||0)<15);
+    // a fresh wave starts a clean sheet
+    cw.respawnAt=-1; tick();
+    check("v132.28 participation: a new wave clears the list — nobody carries credit across waves",
+      !cw.part||cw.part.length===0);
+    poker.alive=false; closer.alive=false; helper.alive=false; ender.alive=false;
+    drone.alive=false; capped.alive=false;
+  }
   // put the shore back to sleep so later tests meet a quiet map
   for(const c of shore.creeps){c.alive=false;c.corpse=false;c.root.visible=false;}
   shore.waiting=true; shore.respawnAt=1e9;
@@ -2713,7 +2871,7 @@ global.__G.setGameOver(false);
     // v132.0 26 -> 27 with the map rework: MAP.x/MAP.z moved, so every node moved, and the netcode
   // indexes nodes positionally. The assertion is that the number MOVED WITH THE WORLD, which is the
   // thing a peer actually needs — a stale literal here is how two builds shake hands and disagree.
-  check("v132 wire: PROTO is 30 — the envelope delta OMITS fields, which an older peer misreads",NET.PROTO===30);
+  check("v132 wire: PROTO is 34 — the quest table renumbered, and qi/qdraft are positional",NET.PROTO===34);
     // the version stamp is READ from the page, not frozen in the recorder. Every log John
     // field-tested on v125.1 said ver:"v98", because that literal was written in v98 and never
     // touched again — a flight recorder you have to take somebody's word about.
@@ -3117,8 +3275,8 @@ global.__G.setGameOver(false);
   const w=G.NET.packWorld(1);
   let snapAres=null;
   try{G.NET._lastRow=null;const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
-  check("v115/v132 net: PROTO 30 (the envelope delta omits fields) and `ares` still rides both payloads",
-    G.NET.PROTO===30&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
+  check("v115/v132 net: PROTO 34 (the quest table renumbered) and `ares` still rides both payloads",
+    G.NET.PROTO===34&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
     Array.isArray(snapAres)&&Math.abs(snapAres[0]-42.5)<0.06);
   G.ageResT[0]=0;
 
@@ -3392,8 +3550,53 @@ global.__G.setGameOver(false);
       !N.some(n=>n.type!=="wood"&&n.amount>0&&Math.hypot(n.x-t.x,n.z-t.z)<R+5)&&
       !G.townBoards.some(tb=>Math.hypot(tb.x-t.x,tb.z-t.z)<R+5));
     const stone=N.find(n=>n.type==="stone"&&n.amount>0);
-    check("v114 clearing: a plot may be laid over standing timber, never over a stone pile",
-      G.validFor("house",live.x,live.z,0)===true&&G.validFor("house",stone.x,stone.z,0)===false);
+    // DIFFERENTIAL, not a single sample. The old form asserted validFor()===true at the first
+    // tree matching a filter that never excluded ROADS — 634 trees matched, 612 were buildable,
+    // and .find() landed on one of the 22 sitting on the King road. That failed a correct game.
+    // Hold the position fixed and vary ONLY the timber: wood must not be what blocks a plot,
+    // and stone must be.
+    // SWEEP, not a sample: every candidate tree, timber on vs timber off.
+    const cands=trees.filter(t=>t.amount>0&&Math.abs(t.x)<MAPX-20&&Math.abs(t.z)<MAPZ-20&&
+      !G.buildings.some(b=>b.alive&&Math.hypot(b.x-t.x,b.z-t.z)<R+b.def.r+4)&&
+      !N.some(n=>n.type!=="wood"&&n.amount>0&&Math.hypot(n.x-t.x,n.z-t.z)<R+5)&&
+      !G.townBoards.some(tb=>Math.hypot(tb.x-t.x,tb.z-t.z)<R+5));
+    let differ=0,buildable=0;
+    for(const t of cands){
+      const a=G.validFor("house",t.x,t.z,0);
+      const amt=t.amount; t.amount=0;
+      const b=G.validFor("house",t.x,t.z,0);
+      t.amount=amt;
+      if(a!==b)differ++;
+      if(a===true)buildable++;
+    }
+    check("v114 clearing: TIMBER is never what blocks a plot — swept "+cands.length+
+      " tree sites, felling changed the verdict on "+differ,differ===0);
+    check("v114 clearing: …and that sweep is NOT vacuous — "+buildable+"/"+cands.length+
+      " of those sites are genuinely buildable",cands.length>200&&buildable>cands.length*0.8);
+    const withoutWood=true,withWood=true; // superseded by the sweep above
+    // every pile, not one: which of them block, and on which is the stone provably the cause?
+    // LIVE piles: the campaign mines one out during the run, and a spent pile correctly stops
+    // refusing a plot. Asserting over all six made this gate flake 6/6 -> 5/6 between runs.
+    const allPiles=N.filter(n=>n.type==="stone");
+    const piles=allPiles.filter(n=>n.amount>0);
+    let blocked=0,freedByRemoval=0,openAround=0;
+    for(const st of piles){
+      if(G.validFor("house",st.x,st.z,0)===false)blocked++;
+      const amt=st.amount; st.amount=0;
+      if(G.validFor("house",st.x,st.z,0)===true)freedByRemoval++;
+      st.amount=amt;
+      let ok=0;
+      for(const d of [12,18,26,34])for(const ang of [0,Math.PI/2,Math.PI,3*Math.PI/2])
+        if(G.validFor("house",st.x+Math.cos(ang)*d,st.z+Math.sin(ang)*d,0)===true)ok++;
+      if(ok>0)openAround++;
+    }
+    check("v114 clearing: EVERY LIVE stone pile refuses a plot ("+blocked+"/"+piles.length+
+      " live of "+allPiles.length+" sited)",
+      blocked===piles.length&&allPiles.length===6&&piles.length>=4);
+    check("v114 clearing: …and on the standalone piles the stone is provably the cause — "+
+      freedByRemoval+" of "+piles.length+" free up when the pile is removed (the other four sit\n      inside v132.24 resource CLUSTERS, where a neighbour still covers the footprint)",
+      freedByRemoval>=2);
+    check("v114 clearing: …and the refusal is LOCAL to the prize, not regional terrain — open\n      ground within 12-34 of all "+openAround+"/"+piles.length+" piles",openAround===piles.length);
     const before=live.amount;
     const h=G.makeBuilding(0,"house",live.x,live.z,true);
     check("v114 clearing: raising the house FELLS the trees under its footprint ("+before+" → "+live.amount+")",
@@ -3408,11 +3611,17 @@ global.__G.setGameOver(false);
   // ---- v115: the wood grows in STANDS, not as evenly-spaced pasture ----
   const live=trees.filter(t=>t.amount>0);
   check("v115 stands: the map carries real forests ("+G.TREE_STANDS.length+" stands)",
-    G.TREE_STANDS.length>=20&&G.TREE_STANDS.length%2===0);
-  // every stand is mirrored through the map centre, so neither throne draws the better wood
+    G.TREE_STANDS.length>=20&&
+    G.TREE_STANDS.filter(s=>Math.abs(s.x)>=0.001).length%2===0);
+  // v132.25: ONE mirror for the whole world, (x,z) -> (-x,z). The 180° convention is retired —
+  // the two of them were each fair alone but not fair together, because node clearance deletes
+  // trees, and wood within 60 of a throne read BLUE 1 / RED 12. Do not reintroduce it.
   const mirrored=G.TREE_STANDS.every(s=>
-    G.TREE_STANDS.some(o=>Math.abs(o.x+s.x)<0.001&&Math.abs(o.z+s.z)<0.001&&Math.abs(o.r-s.r)<0.001));
-  check("v115 stands: every stand is mirrored 180° — the wood is fair to both thrones",mirrored);
+    G.TREE_STANDS.some(o=>Math.abs(o.x+s.x)<0.001&&Math.abs(o.z-s.z)<0.001&&Math.abs(o.r-s.r)<0.001));
+  check("v115/v132.25 stands: every stand is mirrored in x — the wood is fair to both thrones",mirrored);
+  check("v132.25 stands: the RETIRED 180° mirror is genuinely gone (a stand off the axis has no 180° twin)",
+    !G.TREE_STANDS.filter(s=>Math.abs(s.x)>=0.001&&Math.abs(s.z)>=0.001).every(s=>
+      G.TREE_STANDS.some(o=>Math.abs(o.x+s.x)<0.001&&Math.abs(o.z+s.z)<0.001&&Math.abs(o.r-s.r)<0.001)));
   // CLUSTERING, measured properly: nearest-neighbour distance is a poor test here because the
   // planting grid puts a floor under it either way. The INDEX OF DISPERSION does the job —
   // quadrat-count variance over mean. A uniform/Poisson scatter sits near 1.0; a field that
@@ -3456,6 +3665,78 @@ global.__G.setGameOver(false);
   check("v125 deskui: neither UI layer can run headless — `screen` is the tell doing the work "+
     "(Node 22 DEFINES a global navigator, so that half of the guard no longer discriminates)",
     typeof screen==="undefined");
+  // ---------- v132.29: THE LEVEL AURA ----------
+  {
+    const G=global.__G, A=G.auraTick, ST=G.auraStats;
+    const put=(team,x,z,lvl,peer)=>{
+      const u=G.makeUnit(team,"clubman",x,z,{name:"Aura"+lvl,bot:{role:"citizen"}});
+      u.bot=null; if(peer)u.remote=peer; u.lvl=lvl; u._auraAcc=0; return u;
+    };
+    // park the camera on a clear patch and put the subjects right under it
+    const CX=-40,CZ=40;
+    G.camera.position.set(CX,30,CZ);
+    const hero=put(0,CX,CZ,G.XP_MAX_LVL,"aura-hero");   // capped human, close
+    const low =put(0,CX+2,CZ,1,"aura-low");             // level 1 human, close
+    const zero=put(0,CX-2,CZ,0,"aura-zero");            // level 0 human — must never glow
+    const bot =put(1,CX+4,CZ,20,null);                  // NOT human (no remote) — must never glow
+    const far =put(0,CX,CZ+G.AURA_FAR+25,G.XP_MAX_LVL,"aura-far"); // capped but out of range
+    for(let i=0;i<20;i++)A(0.05);
+    const st1=ST();
+    check("v132.29 aura: ONE draw object carries every mote in the game (built "+st1.built+
+      ", live "+st1.live+")",st1.built===true&&!!st1.pts&&st1.pts.isPoints===true&&st1.live>0);
+    check("v132.29 aura: a level-0 human never glows (acc "+(zero._auraAcc||0)+")",
+      (zero._auraAcc||0)===0);
+    check("v132.29 aura: a BOT never glows, whatever its level ("+(bot.lvl||0)+", acc "+
+      (bot._auraAcc||0)+")",(bot._auraAcc||0)===0);
+    check("v132.29 aura: a unit beyond AURA_FAR ("+G.AURA_FAR+") emits NOTHING — John's v125 "+
+      "scouting rule, in code (acc "+(far._auraAcc||0)+")",(far._auraAcc||0)===0);
+    // …and the SAME unit, walked in close, does emit. Range, not identity.
+    far.root.position.set(CX+1,far.root.position.y,CZ+1);
+    far._auraAcc=0; const before=ST().live; for(let i=0;i<10;i++)A(0.05);
+    check("v132.29 aura: …and that same unit walked in close DOES emit ("+before+" → "+ST().live+
+      " live motes, acc moved)",ST().live>before||(far._auraAcc||0)>0);
+    // THE POOL CEILING. The earlier version flooded with five units and peaked at 22 of 192 —
+    // it could not have failed. Saturate it properly: forty capped humans under the camera want
+    // ~40 x 9/s x 1.15s = 400+ motes against 192 slots, so the ceiling is genuinely under load.
+    const mob=[];
+    for(let i=0;i<40;i++)mob.push(put(0,CX+(i%8)-4,CZ+((i/8)|0)-2,G.XP_MAX_LVL,"mob"+i));
+    let peak=0;
+    for(let i=0;i<200;i++){A(0.05); const L=ST().live; if(L>peak)peak=L;}
+    const st2=ST();
+    check("v132.29 aura: the pool ceiling HOLDS under real saturation — 40 capped units, peak "+
+      peak+" of "+G.AURA_MAX+" slots",peak<=G.AURA_MAX&&st2.live<=G.AURA_MAX);
+    check("v132.29 aura: …and that flood genuinely reached the ceiling (peak "+peak+
+      "), so the check above is not vacuous",peak>=G.AURA_MAX*0.9);
+    for(const m of mob)m.alive=false;
+    // NO PER-FRAME ALLOCATION — identity must not move
+    const g0=st2.geo,m0=st2.mat,p0=st2.pts;
+    for(let i=0;i<100;i++)A(0.05);
+    const st3=ST();
+    check("v132.29 aura: 100 more ticks allocate NOTHING — same geometry, material and object",
+      st3.geo===g0&&st3.mat===m0&&st3.pts===p0);
+    // THE COLOUR RAMP
+    const cLo=[0,0,0],cHi=[0,0,0];
+    G.auraTint(low,cLo); G.auraTint(hero,cHi);
+    const tc=G.TEAMCOL[0], tr=((tc>>16)&255)/255,tg=((tc>>8)&255)/255,tb=(tc&255)/255;
+    const gr=((G.AURA_GOLD>>16)&255)/255,gg=((G.AURA_GOLD>>8)&255)/255,gb=(G.AURA_GOLD&255)/255;
+    const norm=a=>{const m=Math.max(a[0],a[1],a[2])||1;return [a[0]/m,a[1]/m,a[2]/m];};
+    const dist=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);
+    const nLo=norm(cLo), nHi=norm(cHi), team=norm([tr,tg,tb]), gold=norm([gr,gg,gb]);
+    check("v132.29 aura: level 1 reads TEAM, not gold (team "+dist(nLo,team).toFixed(3)+
+      " vs gold "+dist(nLo,gold).toFixed(3)+") — the team read survives",
+      dist(nLo,team)<dist(nLo,gold));
+    check("v132.29 aura: the CAP reads GOLD, not team (gold "+dist(nHi,gold).toFixed(3)+
+      " vs team "+dist(nHi,team).toFixed(3)+")",dist(nHi,gold)<dist(nHi,team));
+    check("v132.29 aura: the cap is driven ABOVE 1.0 so it keys the 0.86 bloom threshold (peak "+
+      Math.max(cHi[0],cHi[1],cHi[2]).toFixed(2)+") — and level 1 is NOT (peak "+
+      Math.max(cLo[0],cLo[1],cLo[2]).toFixed(2)+")",
+      Math.max(cHi[0],cHi[1],cHi[2])>1.0&&Math.max(cLo[0],cLo[1],cLo[2])<1.0);
+    // the dead stop glowing
+    hero.alive=false; hero._auraAcc=0; low.alive=false; far.alive=false;
+    for(let i=0;i<10;i++)A(0.05);
+    check("v132.29 aura: the dead stop emitting (acc "+(hero._auraAcc||0)+")",(hero._auraAcc||0)===0);
+    zero.alive=false; bot.alive=false;
+  }
   check("v116 touch: the mobile layer is a no-op outside a browser",
     G.getHideD()===150&&G.getMouseLocked()===false);
   // the cull dial the perf tier uses is real, clamped, and reversible

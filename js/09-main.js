@@ -118,6 +118,9 @@ function updatePlayer(dt){
           // v99: the ox takes FOUR swings' worth of timber a tick — but never more than the node or the bed holds
           const tk=Math.min(player.cls==="oxcart"?4:1,n.amount,cap-player.carry[n.type]);
           if(tk>0){n.amount-=tk; player.carry[n.type]+=tk;} // FULL means full — the node stops draining too
+          // v132.28 TIMBER HAUL: counts wood actually taken, not swings taken.
+          if(tk>0&&player.cls==="oxcart"&&n.type==="wood"&&typeof questProgress==="function")
+            questProgress(player,"ox_wood",tk);
           // v113: EVERY OTHER SWING makes a noise (John: gather sounds needn't hit every tick) — the
           // arm still moves each tick, the axe just isn't miked for all of them.
           player._gsw=((player._gsw||0)+1)&1;
@@ -387,8 +390,16 @@ function syncBuffs(u){
 // STANDS until a choice is made (no walking away to fish). Rerolls are BANKED, one
 // per level gained, and a redraw wipes the board for a fresh trio.
 function questDraft(u){ // roll, or recall, the standing trio
-  if(u.questDraft&&u.questDraft.length===3)return u.questDraft;
-  const bag=QUESTS.map((q,i)=>i), picks=[];
+  // v132.28: guard on NON-EMPTY, not on ===3. Once the bag is age-filtered a short board is
+  // possible, and a ===3 guard would re-roll the trio on every call — the posting would shift
+  // under the player and the v99 "the trio STANDS until you choose" contract would be gone.
+  if(u.questDraft&&u.questDraft.length)return u.questDraft;
+  // v132.28: deal only what this team's age has unlocked. teamAge is an ARRAY (00-data.js:751).
+  const age=Math.max(0,Math.min(5,(typeof teamAge!=="undefined"&&teamAge[u.team])||0));
+  let bag=[];
+  for(let i=0;i<QUESTS.length;i++)if((QUESTS[i].age||0)<=age)bag.push(i);
+  if(!bag.length)for(let i=0;i<QUESTS.length;i++)bag.push(i); // never hand back an empty board
+  const picks=[];
   while(picks.length<3&&bag.length)picks.push(bag.splice((Math.random()*bag.length)|0,1)[0]);
   u.questDraft=picks;
   return picks;
@@ -425,7 +436,10 @@ function completeQuest(u){
   const Q=QUESTS[u.quest.i];
   u.quest=null;
   u.xp=(u.xp||0)+Q.xp; u.lvl=Math.min(XP_MAX_LVL,(u.lvl||0)+Q.xp);
-  u.qRerolls=(u.qRerolls||0)+Q.xp; // v99: one banked board-reroll per LEVEL gained
+  // v132.28.2: rerolls are NO LONGER banked per level. questTick grants one each time the player
+  // becomes free to take a posting, capped at QUEST_REROLL_MAX. Clearing u.quest above is what
+  // arms that grant, so finishing a quest still earns one — just by the general rule, and without
+  // camp/raid participation levels minting rerolls as a side effect.
   awardPts(u,25*Q.xp); // deeds are honored on the scoreboard too
   questNotify(u,"🏅 QUEST COMPLETE — "+Q.name+"! +"+Q.xp+" level"+(Q.xp>1?"s":"")+" & +"+Q.xp+" XP (spend it at the Blacksmith). The Town Board has more work.","gold");
   if(typeof Sound!=="undefined"&&u.isPlayer)Sound.play("alert_quest"); // v100: quest-complete fanfare
@@ -528,6 +542,20 @@ function questTick(dt){ // host/solo: scout-quest geometry, Second Skin regen, c
   _captains.length=0;
   for(const u of units){
     if(!isHuman(u)||!u.alive)continue;
+    // ---- v132.28.2 ONE REROLL PER QUEST OPPORTUNITY, capped at QUEST_REROLL_MAX ----
+    // Fires on the TRANSITION into questlessness, so it covers a fresh life, a finished quest and
+    // a respawn with one rule, and cannot pay twice for the same opportunity.
+    if(!u.quest){
+      if(!u._rrCycle){
+        u._rrCycle=true;
+        if((u.qRerolls||0)<QUEST_REROLL_MAX){
+          u.qRerolls=(u.qRerolls||0)+1;
+          questNotify(u,"📜 The board has fresh work — "+u.qRerolls+" reroll"+
+            (u.qRerolls===1?"":"s")+" banked"+((u.qRerolls>=QUEST_REROLL_MAX)?" (full)":"")+".","blue");
+          syncQuest(u);
+        }
+      }
+    }else u._rrCycle=false;
     if(buffSt(u,"captain"))_captains.push(u);
     const rst=buffSt(u,"regen"); // SECOND SKIN: knit closed after 5 quiet seconds
     if(rst&&u.hp<u.maxHp&&T-(u._lastHurt||-99)>5){
@@ -597,6 +625,10 @@ function healTick(dt){
         const healed=Math.min(u.maxHp,u.hp+s.rate*step)-u.hp;
         u.hp+=healed;
         if(s.unit)awardPts(s.unit,healed); // a point per HP mended
+        // v132.28 FIELD SURGEON. `healed` is already clamped against maxHp above, so overheal
+        // cannot inflate it. n:200 sits above the chirp threshold (Q.n<=20), so the fractions
+        // accumulate without spamming the notifier.
+        if(s.unit&&healed>0&&typeof questProgress==="function")questProgress(s.unit,"heal_hp",healed);
         setBar(u.bar,u.hp/u.maxHp);
         if(Math.random()<0.5)puff(u.root.position.x,2.7,u.root.position.z,0x6fdc7a);
         if(u.isPlayer)updatePlayerHud();

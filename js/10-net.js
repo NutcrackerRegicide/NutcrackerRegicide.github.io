@@ -24,7 +24,10 @@ var NET={
   // v132.9 29 -> 30: the Viking road's bow was reversed. The spine moved, so its clearance corridor
   // moved, so the trees moved; and the two team bazaars are defined ON the spine, so they moved too
   // and took their own clearance with them. Every node index downstream is different.
-  PROTO:33,             // v132.26 the capturable bazaars: `bz` is a new field in BOTH payloads and
+  PROTO:34,             // v132.28 the quest table: Perfect Guard deleted and seven postings appended,
+                        // so every QUESTS index above 20 renames. `qst.qi` and `qdraft.offer` are
+                        // POSITIONAL, so a .27 peer would read the wrong posting off the board.
+                        // v132.26 the capturable bazaars: `bz` is a new field in BOTH payloads and
                         // an older peer neither sends nor reads it, so two builds would disagree
                         // about who owns the Grand Bazaar while both drew it as neutral.             // bumped whenever the wire format changes OR the generated world does.
                         // v127: 25 → 26. The envelope (stock0/stock1/carry/ares) went from
@@ -694,7 +697,7 @@ NET.hostRelease=function(key,why){
   const r=NET.remotes[key];
   if(!r)return false;
   if(r.unit){r.unit.remote=null;r.unit.name=r.oldName; // the AI takes the reins back
-    const u=r.unit; u.lvl=0;u.xp=0;u.buffs={};u.quest=null;u.questDraft=null;u.qRerolls=0;u.smithOffer=null; // …but not the deserter's legend
+    const u=r.unit; u.lvl=0;u.xp=0;u.buffs={};u.quest=null;u.questDraft=null;u.qRerolls=0;u.smithOffer=null;u._rrCycle=false; // …but not the deserter's legend
     u.rally=false;u.rallyBy=null; // v128.4: set at admit, never cleared at drop
     if(typeof applyBuffStats==="function")applyBuffStats(u);
     if(typeof releaseWarband==="function")releaseWarband(u); // v95: the deserter's band returns to the King
@@ -1206,6 +1209,10 @@ NET.driveRemote=function(r,dt){
           else{
             const tk=Math.min(u.cls==="oxcart"?4:1,n.amount,cap-u.carry[n.type]); // v99: four swings' worth for the ox
             if(tk>0){n.amount-=tk; u.carry[n.type]+=tk;} // the guest's pack is just as finite
+            // v132.28 TIMBER HAUL — the guest's twin of the 09-main.js site. Omitting this is
+            // how a feature ships working for the host and silently dead for everyone else.
+            if(tk>0&&u.cls==="oxcart"&&n.type==="wood"&&typeof questProgress==="function")
+              questProgress(u,"ox_wood",tk);
             puff(n.x,1.5+(n.y||0),n.z,n.type==="food"?0xd23c2f:n.type==="gold"?0xe0a92e:n.type==="stone"?0x9aa2ad:0x8a6a3f);
             if(n.amount<=0)depleteNode(n);
           }

@@ -96,7 +96,9 @@ function updateQuestHud(){
   const lv=document.getElementById("qlvl"), qt=document.getElementById("qtext"), qb=document.getElementById("qbuffs");
   if(lv)lv.textContent="⭐ LV "+(player.lvl||0)+((player.xp||0)>0?" · "+player.xp+" XP to spend!":" · 0 XP");
   const q=player.quest&&QUESTS[player.quest.i];
-  if(qt)qt.textContent=q?("📜 "+q.name+": "+Math.min(player.quest.prog,q.n)+"/"+q.n)
+  // v132.28: ROUNDED for display only — heal_hp advances by fractional hit points, and the raw
+  // value would print as 37.42999999999995/200. quest.prog itself stays exact.
+  if(qt)qt.textContent=q?("📜 "+q.name+": "+Math.round(Math.min(player.quest.prog,q.n))+"/"+q.n)
                         :"📜 No quest — E at the Town Board";
   if(qb){
     const bl=[];
