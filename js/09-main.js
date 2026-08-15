@@ -118,6 +118,12 @@ function updatePlayer(dt){
           // v99: the ox takes FOUR swings' worth of timber a tick — but never more than the node or the bed holds
           const tk=Math.min(player.cls==="oxcart"?4:1,n.amount,cap-player.carry[n.type]);
           if(tk>0){n.amount-=tk; player.carry[n.type]+=tk;} // FULL means full — the node stops draining too
+          // GILDED HARVEST (v132.30): gold ore also feeds the team. Paid straight to the
+          // stockpile rather than into the pack, so it is not subject to carry capacity.
+          if(tk>0&&n.type==="gold"&&buffSt(player,"alchemy")&&typeof stock!=="undefined"&&stock[player.team]){
+            stock[player.team].food+=tk*buffSt(player,"alchemy");
+            if(typeof updateResHud==="function")updateResHud();
+          }
           // v132.28 TIMBER HAUL: counts wood actually taken, not swings taken.
           if(tk>0&&player.cls==="oxcart"&&n.type==="wood"&&typeof questProgress==="function")
             questProgress(player,"ox_wood",tk);
@@ -329,7 +335,15 @@ function applyLOD(){
 function updateUnitCommon(u,dt){
   // combat clocks are SIMULATION, not animation: they tick for every unit,
   // seen or unseen — a frozen atkT once locked far-away fights solid
-  u.atkT=Math.max(0,u.atkT-dt);
+  // DESPERATION (v132.30): +0.5% attack speed per 1% of health missing. This scales the CLOCK,
+  // not u.cd — u.cd is a STAT recomputed by applyBuffStats and cannot see live HP, and the
+  // "u.atkT=u.cd" reset appears at ten separate call sites. One place, once.
+  {
+    const fv=buffSt(u,"fervor");
+    let _sw=dt;
+    if(fv&&u.maxHp>0&&u.hp<u.maxHp)_sw=dt*(1+0.5*fv*(1-u.hp/u.maxHp));
+    u.atkT=Math.max(0,u.atkT-_sw);
+  }
   if(u.cls==="dragoon"){ // powder trickles back: one round per five seconds
     if(u.ammo===undefined)u.ammo=6; // v84: NO regen — six rounds a life; re-arming as a dragoon reloads
   }
@@ -487,10 +501,10 @@ function tickBoardBang(dt){
 // choice is made (walking away and returning shows the same three — no E-spam fishing).
 function smithOffer(u){ // roll, or recall, the standing offer
   if((u.xp||0)<1)return null;
-  const pool=BUFFS.filter(b=>buffSt(u,b.id)<BUFF_MAX_STACK); // maxed buffs never deal in
+  const pool=BUFFS.filter(b=>buffSt(u,b.id)<buffMax(b.id)); // maxed buffs never deal in
   if(!pool.length)return null;
   if(u.smithOffer&&u.smithOffer.length){ // the standing offer — pruned of anything since maxed
-    u.smithOffer=u.smithOffer.filter(id=>buffSt(u,id)<BUFF_MAX_STACK);
+    u.smithOffer=u.smithOffer.filter(id=>buffSt(u,id)<buffMax(id));
     if(u.smithOffer.length)return u.smithOffer;
   }
   const bag=pool.slice(), picks=[];
@@ -501,13 +515,13 @@ function smithOffer(u){ // roll, or recall, the standing offer
 function smithPick(u,id){ // spend 1 XP on ONE of the three on the table — host/solo authoritative
   if((u.xp||0)<1)return false;
   if(!u.smithOffer||u.smithOffer.indexOf(id)<0)return false; // only what's on the table
-  if(buffSt(u,id)>=BUFF_MAX_STACK)return false;
+  if(buffSt(u,id)>=buffMax(id))return false;
   const B=BUFFS.find(b=>b.id===id); if(!B)return false;
   u.xp--; u.buffs=u.buffs||{};
-  u.buffs[id]=Math.min(BUFF_MAX_STACK,(u.buffs[id]||0)+1);
+  u.buffs[id]=Math.min(buffMax(id),(u.buffs[id]||0)+1);
   u.smithOffer=null; // chosen: the next visit deals a fresh trio
   applyBuffStats(u);
-  questNotify(u,"🔨 "+B.name+" — "+B.desc+" (stack "+u.buffs[id]+"/"+BUFF_MAX_STACK+"). XP left: "+u.xp,"gold");
+  questNotify(u,"🔨 "+B.name+" — "+B.desc+" (stack "+u.buffs[id]+"/"+buffMax(id)+"). XP left: "+u.xp,"gold");
   if(typeof Sound!=="undefined"&&u.isPlayer)Sound.play("alert_buff"); // v100: buff-gained shing
   syncBuffs(u); syncQuest(u); if(u.isPlayer){updateQuestHud();updatePlayerHud();}
   return true;
@@ -515,7 +529,7 @@ function smithPick(u,id){ // spend 1 XP on ONE of the three on the table — hos
 function useBlacksmith(u){ // E at the forge: put the trio on the table
   if((u.xp||0)<1){questNotify(u,"🔨 The smith wants XP — finish Town Board quests to earn it.","warn");return;}
   const offer=smithOffer(u);
-  if(!offer){questNotify(u,"🔨 Every buff already rings at full strength (×"+BUFF_MAX_STACK+") — a living legend.","gold");return;}
+  if(!offer){questNotify(u,"🔨 Every buff already rings at full strength — a living legend.","gold");return;}
   if(u.isPlayer)openSmithMenu(offer); // host/solo: the menu opens right here
   else if(u.remote&&typeof NET!=="undefined"&&NET.mode==="host"){ // guest: ship the trio to their screen
     const r=NET.remotes[u.remote];
@@ -524,7 +538,7 @@ function useBlacksmith(u){ // E at the forge: put the trio on the table
 }
 function grantBuff(u,id){ // direct grant (tests & future scripted rewards)
   u.buffs=u.buffs||{};
-  u.buffs[id]=Math.min(BUFF_MAX_STACK,(u.buffs[id]||0)+1);
+  u.buffs[id]=Math.min(buffMax(id),(u.buffs[id]||0)+1);
   applyBuffStats(u); syncBuffs(u);
 }
 function bazaarTier(team,nm){ // 0 = nearest bazaar to YOUR throne, 1 = middle, 2 = farthest
@@ -542,6 +556,8 @@ function questTick(dt){ // host/solo: scout-quest geometry, Second Skin regen, c
   _captains.length=0;
   for(const u of units){
     if(!isHuman(u)||!u.alive)continue;
+    // v132.34: tmodTick MOVED to the host unit loop (statusTick) so debuffs reach non-humans.
+    // Ticking here as well would run every human's clock twice a frame.
     // ---- v132.28.2 ONE REROLL PER QUEST OPPORTUNITY, capped at QUEST_REROLL_MAX ----
     // Fires on the TRANSITION into questlessness, so it covers a fresh life, a finished quest and
     // a respawn with one rule, and cannot pay twice for the same opportunity.
@@ -618,6 +634,7 @@ function healTick(dt){
   if(!sources.length)return;
   for(const u of units){
     if(!u.alive||u.hp>=u.maxHp)continue;
+    if(typeof healBlocked==="function"&&healBlocked(u))continue; // v132.34 DEEP GASH
     if(u.isKing)continue; // no priest can mend a king — regicide must stick
     for(const s of sources){
       if(s.team!==u.team)continue;
@@ -725,6 +742,11 @@ function tickBody(skipRender){
         continue;
       }
       updateUnitCommon(u,dt);
+      // v132.34: the timed system ticks for EVERY unit here — host-only, once per frame. It used
+      // to run inside questTick, which walks humans alone; a poisoned creep would never have
+      // burned down. Ticking in both places would halve every duration in Batch B.
+      if(typeof statusTick==="function")statusTick(u,dt);
+      if(typeof isStunned==="function"&&isStunned(u))u.atkT=Math.max(u.atkT,tmodSum(u,"stun")>0?0.2:0);
       if(u.bot&&!u.isPlayer)updateBot(u,dt);
     }
     separate();

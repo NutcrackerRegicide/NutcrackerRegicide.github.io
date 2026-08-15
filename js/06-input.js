@@ -431,7 +431,11 @@ function playerInteract(){
       questProgress(player,"dep_food",20); // banked food is banked food
       b.crop=0;
       if(b.cropMesh){b.cropMesh.scale.y=0.15;for(const t of b.tassels)t.visible=false;}
-      stock[MYTEAM].food+=20; updateResHud();
+      stock[MYTEAM].food+=20;
+      // RICH SOIL (v132.30): a bigger yield off the same field.
+      if(typeof buffSt==="function"&&typeof player!=="undefined"&&buffSt(player,"reaping"))
+        stock[MYTEAM].food+=20*buffSt(player,"reaping");
+      updateResHud();
       if(typeof Sound!=="undefined")Sound.play("harvest",{x:b.x,z:b.z}); // v104: corn rustle
       msg("Harvested the corn: +20 food, straight to the stockpile.","blue");
       return;
@@ -592,7 +596,7 @@ document.getElementById("classmenu").addEventListener("click",e=>{
 
 function pickBuild(type){
   if((BLD[type].age||0)>teamAge[MYTEAM]){msg(BLD[type].name+" requires the "+AGES[BLD[type].age].name+". (T at your Town Center to advance)");return;}
-  if(!canAfford(MYTEAM,BLD[type].cost)){msg("Not enough resources for a "+BLD[type].name+".");return;}
+  if(!canAfford(MYTEAM,bldCost(player,type))){msg("Not enough resources for a "+BLD[type].name+".");return;}
   if(type==="farm")msg("Farms must border your Town Center or a Storage Pit.");
   cancelPlacing(); // never stack a second ghost
   closeMenus();
@@ -664,7 +668,7 @@ function updateGhostFollow(){ // shared by host frame and guest frame
     placing.snapWall=w||null;
     if(w){ghost.position.set(w.x,terrainHeight(w.x,w.z),w.z);ghost.rotation.y=w.rot||0;}
     else{ghost.position.set(a.x,terrainHeight(a.x,a.z),a.z);ghost.rotation.y=placing.rot||0;}
-    const ok=!!w&&canAfford(MYTEAM,BLD[placing.type].cost);
+    const ok=!!w&&canAfford(MYTEAM,bldCost(player,placing.type));
     ghost.traverse(o=>{if(o.material)o.material.opacity=ok?0.55:0.22;});
     return;
   }
@@ -773,13 +777,13 @@ function confirmPlace(){
   if(placing&&placing.gateMode){
     const w=placing.snapWall;
     if(!w){msg("No wall there — aim at one of your BUILT wall segments.");return;}
-    if(!canAfford(MYTEAM,BLD[placing.type].cost)){msg("Not enough resources for the gate.");return;}
+    if(!canAfford(MYTEAM,bldCost(player,placing.type))){msg("Not enough resources for the gate.");return;}
     if(typeof NET!=="undefined"&&NET.mode==="guest"){
       NET.guestAct({act:"gate",wid:w.id,type:placing.type});
       msg("Gate ordered — the wall will open for it.","blue");
       cancelPlacing();lockMouse();return;
     }
-    pay(MYTEAM,BLD[placing.type].cost);
+    pay(MYTEAM,bldCost(player,placing.type));
     placeGateOnWall(w,placing.type,MYTEAM);
     updateResHud();
     msg("⛏ Gate foundation set into the wall — hold E to raise it.");
@@ -799,11 +803,11 @@ function confirmPlace(){
     let laid=0;
     for(const s of segs){
       if(!validFor(placing.type,s.x,s.z,MYTEAM))continue;
-      if(!canAfford(MYTEAM,BLD[placing.type].cost))break;
+      if(!canAfford(MYTEAM,bldCost(player,placing.type)))break;
       if(typeof NET!=="undefined"&&NET.mode==="guest"){
         NET.guestAct({act:"build",type:placing.type,x:s.x,z:s.z,rot:s.rot});laid++;continue;
       }
-      pay(MYTEAM,BLD[placing.type].cost);
+      pay(MYTEAM,bldCost(player,placing.type));
       const wb=makeBuilding(MYTEAM,placing.type,s.x,s.z,false,s.rot); wb.qBy=player.id; laid++; // quest credit on completion
     }
     msg(laid?("⛏ "+laid+" wall foundation"+(laid>1?"s":"")+" laid — raise them with E."):"No valid ground along that line.");
@@ -812,14 +816,14 @@ function confirmPlace(){
   if(!placing)return;
   const x=ghost.position.x,z=ghost.position.z;
   if(!placementValid(x,z)){msg("Can't build there — too close to something.");return;}
-  if(!canAfford(MYTEAM,BLD[placing.type].cost)){msg("Not enough resources anymore.");cancelPlacing();return;}
+  if(!canAfford(MYTEAM,bldCost(player,placing.type))){msg("Not enough resources anymore.");cancelPlacing();return;}
   if(typeof NET!=="undefined"&&NET.mode==="guest"){
     NET.guestAct({act:"build",type:placing.type,x:x,z:z,rot:placing.rot||0});
     msg("Foundation ordered — hold E beside it once it appears.","blue");
     if(typeof Sound!=="undefined")Sound.play("place",{x:x,z:z}); // v100: foundation thunk (guest)
     cancelPlacing();lockMouse();return;
   }
-  pay(MYTEAM,BLD[placing.type].cost);
+  pay(MYTEAM,bldCost(player,placing.type));
   const nb=makeBuilding(MYTEAM,placing.type,x,z,false,placing.rot||0); nb.qBy=player.id; // quest credit on completion
   if(typeof Sound!=="undefined")Sound.play("place",{x:x,z:z}); // v100: foundation thunk
   msg("Foundation laid! Hold E next to it to build.","blue");
@@ -867,7 +871,7 @@ function renderBuildMenu(){
     });
     shown.forEach((bId,i)=>{
       const b=BLD[bId], locked=(b.age||0)>teamAge[MYTEAM];
-      html+='<div class="opt'+((locked||!canAfford(MYTEAM,b.cost))?" cant":"")+'" data-b="'+bId+'"><span><span class="key">'+(i+1)+'</span>'+
+      html+='<div class="opt'+((locked||!canAfford(MYTEAM,bldCostD(player,b)))?" cant":"")+'" data-b="'+bId+'"><span><span class="key">'+(i+1)+'</span>'+
             b.name+' <small>('+cat.desc[bId]+')</small></span><span class="cost">'+
             (locked?("🔒 "+AGES[b.age].name):fmtCost(b.cost))+'</span></div>';
     });

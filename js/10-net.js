@@ -24,7 +24,20 @@ var NET={
   // v132.9 29 -> 30: the Viking road's bow was reversed. The spine moved, so its clearance corridor
   // moved, so the trees moved; and the two team bazaars are defined ON the spine, so they moved too
   // and took their own clearance with them. Every node index downstream is different.
-  PROTO:34,             // v132.28 the quest table: Perfect Guard deleted and seven postings appended,
+  PROTO:40,             // v132.36 five proc/charge ids — the forge now speaks all 60, which
+                        // completes John CSV. Vocabulary again; a .39 peer cannot name them.
+                        // v132.35 six aura ids at the forge — vocabulary again, same as .30/.34.
+                        // v132.34 five debuff ids at the forge, and `tmd` now also carries stun,
+                        // bleed, poison and healblock kinds a .37 peer would not act on.
+                        // v132.33 `tmd`: a new host->owner message carrying a timed modifier, so a
+                        // guest predicts its own speed. A .36 peer ignores it and mispredicts.
+                        // v132.32 five more buff ids (the timed-modifier batch) — same reason as
+                        // .30: the vocabulary grew, so a .31 peer cannot name what the forge offers.
+                        // v132.30 the buff vocabulary: eighteen new ids at the forge. BUFFS is NOT
+                        // positionally indexed — `smith.offer` and `act:"buff"` carry ID STRINGS and
+                        // `bff.b` is an id→count map — so nothing renumbers. The break is that a .29
+                        // peer has no BUFFS entry for the new ids and would render an undefined name.
+                        // v132.28 the quest table: Perfect Guard deleted and seven postings appended,
                         // so every QUESTS index above 20 renames. `qst.qi` and `qdraft.offer` are
                         // POSITIONAL, so a .27 peer would read the wrong posting off the board.
                         // v132.26 the capturable bazaars: `bz` is a new field in BOTH payloads and
@@ -1042,7 +1055,10 @@ NET.driveRemote=function(r,dt){
         questProgress(u,"harvest");      // REAPER
         questProgress(u,"dep_food",20);  // banked food is banked food
         if(b.cropMesh){b.cropMesh.scale.y=0.15;for(const t of b.tassels)t.visible=false;}
-        stock[u.team].food+=20; updateResHud();
+        stock[u.team].food+=20;
+        // RICH SOIL — the guest's twin of the 06-input.js site.
+        if(typeof buffSt==="function"&&buffSt(u,"reaping"))stock[u.team].food+=20*buffSt(u,"reaping");
+        updateResHud();
         NET.note(r,"Harvested the corn: +20 food, straight to the stockpile.","blue");
         try{r.conn.send({t:"snd",k:"harvest",x:b.x,z:b.z});}catch(_){} // v104
         r.eUsed=true;break;
@@ -1209,6 +1225,11 @@ NET.driveRemote=function(r,dt){
           else{
             const tk=Math.min(u.cls==="oxcart"?4:1,n.amount,cap-u.carry[n.type]); // v99: four swings' worth for the ox
             if(tk>0){n.amount-=tk; u.carry[n.type]+=tk;} // the guest's pack is just as finite
+            // GILDED HARVEST — the guest's twin of the 09-main.js site.
+            if(tk>0&&n.type==="gold"&&buffSt(u,"alchemy")&&typeof stock!=="undefined"&&stock[u.team]){
+              stock[u.team].food+=tk*buffSt(u,"alchemy");
+              if(typeof updateResHud==="function")updateResHud();
+            }
             // v132.28 TIMBER HAUL — the guest's twin of the 09-main.js site. Omitting this is
             // how a feature ships working for the host and silently dead for everyone else.
             if(tk>0&&u.cls==="oxcart"&&n.type==="wood"&&typeof questProgress==="function")
@@ -1261,8 +1282,8 @@ NET.hostAct=function(r,a){
     const legit=d&&(a.cls==="villager"||a.cls==="trader"||a.cls==="oxcart"||
       Object.keys(LINES).some(l=>lineUnitFor(l,u.team)===a.cls));
     if(!legit)return deny("Unknown class.");
-    if(d.cost&&!canAfford(u.team,d.cost))return deny("The team stockpile can't afford a "+d.name+".");
-    if(d.cost)pay(u.team,d.cost);
+    if(d.cost&&!canAfford(u.team,bldCostD(u,d)))return deny("The team stockpile can't afford a "+d.name+".");
+    if(d.cost)pay(u.team,bldCostD(u,d));
     setClass(u,a.cls); updateResHud();
     if(a.cls!=="villager")questProgress(u,"train"); // MASTER-AT-ARMS
     msg(r.name+(a.cls==="villager"?" returns to the fields as a Villager.":" armed up as a "+d.name+"."),"blue");
@@ -1271,8 +1292,8 @@ NET.hostAct=function(r,a){
   if(a.act==="build"){
     const d=BLD[a.type]; if(!d)return deny("Unknown building.");
     if(!validFor(a.type,a.x,a.z,u.team))return deny("Can't build there — too close to something.");
-    if(!canAfford(u.team,d.cost))return deny("Not enough resources for a "+d.name+".");
-    pay(u.team,d.cost);
+    if(!canAfford(u.team,bldCostD(u,d)))return deny("Not enough resources for a "+d.name+".");
+    pay(u.team,bldCostD(u,d));
     const nb=makeBuilding(u.team,a.type,a.x,a.z,false,a.rot||0); nb.qBy=u.id; // quest credit on completion
     updateResHud();
     msg(r.name+" laid a "+d.name+" foundation.","blue");
@@ -1316,8 +1337,8 @@ NET.hostAct=function(r,a){
     const w=NET.bldById(a.wid), d=BLD[a.type];
     if(!w||!w.alive||!w.built||w.team!==u.team||!w.def.wall||w.def.gate)return deny("Aim at one of your BUILT wall segments.");
     if(!d||!d.gate)return deny("That is not a gate.");
-    if(!canAfford(u.team,d.cost))return deny("The stockpile can't afford a "+d.name+".");
-    pay(u.team,d.cost); placeGateOnWall(w,a.type,u.team); updateResHud();
+    if(!canAfford(u.team,bldCostD(u,d)))return deny("The stockpile can't afford a "+d.name+".");
+    pay(u.team,bldCostD(u,d)); placeGateOnWall(w,a.type,u.team); updateResHud();
     msg(r.name+" set a gate into the wall.","blue");
     return;
   }
@@ -1653,6 +1674,12 @@ NET.guestData=function(d){
   if(d.t==="qdraft"){ // v99: the Town Board's three postings arrive on OUR screen
     NET._qrr=d.rr||0;
     if(d.offer&&d.offer.length)openBoardMenu(d.offer);
+    return;
+  }
+  if(d.t==="tmd"){ // v132.33: OUR timed modifiers — prediction needs the real speed, same rule
+    if(d.clr){if(typeof player!=="undefined"&&player){player._tmods=null;player._lowLatch=false;}return;}
+    if(typeof tmodAdd==="function"&&typeof player!=="undefined"&&player)
+      tmodAdd(player,d.k,d.m,d.d,!!d.f,d.c||0);
     return;
   }
   if(d.t==="bff"){ // v87: OUR blacksmith buffs — prediction needs the real speed
@@ -2130,6 +2157,9 @@ NET.guestFrame=function(dt){
     }
   }
   drainVisualQueue(); // restyle wave + coalesced roads on the guest too
+  // v132.33: the guest expires its OWN timed modifiers. Without this the clock never runs on
+  // their side and a 2-second buff would last until the next one replaced it.
+  if(typeof tmodTick==="function"&&typeof player!=="undefined"&&player)tmodTick(player,dt);
   updateEffects(dt);
   updateProjectiles(dt); // pure theatre — damage is host-only
   if(typeof tickAgeResearch==="function")tickAgeResearch(dt,false); // v107: smooth countdown between snaps (display only)

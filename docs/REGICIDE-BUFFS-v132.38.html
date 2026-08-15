@@ -1,0 +1,516 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>REGICIDE PVP — the forge, all 60 buffs (v132.38)</title><style>
+*{box-sizing:border-box}
+body{margin:0;background:#0f1016;color:#e8e6e3;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:34px 22px 80px}
+h1{font-size:26px;margin:0 0 4px;letter-spacing:-.3px}
+h1 span{color:#FFC64A}
+.sub{color:#8b8f9e;margin:0 0 26px;font-size:14px}
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 24px}
+.stat{background:#171922;border:1px solid #24273a;border-radius:9px;padding:11px 15px;min-width:112px}
+.stat b{display:block;font-size:23px;color:#FFC64A;line-height:1.15;font-variant-numeric:tabular-nums}
+.stat span{font-size:11.5px;color:#8b8f9e;text-transform:uppercase;letter-spacing:.55px}
+.controls{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:0 0 16px}
+input[type=search]{background:#171922;border:1px solid #2a2e42;border-radius:8px;color:#e8e6e3;
+  padding:9px 13px;font-size:14px;min-width:230px;font-family:inherit}
+input[type=search]:focus{outline:none;border-color:#FFC64A}
+.chip{background:#171922;border:1px solid #2a2e42;border-radius:99px;padding:6px 13px;font-size:13px;
+  color:#8b8f9e;cursor:pointer;user-select:none;transition:.12s}
+.chip:hover{border-color:#3d425e;color:#c9cbd6}
+.chip.on{background:#FFC64A;border-color:#FFC64A;color:#161616;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:#8b8f9e;
+  font-weight:600;padding:9px 11px;border-bottom:1px solid #2a2e42;position:sticky;top:0;background:#0f1016}
+td{padding:12px 11px;border-bottom:1px solid #1c1f2e;vertical-align:top}
+tr:hover td{background:#14161f}
+.nm b{display:block;font-weight:600}
+.nm code{font-size:11.5px;color:#6b7086;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.ds{color:#c1c4d0;max-width:330px}
+.stack{display:inline-block;background:#1e2130;border:1px solid #2f3449;border-radius:6px;
+  padding:2px 8px;font-size:12.5px;font-variant-numeric:tabular-nums;color:#c9cbd6}
+.tag{display:inline-block;background:color-mix(in srgb,var(--c) 15%,transparent);color:var(--c);
+  border:1px solid color-mix(in srgb,var(--c) 35%,transparent);border-radius:5px;padding:1px 8px;font-size:11.5px;font-weight:600}
+.cue .mix{display:inline-block;margin-left:6px;background:rgba(127,216,143,.14);color:#7fd88f;
+  border:1px solid rgba(127,216,143,.35);border-radius:4px;padding:0 6px;font-size:10.5px;font-weight:600;
+  vertical-align:1px}
+.cue b{color:#FFC64A;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+.cue .file{display:block;color:#8b8f9e;font-size:11.5px;font-family:ui-monospace,Menlo,monospace;margin-top:1px}
+.cue .dial{display:block;color:#5a5e6b;font-size:11px;margin-top:3px;font-variant-numeric:tabular-nums}
+.nocue p{margin:5px 0 0;color:#7a7f92;font-size:12.5px;max-width:290px;line-height:1.45}
+.sd{width:320px}
+.note{background:#171922;border:1px solid #24273a;border-left:3px solid #FFC64A;border-radius:8px;
+  padding:15px 18px;margin:0 0 26px}
+.note h2{margin:0 0 7px;font-size:15px;color:#FFC64A}
+.note p{margin:0 0 8px;color:#b6b9c6;font-size:13.5px}
+.note p:last-child{margin-bottom:0}
+.empty{padding:34px;text-align:center;color:#6b7086}
+footer{margin-top:32px;color:#5a5e6b;font-size:12px;border-top:1px solid #1c1f2e;padding-top:16px}
+</style></head><body><div class="wrap">
+<h1>The forge — all <span>60</span> buffs</h1>
+<p class="sub">REGICIDE PVP v132.38 · 39 of them new this cycle, the complete <em>REGICIDE-STATS-vFUTURE</em> CSV · 16 carry their own sound, 11 of those built by layering</p>
+
+<div class="stats">
+  <div class="stat"><b>60</b><span>buffs total</span></div>
+  <div class="stat"><b>39</b><span>new, batches A–E</span></div>
+  <div class="stat"><b>16</b><span>with a cue</span></div>
+  <div class="stat"><b>11</b><span>layered composites</span></div>
+  <div class="stat"><b>0</b><span>of 11,935 pairs alike</span></div>
+  <div class="stat"><b>652</b><span>assertions green</span></div>
+</div>
+
+<div class="note">
+  <h2>Seven of the twelve were sounds the game already played</h2>
+  <p>The v132.37 gate that claimed &ldquo;no sound reuse&rdquo; compared <em>keys</em>. It was green while
+  <code>bleedhit</code> <em>was</em> <code>gore1</code>, <code>wardblock</code> <em>was</em> <code>arrowhit1</code>,
+  <code>stunhit</code> <em>was</em> <code>hit1</code> &mdash; the same recording, different filename, re-encoded so
+  even the bytes differed. A player does not hear a key.</p>
+  <p>A new screen decodes every sound in the bank and compares all <strong>11,935</strong> pairs by envelope and
+  spectrum. It found those seven, and one that predates them: <code>bighaul</code>, <code>cannonhit</code> and
+  <code>alert_attack</code> had been three keys on one recording since v104 &mdash; a good trade payout sounded
+  exactly like a cannonball landing on you.</p>
+  <p>The fix is John&rsquo;s: <em>combine it with another sound to make it unique.</em> Eleven cues are now baked
+  composites &mdash; two or three library sounds mixed at build time with per-layer gain, delay and a real
+  resample. Baked rather than played twice, so each costs one voice, one decode, one panned source. Every
+  ingredient still scores <strong>1.000</strong> against something in the bank; every composite drops to
+  0.78&ndash;0.93 with a different nearest neighbour. Best of them is Rapid Volley &mdash; three bow twangs at
+  115ms intervals, because that is literally what the buff does.</p>
+</div>
+
+<div class="controls">
+  <input type="search" id="q" placeholder="Search name, id or effect…" autocomplete="off">
+  <span class="chip on" data-f="all">All 60</span>
+  <span class="chip" data-f="s:cue">Has a cue (16)</span>
+  <span class="chip" data-f="mix">Layered (11)</span>
+  <span class="chip" data-f="s:candidate">Could speak next (3)</span>
+  <span class="chip" data-f="new">New this cycle (39)</span>
+  <span class="chip" data-f="b:A">A</span><span class="chip" data-f="b:B">B</span>
+  <span class="chip" data-f="b:C">C</span><span class="chip" data-f="b:D">D</span>
+  <span class="chip" data-f="b:E">E</span>
+</div>
+
+<table><thead><tr><th>Buff</th><th>What it does</th><th>Max</th><th>Batch</th><th>Sound</th></tr></thead>
+<tbody id="tb">
+<tr data-b="—" data-s="passive" data-mix="0" data-q="dmg honed edge +5% damage">
+    <td class="nm"><b>Honed Edge</b><code>dmg</code></td>
+    <td class="ds">+5% damage</td>
+    <td class="mx"><span class="stack">5</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="atkspd quick hands −0.1s attack cooldown">
+    <td class="nm"><b>Quick Hands</b><code>atkspd</code></td>
+    <td class="ds">−0.1s attack cooldown</td>
+    <td class="mx"><span class="stack">5</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="cue" data-mix="1" data-q="crit keen eye +5% chance of a critical (2× damage)">
+    <td class="nm"><b>Keen Eye</b><code>crit</code></td>
+    <td class="ds">+5% chance of a CRITICAL (2× damage)</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="cue"><b>critstrike</b><span class="mix">layered</span>
+       <span class="file">Sword_Clang_3 +1st + Whoosh_Shing +5st @60ms</span>
+       <span class="dial">gain 0.95 · ear 140ms · wire 70ms</span></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="shield raised shield −5% damage taken">
+    <td class="nm"><b>Raised Shield</b><code>shield</code></td>
+    <td class="ds">−5% damage taken</td>
+    <td class="mx"><span class="stack">5</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="hp stout heart +5% max hp">
+    <td class="nm"><b>Stout Heart</b><code>hp</code></td>
+    <td class="ds">+5% max HP</td>
+    <td class="mx"><span class="stack">5</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="cue" data-mix="1" data-q="dodge sixth sense 5% chance to dodge any blow">
+    <td class="nm"><b>Sixth Sense</b><code>dodge</code></td>
+    <td class="ds">5% chance to dodge any blow</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="cue"><b>dodgeswish</b><span class="mix">layered</span>
+       <span class="file">Sword_Passby_8 −1st + Leather_Foley @45ms</span>
+       <span class="dial">gain 0.80 · ear 150ms · wire 75ms</span></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="spd fleet foot +0.5 move speed">
+    <td class="nm"><b>Fleet Foot</b><code>spd</code></td>
+    <td class="ds">+0.5 move speed</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="carry deep satchel +10 carry capacity">
+    <td class="nm"><b>Deep Satchel</b><code>carry</code></td>
+    <td class="ds">+10 carry capacity</td>
+    <td class="mx"><span class="stack">5</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="gather practiced hands −0.1s per gather swing">
+    <td class="nm"><b>Practiced Hands</b><code>gather</code></td>
+    <td class="ds">−0.1s per gather swing</td>
+    <td class="mx"><span class="stack">5</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="builder master builder buildings need fewer hits from you">
+    <td class="nm"><b>Master Builder</b><code>builder</code></td>
+    <td class="ds">buildings need fewer hits from you</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="slayer wild slayer +15% damage vs the wilds' creatures">
+    <td class="nm"><b>Wild Slayer</b><code>slayer</code></td>
+    <td class="ds">+15% damage vs the wilds' creatures</td>
+    <td class="mx"><span class="stack">5</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="drone" data-mix="0" data-q="captain captain's banner +1% damage to allies fighting near you">
+    <td class="nm"><b>Captain's Banner</b><code>captain</code></td>
+    <td class="ds">+1% damage to allies fighting near you</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#8b8f9e">continuous — would drone</span><p>Continuous or per-tick. A cue here is a buzz, not feedback.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="leech bloodthirst heal 1 hp with every hit you land">
+    <td class="nm"><b>Bloodthirst</b><code>leech</code></td>
+    <td class="ds">heal 1 HP with every hit you land</td>
+    <td class="mx"><span class="stack">5</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="drone" data-mix="0" data-q="regen second skin +0.5 hp/s after 5s out of combat">
+    <td class="nm"><b>Second Skin</b><code>regen</code></td>
+    <td class="ds">+0.5 HP/s after 5s out of combat</td>
+    <td class="mx"><span class="stack">5</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#8b8f9e">continuous — would drone</span><p>Continuous or per-tick. A cue here is a buzz, not feedback.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="bounty bounty hunter +10% score points earned">
+    <td class="nm"><b>Bounty Hunter</b><code>bounty</code></td>
+    <td class="ds">+10% score points earned</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="zeal zealotry −1.5s priest resurrect cooldown">
+    <td class="nm"><b>Zealotry</b><code>zeal</code></td>
+    <td class="ds">−1.5s priest resurrect cooldown</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="trade deep pockets +10% trade-sell payout">
+    <td class="nm"><b>Deep Pockets</b><code>trade</code></td>
+    <td class="ds">+10% trade-sell payout</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="parry duelist +0.07s parry window">
+    <td class="nm"><b>Duelist</b><code>parry</code></td>
+    <td class="ds">+0.07s parry window</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="siege siegewright +10% damage crewing siege engines">
+    <td class="nm"><b>Siegewright</b><code>siege</code></td>
+    <td class="ds">+10% damage crewing siege engines</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="wreck wrecker +10% damage vs buildings">
+    <td class="nm"><b>Wrecker</b><code>wreck</code></td>
+    <td class="ds">+10% damage vs buildings</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="—" data-s="passive" data-mix="0" data-q="rally bannerman rally one additional troop">
+    <td class="nm"><b>Bannerman</b><code>rally</code></td>
+    <td class="ds">rally one additional troop</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#8b8f9e">Original</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="ambush first blood +50% damage to enemies at full health">
+    <td class="nm"><b>First Blood</b><code>ambush</code></td>
+    <td class="ds">+50% damage to enemies at FULL health</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="trophy trophy hunter +1 max hp with every kill, up to +100">
+    <td class="nm"><b>Trophy Hunter</b><code>trophy</code></td>
+    <td class="ds">+1 max HP with every kill, up to +100</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="cue" data-mix="1" data-q="cull culler instantly slay wild creatures below 15% hp">
+    <td class="nm"><b>Culler</b><code>cull</code></td>
+    <td class="ds">instantly slay wild creatures below 15% HP</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="cue"><b>cullkill</b><span class="mix">layered</span>
+       <span class="file">Dagger_2_x2 −1st + Body_Drop_1 −2st @255ms</span>
+       <span class="dial">gain 0.85 · ear 200ms · wire 100ms</span></div></td></tr>
+<tr data-b="A" data-s="candidate" data-mix="0" data-q="feast second wind restore 10% of your hp on a kill">
+    <td class="nm"><b>Second Wind</b><code>feast</code></td>
+    <td class="ds">restore 10% of your HP on a kill</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#7aa2f7">could speak next</span><p>Restoring 10% HP on a kill is a felt moment with nothing marking it.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="fervor desperation +0.5% attack speed per 1% of health missing">
+    <td class="nm"><b>Desperation</b><code>fervor</code></td>
+    <td class="ds">+0.5% attack speed per 1% of health missing</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="purse cutpurse pocket 10 gold on a kill">
+    <td class="nm"><b>Cutpurse</b><code>purse</code></td>
+    <td class="ds">pocket 10 gold on a kill</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="forage scavenger pocket 10 food on a kill">
+    <td class="nm"><b>Scavenger</b><code>forage</code></td>
+    <td class="ds">pocket 10 food on a kill</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="mule pack mule (villager) a fuller load moves faster, to +10%">
+    <td class="nm"><b>Pack Mule</b><code>mule</code></td>
+    <td class="ds">(villager) a fuller load moves faster, to +10%</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="drone" data-mix="0" data-q="thorns bramble mail deal 1 damage back to a melee attacker">
+    <td class="nm"><b>Bramble Mail</b><code>thorns</code></td>
+    <td class="ds">deal 1 damage back to a melee attacker</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#8b8f9e">continuous — would drone</span><p>Continuous or per-tick. A cue here is a buzz, not feedback.</p></div></td></tr>
+<tr data-b="A" data-s="drone" data-mix="0" data-q="tribute blood tax gain 1 gold whenever you take damage">
+    <td class="nm"><b>Blood Tax</b><code>tribute</code></td>
+    <td class="ds">gain 1 gold whenever you take damage</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#8b8f9e">continuous — would drone</span><p>Continuous or per-tick. A cue here is a buzz, not feedback.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="alchemy gilded harvest mining gold also feeds your team">
+    <td class="nm"><b>Gilded Harvest</b><code>alchemy</code></td>
+    <td class="ds">mining gold also feeds your team</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="reaping rich soil +20 extra food when you harvest a farm">
+    <td class="nm"><b>Rich Soil</b><code>reaping</code></td>
+    <td class="ds">+20 extra food when you harvest a farm</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="bulwark bulwark defensive structures cost you half">
+    <td class="nm"><b>Bulwark</b><code>bulwark</code></td>
+    <td class="ds">defensive structures cost you half</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="enginebane enginebane (ranged) +50% damage to siege engines">
+    <td class="nm"><b>Enginebane</b><code>enginebane</code></td>
+    <td class="ds">(ranged) +50% damage to siege engines</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="woods woodsman +10% damage while fighting in the woods">
+    <td class="nm"><b>Woodsman</b><code>woods</code></td>
+    <td class="ds">+10% damage while fighting in the woods</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="warden beast warden take 10% less damage from the wilds">
+    <td class="nm"><b>Beast Warden</b><code>warden</code></td>
+    <td class="ds">take 10% less damage from the wilds</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="yeoman yeoman (villager) double health and double damage">
+    <td class="nm"><b>Yeoman</b><code>yeoman</code></td>
+    <td class="ds">(villager) double health and double damage</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="A" data-s="passive" data-mix="0" data-q="kguard king's guard +10% damage and −10% damage taken near your king">
+    <td class="nm"><b>King's Guard</b><code>kguard</code></td>
+    <td class="ds">+10% damage and −10% damage taken near your King</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7aa2f7">A</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#5a5e6b">passive — no moment</span><p>A permanent stat change. There is no moment for a sound to belong to.</p></div></td></tr>
+<tr data-b="B" data-s="candidate" data-mix="0" data-q="frenzy killing frenzy +2 damage per kill, to +10, for 7s">
+    <td class="nm"><b>Killing Frenzy</b><code>frenzy</code></td>
+    <td class="ds">+2 damage per kill, to +10, for 7s</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#9d7cd8">B</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#7aa2f7">could speak next</span><p>The stack building on each kill has no feedback at all.</p></div></td></tr>
+<tr data-b="B" data-s="candidate" data-mix="0" data-q="surge bloodrush +50% move speed on a kill, fading over 2s">
+    <td class="nm"><b>Bloodrush</b><code>surge</code></td>
+    <td class="ds">+50% move speed on a kill, fading over 2s</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#9d7cd8">B</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#7aa2f7">could speak next</span><p>A burst of speed on a kill — currently indistinguishable from walking.</p></div></td></tr>
+<tr data-b="B" data-s="cue" data-mix="1" data-q="flight survival instinct +40% move speed for 5s when you drop below 25% hp">
+    <td class="nm"><b>Survival Instinct</b><code>flight</code></td>
+    <td class="ds">+40% move speed for 5s when you drop below 25% HP</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#9d7cd8">B</span></td>
+    <td class="sd"><div class="cue"><b>lastlegs</b><span class="mix">layered</span>
+       <span class="file">Wind_Transition_2 +2st + Chime_Orb_1 −4st @30ms</span>
+       <span class="dial">gain 1.00 · ear 400ms · wire 200ms</span></div></td></tr>
+<tr data-b="B" data-s="drone" data-mix="0" data-q="stride long strider +30% move speed while out of combat">
+    <td class="nm"><b>Long Strider</b><code>stride</code></td>
+    <td class="ds">+30% move speed while out of combat</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#9d7cd8">B</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#8b8f9e">continuous — would drone</span><p>Continuous or per-tick. A cue here is a buzz, not feedback.</p></div></td></tr>
+<tr data-b="B" data-s="drone" data-mix="0" data-q="hunt hunter's step (melee) +10% move speed for 2s when you land a blow">
+    <td class="nm"><b>Hunter's Step</b><code>hunt</code></td>
+    <td class="ds">(melee) +10% move speed for 2s when you land a blow</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#9d7cd8">B</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#8b8f9e">continuous — would drone</span><p>Continuous or per-tick. A cue here is a buzz, not feedback.</p></div></td></tr>
+<tr data-b="C" data-s="cue" data-mix="1" data-q="bleed serrated edge 5% chance on hit to bleed an enemy for 20 hp over 20s">
+    <td class="nm"><b>Serrated Edge</b><code>bleed</code></td>
+    <td class="ds">5% chance on hit to bleed an enemy for 20 HP over 20s</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#e06c75">C</span></td>
+    <td class="sd"><div class="cue"><b>bleedhit</b><span class="mix">layered</span>
+       <span class="file">Blood_Squirt_1 + Blood_Squirt_2 −3st @175ms</span>
+       <span class="dial">gain 0.70 · ear 200ms · wire 100ms</span></div></td></tr>
+<tr data-b="C" data-s="cue" data-mix="0" data-q="venom venomous 5% chance on hit to poison — 10 hp and half speed over 10s">
+    <td class="nm"><b>Venomous</b><code>venom</code></td>
+    <td class="ds">5% chance on hit to poison — 10 HP and half speed over 10s</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#e06c75">C</span></td>
+    <td class="sd"><div class="cue"><b>venomhit</b>
+       <span class="file">Alchemy_Potion_Bubble</span>
+       <span class="dial">gain 0.70 · ear 200ms · wire 100ms</span></div></td></tr>
+<tr data-b="C" data-s="cue" data-mix="1" data-q="concuss concussive blow (melee) 5% chance on hit to stun, once every 30s">
+    <td class="nm"><b>Concussive Blow</b><code>concuss</code></td>
+    <td class="ds">(melee) 5% chance on hit to STUN, once every 30s</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#e06c75">C</span></td>
+    <td class="sd"><div class="cue"><b>stunhit</b><span class="mix">layered</span>
+       <span class="file">Shield_Bash_1 + Chime_Orb_3 −5st @70ms</span>
+       <span class="dial">gain 1.00 · ear 150ms · wire 75ms</span></div></td></tr>
+<tr data-b="C" data-s="cue" data-mix="1" data-q="gash deep gash your damage stops an enemy healing for 3s">
+    <td class="nm"><b>Deep Gash</b><code>gash</code></td>
+    <td class="ds">your damage stops an enemy healing for 3s</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#e06c75">C</span></td>
+    <td class="sd"><div class="cue"><b>gashcut</b><span class="mix">layered</span>
+       <span class="file">Dagger_1_Slash + Tailoring_Rip_Tear −2st @55ms</span>
+       <span class="dial">gain 0.70 · ear 200ms · wire 100ms</span></div></td></tr>
+<tr data-b="C" data-s="cue" data-mix="1" data-q="shrug shrug it off 10% chance when struck to shed every debuff">
+    <td class="nm"><b>Shrug It Off</b><code>shrug</code></td>
+    <td class="ds">10% chance when struck to shed every debuff</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#e06c75">C</span></td>
+    <td class="sd"><div class="cue"><b>shrugoff</b><span class="mix">layered</span>
+       <span class="file">Plate_Chainmail + Whoosh_Shing +3st @90ms</span>
+       <span class="dial">gain 0.75 · ear 250ms · wire 125ms</span></div></td></tr>
+<tr data-b="D" data-s="cue" data-mix="0" data-q="sanctuary sanctuary stand still 3s to open a healing zone — 3% hp a second">
+    <td class="nm"><b>Sanctuary</b><code>sanctuary</code></td>
+    <td class="ds">stand still 3s to open a healing zone — 3% HP a second</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7fd88f">D</span></td>
+    <td class="sd"><div class="cue"><b>sanctuary</b>
+       <span class="file">Enchanting_Harp_Tone</span>
+       <span class="dial">gain 0.80 · ear 900ms · wire 450ms</span></div></td></tr>
+<tr data-b="D" data-s="cue" data-mix="0" data-q="brand searing presence nearby enemies burn for 1 hp a second">
+    <td class="nm"><b>Searing Presence</b><code>brand</code></td>
+    <td class="ds">nearby enemies burn for 1 HP a second</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7fd88f">D</span></td>
+    <td class="sd"><div class="cue"><b>sear</b>
+       <span class="file">Flame_Shot_Slide_1</span>
+       <span class="dial">gain 0.60 · ear 600ms · wire 300ms</span></div></td></tr>
+<tr data-b="D" data-s="drone" data-mix="0" data-q="resolve unbowed −5% damage taken for every enemy near you, to −25%">
+    <td class="nm"><b>Unbowed</b><code>resolve</code></td>
+    <td class="ds">−5% damage taken for every enemy near you, to −25%</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7fd88f">D</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#8b8f9e">continuous — would drone</span><p>Continuous or per-tick. A cue here is a buzz, not feedback.</p></div></td></tr>
+<tr data-b="D" data-s="drone" data-mix="0" data-q="phalanx phalanx +5% damage for every ally beside you, to +20%">
+    <td class="nm"><b>Phalanx</b><code>phalanx</code></td>
+    <td class="ds">+5% damage for every ally beside you, to +20%</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7fd88f">D</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#8b8f9e">continuous — would drone</span><p>Continuous or per-tick. A cue here is a buzz, not feedback.</p></div></td></tr>
+<tr data-b="D" data-s="drone" data-mix="0" data-q="kinship kinship mend while a soldier of your own kind stands near">
+    <td class="nm"><b>Kinship</b><code>kinship</code></td>
+    <td class="ds">mend while a soldier of your own kind stands near</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7fd88f">D</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#8b8f9e">continuous — would drone</span><p>Continuous or per-tick. A cue here is a buzz, not feedback.</p></div></td></tr>
+<tr data-b="D" data-s="drone" data-mix="0" data-q="steward steward (villager) mend nearby friendly buildings, 0.5 hp a second">
+    <td class="nm"><b>Steward</b><code>steward</code></td>
+    <td class="ds">(villager) mend nearby friendly buildings, 0.5 HP a second</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#7fd88f">D</span></td>
+    <td class="sd"><div class="nocue"><span class="tag" style="--c:#8b8f9e">continuous — would drone</span><p>Continuous or per-tick. A cue here is a buzz, not feedback.</p></div></td></tr>
+<tr data-b="E" data-s="cue" data-mix="0" data-q="quake earthshaker (melee) 5% chance on hit to slam the ground for area damage">
+    <td class="nm"><b>Earthshaker</b><code>quake</code></td>
+    <td class="ds">(melee) 5% chance on hit to slam the ground for area damage</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#e5c07b">E</span></td>
+    <td class="sd"><div class="cue"><b>quakeslam</b>
+       <span class="file">Earthquake_Ground_Rumble</span>
+       <span class="dial">gain 1.00 · ear 250ms · wire 125ms</span></div></td></tr>
+<tr data-b="E" data-s="cue" data-mix="0" data-q="knives knife fighter 10% chance every 2s to hurl a knife at a nearby enemy">
+    <td class="nm"><b>Knife Fighter</b><code>knives</code></td>
+    <td class="ds">10% chance every 2s to hurl a knife at a nearby enemy</td>
+    <td class="mx"><span class="stack">2</span></td>
+    <td class="bt"><span class="tag" style="--c:#e5c07b">E</span></td>
+    <td class="sd"><div class="cue"><b>knifethrow</b>
+       <span class="file">Throwing_Dagger_Woosh</span>
+       <span class="dial">gain 0.75 · ear 150ms · wire 75ms</span></div></td></tr>
+<tr data-b="E" data-s="cue" data-mix="1" data-q="volley rapid volley (ranged) 5% chance to loose three shots, once every 10s">
+    <td class="nm"><b>Rapid Volley</b><code>volley</code></td>
+    <td class="ds">(ranged) 5% chance to loose THREE shots, once every 10s</td>
+    <td class="mx"><span class="stack">1</span></td>
+    <td class="bt"><span class="tag" style="--c:#e5c07b">E</span></td>
+    <td class="sd"><div class="cue"><b>volleyshot</b><span class="mix">layered</span>
+       <span class="file">Bow_Ping + Twang_2 +1st @115ms + Twang_3 −1st @232ms</span>
+       <span class="dial">gain 0.85 · ear 120ms · wire 60ms</span></div></td></tr>
+<tr data-b="E" data-s="cue" data-mix="1" data-q="ward arrow ward block one ranged attack every 30s (faster per stack)">
+    <td class="nm"><b>Arrow Ward</b><code>ward</code></td>
+    <td class="ds">block one ranged attack every 30s (faster per stack)</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#e5c07b">E</span></td>
+    <td class="sd"><div class="cue"><b>wardblock</b><span class="mix">layered</span>
+       <span class="file">Arrow_Swoosh_Hit_1 + Chime_Orb_3 +2st @60ms</span>
+       <span class="dial">gain 0.90 · ear 120ms · wire 60ms</span></div></td></tr>
+<tr data-b="E" data-s="cue" data-mix="1" data-q="guardup iron guard block one melee attack every 30s (faster per stack)">
+    <td class="nm"><b>Iron Guard</b><code>guardup</code></td>
+    <td class="ds">block one melee attack every 30s (faster per stack)</td>
+    <td class="mx"><span class="stack">3</span></td>
+    <td class="bt"><span class="tag" style="--c:#e5c07b">E</span></td>
+    <td class="sd"><div class="cue"><b>guardblock</b><span class="mix">layered</span>
+       <span class="file">Sword_Clang_2 + Metal_Block_1 −1st @135ms</span>
+       <span class="dial">gain 0.90 · ear 120ms · wire 60ms</span></div></td></tr>
+</tbody></table>
+<div class="empty" id="none" style="display:none">Nothing matches that.</div>
+
+<footer>Generated from <code>js/00-data.js</code>, <code>js/05-combat.js</code> and <code>js/11-audio.js</code> —
+not typed by hand, so it cannot drift from the game. Gain, ear-throttle and wire-window are the live values, and the layer recipes are read from
+<code>tools/sfxmix.js</code>.
+&nbsp;·&nbsp; Sounds are Epic Stock Media (Empire Game), used under the licence John purchased.</footer>
+</div>
+<script>
+var q=document.getElementById("q"),rowsEl=[].slice.call(document.querySelectorAll("#tb tr")),f="all";
+function apply(){
+  var t=q.value.trim().toLowerCase(),n=0;
+  rowsEl.forEach(function(r){
+    var ok=true;
+    if(f==="new")ok=r.dataset.b!=="—";
+    else if(f==="mix")ok=r.dataset.mix==="1";
+    else if(f.indexOf("s:")===0)ok=r.dataset.s===f.slice(2);
+    else if(f.indexOf("b:")===0)ok=r.dataset.b===f.slice(2);
+    if(ok&&t)ok=r.dataset.q.indexOf(t)>=0;
+    r.style.display=ok?"":"none"; if(ok)n++;
+  });
+  document.getElementById("none").style.display=n?"none":"";
+}
+q.addEventListener("input",apply);
+[].forEach.call(document.querySelectorAll(".chip"),function(c){
+  c.addEventListener("click",function(){
+    [].forEach.call(document.querySelectorAll(".chip"),function(x){x.classList.remove("on")});
+    c.classList.add("on"); f=c.dataset.f; apply();
+  });
+});
+</script></body></html>

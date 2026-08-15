@@ -1,5 +1,230 @@
 /* REGICIDE PVP — 05-combat.js */
 // ---------- effects / projectiles ----------
+// ---------- v132.32 TIMED SELF-MODIFIERS ----------
+// One entry per KIND, refreshed rather than duplicated — five kills in a row must not leave five
+// timers behind. `fade` scales the magnitude by the life remaining, which is what "fading over
+// two seconds" means and what a plain expiry cannot say.
+const TMOD_OOC=5;      // seconds unhit before LONG STRIDER opens up — the same threshold, and the
+                       // same field, Second Skin already uses, so the game has ONE definition of
+                       // "out of combat" rather than two that drift apart.
+const TMOD_LOW=0.25;   // the SURVIVAL INSTINCT line
+function tmodAdd(u,k,mag,dur,fade,cap){
+  if(!u)return;
+  if(!u._tmods)u._tmods=[];
+  for(const e of u._tmods){
+    if(e.k!==k)continue;
+    e.mag=cap?Math.min(cap,e.mag+mag):Math.max(e.mag,mag);   // accumulate to a cap, or refresh
+    e.t=dur; e.dur=dur; e.fade=!!fade;
+    tmodSync(u,k,mag,dur,fade,cap);
+    return;
+  }
+  u._tmods.push({k:k,mag:mag,t:dur,dur:dur,fade:!!fade});
+  tmodSync(u,k,mag,dur,fade,cap);
+}
+// v132.33: ship it to the owner so their PREDICTION matches. The send lives in tmodAdd and not at
+// its call sites — a call site that forgets to sync is the exact bug this fixes, and batches C-E
+// will add more of them. Guests and solo play fall straight through the mode check.
+function tmodSync(u,k,mag,dur,fade,cap){
+  if(typeof NET==="undefined"||NET.mode!=="host"||!u||!u.remote)return;
+  const r=NET.remotes[u.remote]; if(!r||!r.conn)return;
+  try{r.conn.send({t:"tmd",k:k,m:mag,d:dur,f:fade?1:0,c:cap||0});}catch(_){}
+}
+function tmodSyncClear(u){
+  if(typeof NET==="undefined"||NET.mode!=="host"||!u||!u.remote)return;
+  const r=NET.remotes[u.remote]; if(!r||!r.conn)return;
+  try{r.conn.send({t:"tmd",clr:1});}catch(_){}
+}
+function tmodSum(u,k){ // ADDITIVE kinds (flat damage): two sources add
+  const a=u&&u._tmods; if(!a)return 0;
+  let s=0;
+  for(const e of a)if(e.k===k)s+=e.fade?e.mag*(e.t/e.dur):e.mag;
+  return s;
+}
+function tmodMul(u,k){ // MULTIPLICATIVE kinds (move speed): two sources compound
+  const a=u&&u._tmods; if(!a)return 1;
+  let m=1;
+  for(const e of a)if(e.k===k)m*=1+(e.fade?e.mag*(e.t/e.dur):e.mag);
+  return m;
+}
+// v132.37: every triggered buff has its own cue. Positional, so the existing panner places it.
+// ONE path for all twelve: play it here, and put it on the wire. Ten of the twelve fire from
+// host-only code (dealDamage bails on guests; auraBuffTick and knifeTick run in the host loop),
+// so without the broadcast a guest hears almost none of them — and a DEDICATED SERVER, which has
+// no local player at all, would play the whole set to an empty room.
+// Half the client-side category window: the host relays a slightly denser stream than it plays,
+// and each guest thins it with its own throttle, judged at its own position. See js/11-audio.js.
+const SFX_NET={bleedhit:0.10,venomhit:0.10,gashcut:0.10,stunhit:0.075,shrugoff:0.125,sear:0.30,
+  knifethrow:0.075,volleyshot:0.06,wardblock:0.06,guardblock:0.06,sanctuary:0.45,quakeslam:0.125,
+  critstrike:0.07,dodgeswish:0.075,lastlegs:0.20,cullkill:0.10};   // v132.38, half the ear again
+const _sfxLast={};
+const _sfxAt=(k,u)=>{
+  if(!u||!u.root)return;
+  const x=u.root.position.x, z=u.root.position.z;
+  if(typeof Sound!=="undefined")Sound.play(k,{x,z});          // silent on a headless server
+  if(typeof NET!=="undefined"&&NET.mode==="host"&&NET.bcast&&typeof T!=="undefined"){
+    const d=T-(_sfxLast[k]!==undefined?_sfxLast[k]:-1e9);     // d<0 = the clock restarted
+    if(d<0||d>=(SFX_NET[k]||0)){_sfxLast[k]=T;NET.bcast({t:"snd",k,x,z});}
+  }
+};
+// v132.36: RAPID VOLLEY and EARTHSHAKER both re-enter dealDamage. Without this the extra shots
+// would each roll their own volley and the slam would chain off its own splash.
+let _volleyIn=false;
+// KNIFE FIGHTER. Its own 2-second clock, holders only, host-side. It is NOT a flying projectile:
+// that would need a projectile kind, a mesh, a travel path and lag compensation. It resolves
+// against the nearest enemy in range with a puff along the line, which is honest about what it is.
+const KNIFE_R=14, KNIFE_EVERY=2;
+function knifeTick(u,dt){
+  const st=(typeof buffSt==="function")?buffSt(u,"knives"):0;
+  if(!st||!u.alive)return;
+  u._knifeT=(u._knifeT||0)+dt;
+  if(u._knifeT<KNIFE_EVERY)return;
+  u._knifeT=0;
+  if(Math.random()>=0.10*st)return;
+  const px=u.root.position.x, pz=u.root.position.z, R2=KNIFE_R*KNIFE_R;
+  let best=null,bd=R2;
+  for(const o of units){
+    if(!o.alive||o.team===u.team||o.team===undefined)continue;
+    const dx=o.root.position.x-px, dz=o.root.position.z-pz;
+    const d2=dx*dx+dz*dz;
+    if(d2<bd){bd=d2;best=o;}
+  }
+  if(!best)return;
+  for(let k=1;k<=3;k++)                                   // a line of puffs stands in for the flight
+    puff(px+(best.root.position.x-px)*k/4,1.6,pz+(best.root.position.z-pz)*k/4,0xd8dde2,0.35);
+  _sfxAt("knifethrow",u);
+  dealDamage(u,best,(u.dmg||5)*0.6*st);
+}
+// ---------- v132.35 RADIUS AURAS ----------
+// The one buff shape that can wreck the tick budget. Three rules keep it cheap: only HOLDERS
+// scan, they scan at 4 Hz rather than per frame, and ONE pass over units serves all six effects.
+const AURA_BR=10;        // the radius they share — the Temple's heal reach, so the game has one
+                         // idea of "near you" rather than six
+const AURA_SCAN=0.25;    // seconds between scans. A heal-over-time cannot tell; the budget can.
+const AURA_STILL=3;      // SANCTUARY's stillness clock
+function auraBuffTick(u,dt){
+  if(!u.alive||typeof isHuman!=="function"||!isHuman(u))return;
+  const sanct=buffSt(u,"sanctuary"), brand=buffSt(u,"brand"), kin=buffSt(u,"kinship"),
+        stew=buffSt(u,"steward"), res=buffSt(u,"resolve"), pha=buffSt(u,"phalanx");
+  if(!(sanct||brand||kin||stew||res||pha)){u._auraE=0;u._auraA=0;u._stillT=0;return;}
+  // SANCTUARY's clock. Deliberately not reset by taking damage — standing your ground under fire
+  // is the whole fantasy.
+  u._stillT=u.moving?0:(u._stillT||0)+dt;
+  u._auraW=(u._auraW||0)+dt;
+  if(u._auraW<AURA_SCAN)return;
+  const step=u._auraW; u._auraW=0;
+  const R2=AURA_BR*AURA_BR, px=u.root.position.x, pz=u.root.position.z;
+  const zoneOpen=sanct&&u._stillT>=AURA_STILL;
+  // the cue belongs to the MOMENT the zone opens, not to every scan while it is open
+  if(zoneOpen&&!u._zoneWasOpen)_sfxAt("sanctuary",u);
+  u._zoneWasOpen=zoneOpen;
+  let allies=0, enemies=0, kinNear=false;
+  // ONE pass. Six effects.
+  for(const o of units){
+    if(!o.alive||o===u)continue;
+    const dx=o.root.position.x-px, dz=o.root.position.z-pz;
+    if(dx*dx+dz*dz>R2)continue;
+    if(o.team===u.team){
+      allies++;
+      if(kin&&!kinNear&&o.cls===u.cls&&!o.isKing)kinNear=true;
+      if(zoneOpen&&o.hp<o.maxHp){                       // SANCTUARY mends the whole warband
+        o.hp=Math.min(o.maxHp,o.hp+u.maxHp*0.03*sanct*step);
+        if(o.bar&&typeof setBar==="function")setBar(o.bar,o.hp/o.maxHp);
+      }
+    }else{
+      enemies++;                                         // the wilds count: surrounded is surrounded
+      if(brand&&typeof dealDamage==="function"){
+        dealDamage(u,o,1*brand*step);                    // SEARING PRESENCE
+        // continuous damage, so the cue is THROTTLED — a sizzle every ~2.5s, not a buzz
+        if(typeof T!=="undefined"&&T-(u._searT||-999)>2.5){u._searT=T;_sfxAt("sear",u);}
+      }
+    }
+  }
+  u._auraA=allies; u._auraE=enemies;                     // cached for the damage-time readers
+  if(zoneOpen&&u.hp<u.maxHp){                            // …and it mends the one who opened it
+    u.hp=Math.min(u.maxHp,u.hp+u.maxHp*0.03*sanct*step);
+    if(u.isPlayer&&typeof updatePlayerHud==="function")updatePlayerHud();
+  }
+  if(kin&&kinNear&&u.hp<u.maxHp){                        // KINSHIP
+    u.hp=Math.min(u.maxHp,u.hp+1.0*kin*step);
+    if(u.bar&&typeof setBar==="function")setBar(u.bar,u.hp/u.maxHp);
+  }
+  if(stew&&u.cls==="villager"&&typeof buildings!=="undefined"){ // STEWARD
+    for(const b of buildings){
+      if(!b.alive||b.team!==u.team||!b.built||b.hp>=b.def.hp)continue;
+      const bx=b.x-px, bz=b.z-pz;
+      if(bx*bx+bz*bz>R2)continue;
+      b.hp=Math.min(b.def.hp,b.hp+0.5*stew*step);
+    }
+  }
+}
+// ---------- v132.34: the DEBUFF half of the timed system ----------
+// Damage-over-time is applied HERE and only here, from the host's own unit loop. It deliberately
+// does not live in updateUnitCommon: 10-net.js calls that on the guest too, and a guest owns no
+// damage (05-combat.js returns early for exactly this reason).
+const DOT_KINDS=["bleed","poison"];
+function statusTick(u,dt){
+  tmodTick(u,dt);
+  if(typeof auraBuffTick==="function")auraBuffTick(u,dt); // v132.35 radius auras — holders only
+  if(typeof knifeTick==="function"&&isHuman(u))knifeTick(u,dt); // v132.36 KNIFE FIGHTER
+  if(!u.alive||!u._tmods)return;
+  let dps=0;
+  for(const k of DOT_KINDS)dps+=tmodSum(u,k);
+  if(dps>0){
+    u.hp-=dps*dt;
+    if(u.bar&&typeof setBar==="function")setBar(u.bar,Math.max(0,u.hp/u.maxHp));
+    if(Math.random()<dt*2)puff(u.root.position.x,1.7,u.root.position.z,
+      tmodSum(u,"poison")>0?0x8fd45a:0xb3262a,0.5);
+    if(u.hp<=0&&typeof killUnit==="function"){u.hp=0;killUnit(u,u._dotBy||null);}
+    else if(u.isPlayer&&typeof updatePlayerHud==="function")updatePlayerHud();
+  }
+}
+function isStunned(u){return !!(u&&u._tmods&&tmodSum(u,"stun")>0);}
+function healBlocked(u){return !!(u&&u._tmods&&tmodSum(u,"healblock")>0);}
+// SHRUG IT OFF sheds everything an enemy put on you — and nothing you earned yourself.
+const DEBUFF_KINDS=["bleed","poison","stun","healblock"];
+function shedDebuffs(u){
+  if(!u||!u._tmods)return 0;
+  let n=0;
+  for(let i=u._tmods.length-1;i>=0;i--){
+    const e=u._tmods[i];
+    const bad=DEBUFF_KINDS.indexOf(e.k)>=0||(e.k==="spdmul"&&e.mag<0);
+    if(bad){u._tmods.splice(i,1);n++;}
+  }
+  if(!u._tmods.length)u._tmods=null;
+  if(n&&typeof tmodSyncClear==="function"&&u.remote)tmodSyncClear(u); // the owner's screen too
+  return n;
+}
+function tmodTick(u,dt){
+  const a=u&&u._tmods;
+  if(a&&a.length){
+    for(let i=a.length-1;i>=0;i--){a[i].t-=dt;if(a[i].t<=0)a.splice(i,1);}
+    if(!a.length)u._tmods=null;
+  }
+  // SURVIVAL INSTINCT's latch is released HERE and not in dealDamage: healing back over the line
+  // never calls dealDamage, so a latch cleared there would stick for the rest of the life.
+  if(u._lowLatch&&u.maxHp>0&&u.hp>=u.maxHp*TMOD_LOW)u._lowLatch=false;
+}
+// ---- v132.30 BATCH A helpers ----
+// WOODSMAN. There is no "in the woods" test in this game and scanning 674 wood nodes per blow
+// would be absurd. TREE_STANDS is 25 circles with a radius — the same structures the v115 forest
+// gates assert against — so this is a 25-iteration loop, run only for a unit holding the buff.
+function inTheWoods(u){
+  if(typeof TREE_STANDS==="undefined"||!TREE_STANDS.length||!u||!u.root)return false;
+  const x=u.root.position.x,z=u.root.position.z;
+  for(const s of TREE_STANDS){
+    const dx=x-s.x,dz=z-s.z;
+    if(dx*dx+dz*dz<s.r*s.r)return true;
+  }
+  return false;
+}
+const KGUARD_R=18; // how close "near your King" is
+function nearOwnKing(u){
+  if(typeof kings==="undefined"||!u||!u.root)return false;
+  const k=kings[u.team];
+  if(!k||!k.alive||!k.root)return false;
+  const dx=u.root.position.x-k.root.position.x, dz=u.root.position.z-k.root.position.z;
+  return dx*dx+dz*dz<KGUARD_R*KGUARD_R;
+}
 function puff(x,y,z,color,scale,life){
   const s=new THREE.Sprite(new THREE.SpriteMaterial({color,transparent:true,opacity:0.9}));
   s.position.set(x,y,z); const sc=scale||0.7; s.scale.set(sc,sc,1); scene.add(s);
@@ -444,13 +669,28 @@ function dealDamage(att,victim,dmg){
   // ---- v87 BLACKSMITH BUFFS: attacker-side (humans only) ----
   const attU=att&&!att.def&&att.cls?att:null; // a unit, not a tower
   if(attU&&isHuman(attU)&&attU.team!==victim.team){
+    if(attU._tmods)dmg+=tmodSum(attU,"dmgflat");                   // KILLING FRENZY — flat, and
+                                                                   // added before the multipliers
+                                                                   // so a crit doubles it too
     let m=1+0.05*buffSt(attU,"dmg");                               // HONED EDGE
     if(victim.team===NEUTRAL)m*=1+0.15*buffSt(attU,"slayer");      // WILD SLAYER
     if(isSiege(attU.cls))m*=1+0.10*buffSt(attU,"siege");           // SIEGEWRIGHT
+    if(victim.hp>=victim.maxHp)m*=1+0.50*buffSt(attU,"ambush");    // FIRST BLOOD — read BEFORE the hp subtraction below
+    if(CLS[attU.cls]&&CLS[attU.cls].ranged&&victim.cls&&isSiege(victim.cls))
+      m*=1+0.50*buffSt(attU,"enginebane");                         // ENGINEBANE
+    if(attU.cls==="villager")m*=1+1.00*buffSt(attU,"yeoman");       // YEOMAN — the damage half
+    if(buffSt(attU,"fervor")){                                     // DESPERATION is attack SPEED,
+      // …handled in updateUnitCommon; nothing to do to damage here.
+    }
+    if(buffSt(attU,"woods")&&inTheWoods(attU))m*=1+0.10*buffSt(attU,"woods"); // WOODSMAN
+    if(buffSt(attU,"kguard")&&nearOwnKing(attU))m*=1+0.10*buffSt(attU,"kguard"); // KING'S GUARD — damage half
+    if(buffSt(attU,"phalanx"))                                     // PHALANX — reads the CACHED
+      m*=1+Math.min(0.20,0.05*buffSt(attU,"phalanx")*(attU._auraA||0)); // count, never a fresh scan
     const cs=buffSt(attU,"crit");                                  // KEEN EYE
     if(cs&&Math.random()<0.05*cs){
       m*=2; puff(victim.root.position.x,2.4,victim.root.position.z,0xffd24a,1.1);
-      if(attU.isPlayer)msg("CRITICAL HIT!","gold");
+      _sfxAt("critstrike",victim);        // v132.38: it prints CRITICAL HIT in gold and sounded
+      if(attU.isPlayer)msg("CRITICAL HIT!","gold");   // like every other blow
     }
     dmg*=m;
   }
@@ -469,14 +709,150 @@ function dealDamage(att,victim,dmg){
     const ds=buffSt(victim,"dodge");                               // SIXTH SENSE
     if(ds&&Math.random()<0.05*ds){
       puff(victim.root.position.x,1.6,victim.root.position.z,0x9fd8ff);
-      if(victim.isPlayer)msg("Dodged!","blue");
+      _sfxAt("dodgeswish",victim);        // v132.38: ⚠ BEFORE the return — dealDamage bails out on
+      if(victim.isPlayer)msg("Dodged!","blue");       // a dodge, so anything after it never runs
       victim._lastHurt=T;
       return;
     }
+    // ---- v132.36 THE CHARGES. A last-used STAMP is the whole mechanism: ready when enough time
+    // has passed. Stacking shortens the cooldown (30/stacks) rather than granting parallel
+    // charges, which is the same curve without a second system. Placed AFTER the dodge so two
+    // evasions cannot both fire on one blow, and BEFORE the multipliers because a blocked blow
+    // is cancelled, not reduced.
+    {
+      const rangedBlow=!!(att&&(att.def||(att.cls&&CLS[att.cls]&&CLS[att.cls].ranged)));
+      const wd=buffSt(victim,"ward"), gd=buffSt(victim,"guardup");
+      if(rangedBlow&&wd&&T-(victim._wardT||-999)>=30/wd){
+        victim._wardT=T; victim._lastHurt=T;
+        puff(victim.root.position.x,2.2,victim.root.position.z,0x9fd8ff,1.0);
+        _sfxAt("wardblock",victim);   // v132.37: _sfxAt relays it — the archer whose shot was
+                                      // stopped should hear it, and on their screen it happened
+                                      // to somebody else. (Was hand-broadcast here; that would
+                                      // double-send now.)
+        if(victim.isPlayer&&typeof msg==="function")msg("Arrow warded!","blue");
+        return;
+      }
+      if(!rangedBlow&&gd&&att&&att.cls&&T-(victim._guardT||-999)>=30/gd){
+        victim._guardT=T; victim._lastHurt=T;
+        puff(victim.root.position.x,2.2,victim.root.position.z,0xd8dde2,1.0);
+        _sfxAt("guardblock",victim);  // v132.37: relayed by _sfxAt, as above
+        if(victim.isPlayer&&typeof msg==="function")msg("Blow turned aside!","blue");
+        return;
+      }
+    }
     dmg*=1-0.05*buffSt(victim,"shield");                           // RAISED SHIELD (the buff)
+    if(att&&att.team===NEUTRAL)dmg*=1-0.10*buffSt(victim,"warden"); // BEAST WARDEN
+    if(victim.cls==="villager")dmg*=Math.pow(0.5,buffSt(victim,"yeoman")); // YEOMAN — the health half,
+      // as a reduction rather than a maxHp change: applyBuffStats preserves the hp FRACTION across a
+      // recompute, so doubling maxHp mid-fight would silently heal the villager.
+    if(buffSt(victim,"kguard")&&nearOwnKing(victim))dmg*=1-0.10*buffSt(victim,"kguard"); // KING'S GUARD
+    if(buffSt(victim,"resolve"))                                   // UNBOWED — the more of them
+      dmg*=1-Math.min(0.25,0.05*buffSt(victim,"resolve")*(victim._auraE||0)); // there are, the harder
+    if(buffSt(victim,"tribute")&&typeof stock!=="undefined"&&stock[victim.team]){         // BLOOD TAX
+      stock[victim.team].gold+=1*buffSt(victim,"tribute");
+      if(typeof updateResHud==="function")updateResHud();
+    }
   }
   victim._lastHurt=T; // Second Skin waits for quiet
   victim.hp-=dmg; hitFlash(victim);
+  // CULLER: finish a wounded beast outright. Sets hp to 0 rather than calling killUnit, so the
+  // ordinary kill path below runs once and unchanged — loot, quests, participation and score all
+  // stay on their single road.
+  if(victim.team===NEUTRAL&&victim.hp>0&&attU&&buffSt(attU,"cull")&&
+     victim.hp<victim.maxHp*0.15){
+    victim.hp=0;
+    puff(victim.root.position.x,1.8,victim.root.position.z,0xd8e070,1.2);
+    _sfxAt("cullkill",victim);            // v132.38: rides ON TOP of the ordinary death sound —
+                                          // the kill path below still runs, so this says "that
+                                          // was you", it does not replace the creature dying
+  }
+  // SURVIVAL INSTINCT: an EDGE, not a level. The latch stops it re-arming on every blow landed
+  // while already under a quarter health, which would be a permanent speed buff in disguise.
+  if(isHuman(victim)&&victim.alive&&buffSt(victim,"flight")&&victim.maxHp>0&&
+     victim.hp>0&&victim.hp<victim.maxHp*TMOD_LOW&&!victim._lowLatch){
+    victim._lowLatch=true;
+    tmodAdd(victim,"spdmul",0.40*buffSt(victim,"flight"),5,false);
+    _sfxAt("lastlegs",victim);            // v132.38: the latch above makes this once a fight, which
+                                          // is why it can afford to be the longest of the cues
+  }
+  // HUNTER'S STEP: a landed MELEE blow quickens the step.
+  if(attU&&isHuman(attU)&&buffSt(attU,"hunt")&&CLS[attU.cls]&&!CLS[attU.cls].ranged&&
+     attU.team!==victim.team){
+    tmodAdd(attU,"spdmul",0.10*buffSt(attU,"hunt"),2,false);
+  }
+  // ---- v132.36 BATCH E: EARTHSHAKER and RAPID VOLLEY ----
+  if(attU&&isHuman(attU)&&attU.team!==victim.team&&!_volleyIn){
+    const meleeE=CLS[attU.cls]&&!CLS[attU.cls].ranged;
+    const qk=buffSt(attU,"quake");
+    if(qk&&meleeE&&Math.random()<0.05*qk){                 // EARTHSHAKER — borrows AURA_BR rather
+      const R=(typeof AURA_BR!=="undefined"?AURA_BR:10);   // than inventing a third idea of "near"
+      const R2=R*R, px=attU.root.position.x, pz=attU.root.position.z;
+      puff(px,0.6,pz,0xc9a06a,2.2);
+      _sfxAt("quakeslam",attU);
+      for(const o of units){
+        if(!o.alive||o===attU||o===victim||o.team===attU.team)continue;
+        const dx=o.root.position.x-px, dz=o.root.position.z-pz;
+        if(dx*dx+dz*dz>R2)continue;
+        _volleyIn=true; dealDamage(attU,o,(attU.dmg||5)*0.5*qk); _volleyIn=false;
+      }
+    }
+    const vo=buffSt(attU,"volley");
+    if(vo&&!meleeE&&T-(attU._volleyT||-999)>=10&&Math.random()<0.05*vo){
+      attU._volleyT=T;                                     // RAPID VOLLEY — THREE BLOWS, not triple
+      _volleyIn=true;                                      // damage, so per-hit buffs stay honest
+      for(let k=0;k<2&&victim.alive;k++)dealDamage(attU,victim,dmg);
+      _volleyIn=false;
+      _sfxAt("volleyshot",attU);
+      if(attU.isPlayer&&typeof msg==="function")msg("Rapid volley!","gold");
+    }
+  }
+  // ---- v132.34 BATCH C: what the blow leaves BEHIND on the victim ----
+  if(attU&&isHuman(attU)&&attU.team!==victim.team&&victim.alive){
+    const melee=CLS[attU.cls]&&!CLS[attU.cls].ranged;
+    const bl=buffSt(attU,"bleed");
+    if(bl&&Math.random()<0.05*bl){                      // SERRATED EDGE — 1 HP/s for 20s = 20 HP
+      tmodAdd(victim,"bleed",1,20,false); victim._dotBy=attU;
+      puff(victim.root.position.x,2.0,victim.root.position.z,0xb3262a,0.7);
+      _sfxAt("bleedhit",victim);
+    }
+    const vn=buffSt(attU,"venom");
+    if(vn&&Math.random()<0.05*vn){                      // VENOMOUS — 10 HP over 10s, and half speed
+      tmodAdd(victim,"poison",1,10,false); victim._dotBy=attU;
+      tmodAdd(victim,"spdmul",-0.5,10,false);           // a NEGATIVE spdmul is the whole slow
+      puff(victim.root.position.x,2.0,victim.root.position.z,0x8fd45a,0.8);
+      _sfxAt("venomhit",victim);
+    }
+    const cc=buffSt(attU,"concuss");
+    if(cc&&melee&&T-(attU._stunCd||-999)>=30&&Math.random()<0.05*cc){
+      attU._stunCd=T;                                   // the 30s belongs to the WIELDER, or one
+      tmodAdd(victim,"stun",1,1.5,false);               // player stun-locks a crowd by rotating
+      puff(victim.root.position.x,2.8,victim.root.position.z,0xffe9a8,1.1);
+      _sfxAt("stunhit",victim);   // v132.37: its own cue. It borrowed the generic "hit" before,
+                                  // which made the game's biggest melee moment sound like a jab.
+    }
+    if(buffSt(attU,"gash")){                                      // DEEP GASH
+      // …but the cue only when it lands FRESH. It rides every blow you throw, so a sound per hit
+      // would simply thicken the impact that already plays.
+      if(!(victim._tmods&&tmodSum(victim,"healblock")>0))_sfxAt("gashcut",victim);
+      tmodAdd(victim,"healblock",1,3,false);
+    }
+  }
+  // SHRUG IT OFF: struck, and everything the enemy put on you falls away.
+  if(isHuman(victim)&&victim._tmods&&buffSt(victim,"shrug")&&
+     Math.random()<0.10*buffSt(victim,"shrug")){
+    if(shedDebuffs(victim)){
+      _sfxAt("shrugoff",victim);
+      if(victim.isPlayer&&typeof msg==="function")msg("You shrug it off!","blue");
+    }
+  }
+  // BRAMBLE MAIL: a melee attacker takes it back. att.hp is touched DIRECTLY — recursing into
+  // dealDamage would re-run every modifier including the attacker's own thorns, and two units
+  // both wearing it would volley a blow back and forth.
+  if(isHuman(victim)&&buffSt(victim,"thorns")&&att&&!att.def&&att.cls&&
+     CLS[att.cls]&&!CLS[att.cls].ranged&&att.alive&&att.team!==victim.team){
+    att.hp-=1*buffSt(victim,"thorns");
+    if(att.hp<=0&&typeof killUnit==="function"){att.hp=0;killUnit(att,victim);}
+  }
   // v132.10 THE PACK NOTICES. Camps aggro'd on an intruder's distance from the camp CENTRE and on
   // nothing else, so anything with range could stand off and shoot them to death unopposed. Waking
   // on damage is the rule that was missing, and it wakes the whole camp because st.wake is on the
@@ -538,6 +914,26 @@ function dealDamage(att,victim,dmg){
     if(typeof Sound!=="undefined"&&victim.team===MYTEAM)Sound.play("alert_attack"); // v100: under-attack horn
   }
   if(victim.hp<=0){
+    // ---- v132.30 BATCH A: what a kill pays the killer ----
+    if(attU&&isHuman(attU)&&attU.alive&&attU.team!==victim.team){
+      const fe=buffSt(attU,"feast");                                  // SECOND WIND
+      if(fe)attU.hp=Math.min(attU.maxHp,attU.hp+attU.maxHp*0.10*fe);
+      const fr=buffSt(attU,"frenzy");                                 // KILLING FRENZY
+      if(fr)tmodAdd(attU,"dmgflat",2*fr,7,false,10*fr);                // +2 a kill, capped at +10
+      const su=buffSt(attU,"surge");                                   // BLOODRUSH
+      if(su)tmodAdd(attU,"spdmul",0.50*su,2,true);                     // …and it FADES over the 2s
+      const tr=buffSt(attU,"trophy");                                 // TROPHY HUNTER — permanent,
+      if(tr){                                                         // and it must survive a recompute
+        attU.hpBonus=Math.min(100,(attU.hpBonus||0)+1*tr);
+        if(typeof applyBuffStats==="function")applyBuffStats(attU);
+      }
+      if(typeof stock!=="undefined"&&stock[attU.team]){
+        const pu=buffSt(attU,"purse"), fo=buffSt(attU,"forage");      // CUTPURSE · SCAVENGER
+        if(pu)stock[attU.team].gold+=10*pu;
+        if(fo)stock[attU.team].food+=10*fo;
+        if((pu||fo)&&typeof updateResHud==="function")updateResHud();
+      }
+    }
     awardPts(att,victim.cls==="villager"?10:costPts(CLS[victim.cls]&&CLS[victim.cls].cost)); // a kill is worth its cost; a villager, 10
     if(victim.isKing)awardPts(att,500);                           // the regicide bonus
     killUnit(victim,att);
@@ -623,6 +1019,9 @@ function killUnit(u,killer){
      u.questDraft||(u.qRerolls||0)>0||u.smithOffer||u._scoutOut)){
     // ---- v87 DEATH TAKES ITS DUE: level, XP, quest and every blacksmith buff ----
     u.lvl=0; u.xp=0; u.buffs={}; u.quest=null; u.questDraft=null; u.qRerolls=0; u._scoutOut=false; u.smithOffer=null; // v99: death also wipes the standing draft + banked rerolls
+    u.hpBonus=0;      // v132.30: TROPHY HUNTER is a buff's earnings — death takes it with the buffs
+    u._tmods=null; u._lowLatch=false; // v132.32: and the timed modifiers die with the body
+    if(typeof tmodSyncClear==="function")tmodSyncClear(u); // …on the owner's screen as well as here
     u._rrCycle=false; // v132.28.2: re-arm the reroll grant, or a player who died QUESTLESS would
                       // carry the spent cycle into the new life and never be granted one
     if(typeof questNotify==="function"){
@@ -965,11 +1364,30 @@ function _gatePassHX(b){
   return null;
 }
 function moveUnit(u,dx,dz,dt){
+  if(u&&u._tmods&&typeof isStunned==="function"&&isStunned(u))return false; // v132.34 CONCUSSIVE BLOW
   const len=Math.hypot(dx,dz);
   if(len<0.001)return false;
   dx/=len; dz/=len;
-  let nx=u.root.position.x+dx*u.spd*dt;
-  let nz=u.root.position.z+dz*u.spd*dt;
+  // PACK MULE (v132.30): a laden villager moves FASTER, to +10% at a full pack. Scaled here and
+  // not on u.spd, because u.spd is a stat applyBuffStats rewrites from the class table every time
+  // a buff lands — a load-dependent value written there is erased at the next visit to the forge.
+  // moveUnit is also the one door all three movers pass through (local player, host-driven remote,
+  // and the guest's own prediction), so this reads the same on every screen.
+  let _spd=u.spd;
+  // v132.32: the timed speed modifiers (BLOODRUSH, SURVIVAL INSTINCT, HUNTER'S STEP) compound
+  // here, and LONG STRIDER rides the same line as a STATE rather than a timer.
+  if(u._tmods)_spd*=tmodMul(u,"spdmul");
+  if(typeof buffSt==="function"&&buffSt(u,"stride")&&
+     typeof T!=="undefined"&&T-(u._lastHurt||-99)>TMOD_OOC)
+    _spd*=1+0.30*buffSt(u,"stride");
+  const _mu=(typeof buffSt==="function")?buffSt(u,"mule"):0;
+  if(_mu&&u.cls==="villager"&&u.carry){
+    const cap=(typeof carryCap==="function")?carryCap(u):20;
+    const load=(u.carry.food||0)+(u.carry.gold||0)+(u.carry.stone||0)+(u.carry.wood||0);
+    if(cap>0)_spd*=1+0.10*_mu*Math.max(0,Math.min(1,load/cap));
+  }
+  let nx=u.root.position.x+dx*_spd*dt;
+  let nz=u.root.position.z+dz*_spd*dt;
   if(!walkable(nx,nz)){ // the wall stands at the MOUNTAINS: fringe apron + camp pockets are open ground
     nx=Math.max(-(MAP.x+BORDER_FRINGE),Math.min(MAP.x+BORDER_FRINGE,nx));
     nz=Math.max(-(MAP.z+BORDER_FRINGE),Math.min(MAP.z+BORDER_FRINGE,nz));

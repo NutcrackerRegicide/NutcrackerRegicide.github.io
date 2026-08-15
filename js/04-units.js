@@ -5509,7 +5509,8 @@ function restyleUnits(team,defer){ // villagers change wardrobe with the age, li
 function setClassStats(u){
   const d=CLS[u.cls];
   const b=ageBuff(u.team); // troops trained in later ages are hardier
-  u.maxHp=Math.round(d.hp*b); u.hp=u.maxHp; u.spd=d.spd; u.dmg=d.dmg*b; u.rng=d.rng; u.cd=d.cd;
+  // v132.30: +(u.hpBonus||0) is TROPHY HUNTER, which must survive a class change.
+  u.maxHp=Math.round(d.hp*b)+(u.hpBonus||0); u.hp=u.maxHp; u.spd=d.spd; u.dmg=d.dmg*b; u.rng=d.rng; u.cd=d.cd;
   u.ranged=!!d.ranged;
   if(u.buffs)applyBuffStats(u); // v87: blacksmith buffs ride on top of every class's base stats
   setBar(u.bar,1);
@@ -5520,7 +5521,7 @@ function setClassStats(u){
 function applyBuffStats(u){
   const d=CLS[u.cls]; if(!d)return;
   const frac=u.maxHp>0?Math.max(0,Math.min(1,u.hp/u.maxHp)):1;
-  u.maxHp=Math.round(d.hp*ageBuff(u.team)*(1+0.05*buffSt(u,"hp")));
+  u.maxHp=Math.round(d.hp*ageBuff(u.team)*(1+0.05*buffSt(u,"hp")))+(u.hpBonus||0); // +TROPHY HUNTER
   u.hp=Math.max(1,Math.round(u.maxHp*frac));
   u.spd=d.spd+0.5*buffSt(u,"spd");
   u.cd=Math.max(0.2,d.cd-0.1*buffSt(u,"atkspd"));

@@ -43,7 +43,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "tradeGold,tick,teamAge,stock,updateBot,tryMeleeAttack,tryAttack,setGameOver,launchLob,BLUE,RED,lineUnitFor,CLS,clock,isSiege,nodes,validFor,teamTC,terrainHeight,TCPOS,makeBuilding,buildingMesh,BLD,NET,player,keys,directors,wallLineSegments,placeGateOnWall,kings,healTick,snapToWallEnd,dealDamage,restyleBuildings,rebuildRoads,roadGroups,nearestFriendlySite,BSCALE,moveToward,steerAroundBuildings,restyleUnits,drainVisualQueue,syncNameTags,manageBands,killUnit,respawnUnit,resurrectUnit,updatePriestChannel,tryResurrect,RES_CHARGE,RES_CD,"+
   "campStates,campTick,campNewWave,updateCreep,inCampGround,CAMPS,CAMP_R,CAMP_RESPAWN,CREEP_N,NEUTRAL,MAP,moveUnit,"+
   "orderCharge,toggleRally,toggleRallyFor,rallyCapFor,RALLY_CAP,CHARGE_DIST,camera,rps,setClass,economyTick,"+
-  "QUESTS,BUFFS,XP_MAX_LVL,BUFF_MAX_STACK,BOARD_REACH,QUEST_REROLL_MAX,townBoards,boardFor,questDraft,questPick,questRedraw,cargoFrac,updateCargoVisual,"+
+  "QUESTS,BUFFS,XP_MAX_LVL,BUFF_MAX_STACK,BOARD_REACH,QUEST_REROLL_MAX,buffMax,BUFF_BY_ID,townBoards,boardFor,questDraft,questPick,questRedraw,cargoFrac,updateCargoVisual,"+
   "buffSt,carryCap,grantBuff,applyBuffStats,useTownBoard,useBlacksmith,questProgress,questTick,"+
   "bazaarTier,addConstructionHit,damageBuilding,interactCandidateD2,ageBuff,isHuman,showScoreboard,smithOffer,smithPick,"+
   "closeMenus,cancelPlacing,releaseWarband,rallyLeaderFor,shootArrow:(a,b)=>shootArrow(a,b),"+
@@ -66,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_GOLD,TEAMCOL};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -976,7 +976,9 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
   }
   qh.questDraft=null; // clean slate for the forge tests
   // ---- the forge: spend to the 3-stack cap, never past it ----
-  const FULL=BUFFS.length*BUFF_MAX_STACK; // every buff to the cap
+  // v132.30: the ceiling is PER BUFF now (1/3/5), so "every buff at its cap" is the SUM of the
+  // maxes, not a count times a constant.
+  const FULL=BUFFS.reduce((a,b)=>a+global.__G.buffMax(b.id),0); // every buff to its own cap
   qh.xp=FULL; qh.buffs={}; qh.smithOffer=null;
   // v93: the smith deals THREE and the trio STANDS until you choose — no reroll-fishing
   const {smithOffer,smithPick}=global.__G;
@@ -990,15 +992,21 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
     smithPick(qh,taken)===true&&qh.xp===FULL-1&&buffSt(qh,taken)===1&&!qh.smithOffer);
   while(qh.xp>0){const o=smithOffer(qh);if(!o||!o.length)break;smithPick(qh,o[0]);}
   const stacks=BUFFS.reduce((s,b)=>s+buffSt(qh,b.id),0);
-  check(FULL+" XP forges every buff to the ×"+BUFF_MAX_STACK+" cap via chosen trios (stacks "+stacks+", xp left "+qh.xp+")",
-    qh.xp===0&&stacks===FULL&&BUFFS.every(b=>buffSt(qh,b.id)===3));
+  check(FULL+" XP forges every buff to its OWN cap via chosen trios ("+BUFFS.length+" buffs, stacks "+
+    stacks+"/"+FULL+", xp left "+qh.xp+")",
+    qh.xp===0&&stacks===FULL&&BUFFS.every(b=>buffSt(qh,b.id)===global.__G.buffMax(b.id)));
+  check("v132.30 forge: the ceilings are genuinely MIXED, not a uniform 3 ("+
+    [...new Set(BUFFS.map(b=>global.__G.buffMax(b.id)))].sort().join("/")+") — so the check above "+
+    "is not the old uniform-cap test wearing a new name",
+    new Set(BUFFS.map(b=>global.__G.buffMax(b.id))).size>=3);
   qh.xp=5; useBlacksmith(qh);
   check("a fully-forged hero can't overspend",qh.xp===5);
   qh.xp=0;
   { // a thin pool deals what remains
     const q2=makeUnit(0,"clubman",-62,58,{name:"Thin",bot:null}); q2.remote="qtest6"; q2.xp=9;
-    q2.buffs={}; for(const b of BUFFS)q2.buffs[b.id]=3;
-    q2.buffs[BUFFS[0].id]=2; q2.buffs[BUFFS[1].id]=1; // only two slots left in the whole forge
+    q2.buffs={}; for(const b of BUFFS)q2.buffs[b.id]=global.__G.buffMax(b.id); // every one maxed…
+    q2.buffs[BUFFS[0].id]=global.__G.buffMax(BUFFS[0].id)-1;                     // …bar two slots
+    q2.buffs[BUFFS[1].id]=global.__G.buffMax(BUFFS[1].id)-1;
     q2.smithOffer=null;
     const so=smithOffer(q2);
     check("a thin pool deals only what remains ("+so.length+")",so.length===2);
@@ -1006,9 +1014,17 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
   }
   // ---- stat buffs ride applyBuffStats ----
   const cb=CLS.clubman;
-  check("Stout Heart / Fleet Foot / Quick Hands land on the stat sheet",
-    qh.maxHp===Math.round(cb.hp*ageBuff(0)*1.15)&&
-    Math.abs(qh.spd-(cb.spd+1.5))<1e-9&&Math.abs(qh.cd-Math.max(0.2,cb.cd-0.3))<1e-9);
+  // derived from the table, not from literals: Stout Heart and Quick Hands stack to 5 now.
+  {
+    const bm=global.__G.buffMax;
+    const wantHp=Math.round(cb.hp*ageBuff(0)*(1+0.05*bm("hp")));
+    const wantSpd=cb.spd+0.5*bm("spd");
+    const wantCd=Math.max(0.2,cb.cd-0.1*bm("atkspd"));
+    check("Stout Heart ×"+bm("hp")+" / Fleet Foot ×"+bm("spd")+" / Quick Hands ×"+bm("atkspd")+
+      " land on the stat sheet (hp "+qh.maxHp+"/"+wantHp+", spd "+qh.spd.toFixed(2)+"/"+wantSpd.toFixed(2)+
+      ", cd "+qh.cd.toFixed(2)+"/"+wantCd.toFixed(2)+")",
+      qh.maxHp===wantHp&&Math.abs(qh.spd-wantSpd)<1e-9&&Math.abs(qh.cd-wantCd)<1e-9);
+  }
   // ---- event-time buffs, isolated one at a time (far from qh's captain banner) ----
   const dh=makeUnit(0,"clubman",-60,90,{name:"Edge",bot:null}); dh.remote="qtest2"; dh.buffs={dmg:3};
   const tgt=makeUnit(1,"clubman",-58,90,{name:"Tgt",bot:null}); tgt.bot=null; tgt.hp=tgt.maxHp=1000;
@@ -2871,7 +2887,7 @@ global.__G.setGameOver(false);
     // v132.0 26 -> 27 with the map rework: MAP.x/MAP.z moved, so every node moved, and the netcode
   // indexes nodes positionally. The assertion is that the number MOVED WITH THE WORLD, which is the
   // thing a peer actually needs — a stale literal here is how two builds shake hands and disagree.
-  check("v132 wire: PROTO is 34 — the quest table renumbered, and qi/qdraft are positional",NET.PROTO===34);
+  check("v132 wire: PROTO is 40 — five proc ids, completing the 60-buff forge",NET.PROTO===40);
     // the version stamp is READ from the page, not frozen in the recorder. Every log John
     // field-tested on v125.1 said ver:"v98", because that literal was written in v98 and never
     // touched again — a flight recorder you have to take somebody's word about.
@@ -3154,7 +3170,95 @@ global.__G.setGameOver(false);
 {
   const A=global.__G.Sound;
   check("v100 audio: the manager loaded & exported",!!A&&typeof A.play==="function"&&typeof A._decideKey==="function");
-  check("v110 audio: 139 sound defs registered (79 SFX + 58 vocals + 2 wolf)",Object.keys(A._defs).length===139);
+  check("v132.38 audio: 155 sound defs registered (79 SFX + 58 vocals + 2 wolf + 16 buff cues)",
+    Object.keys(A._defs).length===155);
+  // ---- v132.37: THE REGISTRY GATE. DEFS is what loadAll() and resolve() key on; SND_DATA is
+  // only the payload. A key in one and not the other is a sound that never makes a noise, and
+  // nothing anywhere throws or logs. Both directions, because they are different bugs. ----
+  {
+    const sndSrc=fs.readFileSync(path.join(ROOT,"js","audio-data.js"),"utf8");
+    const embedded=new Set([...sndSrc.matchAll(/"([A-Za-z0-9_]+)":"/g)].map(m=>m[1]));
+    const defs=Object.keys(A._defs);
+    const unregistered=[...embedded].filter(k=>!A._defs[k]);
+    const unembedded=defs.filter(k=>!embedded.has(k));
+    check("v132.37 audio: every EMBEDDED sound is registered in DEFS — an unregistered key is "+
+      "never decoded by loadAll() and resolve() returns null for it, so it is 20KB of silence "+
+      "("+embedded.size+" embedded"+(unregistered.length?", ORPHANED: "+unregistered.join(","):"")+")",
+      embedded.size>=151&&unregistered.length===0);
+    check("v132.37 audio: …and every REGISTERED sound is embedded — the fallback is fetch(), "+
+      "which is disabled on file:// and useless to an offline service-worker client, so this "+
+      "one plays on the dev machine and nowhere else"+
+      (unembedded.length?" [MISSING AUDIO: "+unembedded.join(",")+"]":""),unembedded.length===0);
+    // ---- every call site in the game resolves through the same predicate play() uses ----
+    const CHORUS="__chorus";   // a net sentinel the handler branches on, never a key
+    let playKeys=new Set(), sfxKeys=[], netKeys=new Set(), sites=0;
+    for(const f of fs.readdirSync(path.join(ROOT,"js"))){
+      if(!/^\d\d-.*\.js$/.test(f))continue;
+      const t=fs.readFileSync(path.join(ROOT,"js",f),"utf8");
+      for(const m of t.matchAll(/Sound\.play\(\s*"([A-Za-z0-9_]+)"/g)){playKeys.add(m[1]);sites++;}
+      for(const m of t.matchAll(/_sfxAt\(\s*"([A-Za-z0-9_]+)"/g)){sfxKeys.push(m[1]);sites++;}
+      for(const m of t.matchAll(/\{t:"snd",k:"([A-Za-z0-9_]+)"/g))if(m[1]!==CHORUS)netKeys.add(m[1]);
+    }
+    const allRefs=[...new Set([...playKeys,...sfxKeys,...netKeys])];
+    const dead=allRefs.filter(k=>A._resolve(k)===null);
+    check("v132.37 audio: the scan actually found the call sites — a regex that stopped "+
+      "matching would make the next assertion a claim about the empty set ("+sites+" literal "+
+      "play sites, "+allRefs.length+" distinct keys)",sites>=60&&allRefs.length>=40);
+    check("v132.37 audio: EVERY key the game asks for resolves — a typo'd key is not a syntax "+
+      "error, it is a cue that silently never fires"+(dead.length?" [DEAD: "+dead.join(",")+"]":""),
+      dead.length===0);
+    // ---- John's rule, as a test: no reuse ----
+    const reused=sfxKeys.filter(k=>playKeys.has(k));
+    check("v132.38 audio: the buff cues are SIXTEEN — "+sfxKeys.length+" proc sites, "+
+      new Set(sfxKeys).size+" distinct keys",sfxKeys.length===16&&new Set(sfxKeys).size===16);
+    check("v132.38 audio: …and no two of them share a KEY with an existing play site"+
+      (reused.length?" [REUSED: "+reused.join(",")+"]":""),reused.length===0);
+    // ---- v132.38: THE SAME CLAIM, ABOUT THE AUDIO. The key check above is what shipped in
+    // v132.37 under the name "no sound reuse". It was green while SEVEN of the twelve cues were
+    // the same recording the game already played under another key. A player hears waveforms. ----
+    {
+      let man=null,err="";
+      try{man=JSON.parse(fs.readFileSync(path.join(ROOT,"tools","sfx-screen.json"),"utf8"));}
+      catch(e){err=e.message;}
+      check("v132.38 no-reuse: the waveform screen exists — a MISSING manifest is the state after "+
+        "someone deletes it to silence a red, so it fails loudly rather than skipping"+
+        (man?"":" ["+err+"]"),!!man&&!!man.keys);
+      if(man&&man.keys){
+        const crypto=require("crypto");
+        const live={};
+        for(const m of sndSrc.matchAll(/"([A-Za-z0-9_]+)":"([A-Za-z0-9+\/=]*)"/g))
+          live[m[1]]=crypto.createHash("sha256").update(m[2]).digest("hex").slice(0,16);
+        const lk=Object.keys(live).sort(), mk=Object.keys(man.keys).sort();
+        const missing=lk.filter(k=>!man.keys[k]), extra=mk.filter(k=>!live[k]);
+        check("v132.38 no-reuse: the screen covers exactly the sounds in the bank ("+lk.length+
+          " embedded, "+mk.length+" screened)"+(missing.length?" [UNSCREENED: "+missing.join(",")+"]":"")+
+          (extra.length?" [STALE: "+extra.join(",")+"]":""),
+          missing.length===0&&extra.length===0);
+        const drift=lk.filter(k=>man.keys[k]&&man.keys[k]!==live[k]);
+        check("v132.38 no-reuse: …and every hash matches, so the verdict is about THIS audio — "+
+          "swap a sound without re-running `node tools/sfxdupe.js --freeze` and this goes red "+
+          "instead of inheriting the old sound's clean bill of health"+
+          (drift.length?" [CHANGED SINCE SCREENING: "+drift.join(",")+"]":""),drift.length===0);
+        const over=man.over||[];
+        check("v132.38 no-reuse: NO TWO CUES ARE THE SAME SOUND — all "+
+          (lk.length*(lk.length-1)/2).toLocaleString("en-US")+" pairs compared by envelope and "+
+          "spectrum, threshold "+man.threshold+", "+(man.allowed||[]).length+" pairs argued for "+
+          "in writing (one actor's two death cries)"+
+          (over.length?" [COLLIDES: "+over.map(o=>o.a+"~"+o.b+" "+o.s).join(", ")+"]":""),
+          over.length===0);
+      }
+    }
+    // ---- the twelve are spatial, on the sfx bus, and throttled ----
+    const CUES=[...new Set(sfxKeys)];
+    const notSpatial=CUES.filter(k=>!A._defs[k]||A._defs[k][1]!==1||A._defs[k][0]!==0||A._defs[k][2]!==0);
+    check("v132.37 audio: every cue is a one-shot on the sfx bus with 3D placement — each call "+
+      "site passes {x,z} and a 2D cue would ignore it"+(notSpatial.length?" ["+notSpatial.join(",")+"]":""),
+      notSpatial.length===0);
+    const unthrottled=CUES.filter(k=>!(A._throttle[k]>0));
+    check("v132.37 audio: every cue has a category throttle — the per-unit clocks in combat bound "+
+      "ONE unit; forty units in one melee are bounded only here"+
+      (unthrottled.length?" ["+unthrottled.join(",")+"]":""),unthrottled.length===0);
+  }
   // variant groups: play("swing") resolves to one of swing1..4; unknown resolves to null
   check("v100 audio: variant groups resolve ('swing'→a swing variant, junk→null)",
     /^swing[1-4]$/.test(A._resolve("swing"))&&A._resolve("swing9nope")===null&&A._resolve("hit1")==="hit1");
@@ -3275,8 +3379,8 @@ global.__G.setGameOver(false);
   const w=G.NET.packWorld(1);
   let snapAres=null;
   try{G.NET._lastRow=null;const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
-  check("v115/v132 net: PROTO 34 (the quest table renumbered) and `ares` still rides both payloads",
-    G.NET.PROTO===34&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
+  check("v115/v132 net: PROTO 40 (the full 60-buff forge) and `ares` still rides both payloads",
+    G.NET.PROTO===40&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
     Array.isArray(snapAres)&&Math.abs(snapAres[0]-42.5)<0.06);
   G.ageResT[0]=0;
 
@@ -3665,6 +3769,829 @@ global.__G.setGameOver(false);
   check("v125 deskui: neither UI layer can run headless — `screen` is the tell doing the work "+
     "(Node 22 DEFINES a global navigator, so that half of the guard no longer discriminates)",
     typeof screen==="undefined");
+  // ---------- v132.30: BATCH A — every new buff, measured against a control ----------
+  {
+    const G=global.__G, dmgOf=G.dealDamage, BS=G.buffSt;
+    // dealDamage returns immediately when NET.mode is "guest" ("host owns all damage"), and an
+    // earlier block leaves it there — every probe read 0.0 damage until this was set.
+    const _mode0=G.NET.mode; G.NET.mode="host"; G.setGameOver(false);
+    let X=-150, Z=-120;                                   // a quiet corner, away from the towns
+    const mk=(team,lvl,buffs,cls)=>{
+      X+=3;
+      const v=G.makeUnit(team,cls||"clubman",X,Z,{name:"BA",bot:{role:"citizen"}});
+      v.bot=null; v.remote="ba"+X; v.buffs=buffs||{}; v.hpBonus=0; v.xp=0; v.lvl=lvl||0;
+      G.setClassStats(v); v.hp=v.maxHp;
+      return v;
+    };
+    // a fixed-damage probe: how much HP does one blow take off this victim?
+    const hit=(att,vic,d)=>{const h=vic.hp; dmgOf(att,vic,d==null?20:d); return h-vic.hp;};
+
+    // ---- attacker-side ----
+    {
+      const plain=mk(0,0,{}), buffed=mk(0,0,{ambush:1});
+      const v1=mk(1,0,{}), v2=mk(1,0,{});
+      const a=hit(plain,v1), b=hit(buffed,v2);
+      check("v132.30 FIRST BLOOD: +50% into a FULL-health enemy ("+a.toFixed(1)+" → "+b.toFixed(1)+")",b>a*1.4);
+    }
+    {
+      const plain=mk(0,0,{}), buffed=mk(0,0,{yeoman:1});
+      const v1=mk(1,0,{}), v2=mk(1,0,{});
+      const a=hit(plain,v1), b=hit(buffed,v2);
+      check("v132.30 YEOMAN: a villager hits twice as hard — but only a VILLAGER (clubman "+
+        a.toFixed(1)+" vs "+b.toFixed(1)+")",Math.abs(a-b)<0.01);
+      const vilP=mk(0,0,{},"villager"), vilB=mk(0,0,{yeoman:1},"villager");
+      const v3=mk(1,0,{}), v4=mk(1,0,{});
+      const c=hit(vilP,v3), e=hit(vilB,v4);
+      check("v132.30 YEOMAN: …and a villager DOES ("+c.toFixed(1)+" → "+e.toFixed(1)+")",e>c*1.8);
+      const vv1=mk(1,0,{},"villager"), vv2=mk(1,0,{yeoman:1},"villager");
+      const f=hit(vilP,vv1), g=hit(vilP,vv2);
+      check("v132.30 YEOMAN: the health half is a damage CUT, not a maxHp change ("+f.toFixed(1)+
+        " → "+g.toFixed(1)+")",g<f*0.6);
+    }
+    {
+      // WOODSMAN — put the subject inside a real TREE_STAND, and its control outside every one
+      const st=G.TREE_STANDS&&G.TREE_STANDS[0];
+      if(st){
+        const inW=mk(0,0,{woods:1}); inW.root.position.set(st.x,inW.root.position.y,st.z);
+        const outW=mk(0,0,{woods:1});
+        let ox=st.x,oz=st.z; // walk out until no stand contains it
+        for(let k=0;k<400&&G.inTheWoods({root:{position:{x:ox,z:oz}}});k++){ox+=4;}
+        outW.root.position.set(ox,outW.root.position.y,oz);
+        check("v132.30 WOODSMAN: the woods test itself discriminates (in "+
+          G.inTheWoods(inW)+" / out "+G.inTheWoods(outW)+")",
+          G.inTheWoods(inW)===true&&G.inTheWoods(outW)===false);
+        const v1=mk(1,0,{}), v2=mk(1,0,{});
+        const a=hit(outW,v1), b=hit(inW,v2);
+        check("v132.30 WOODSMAN: +10% under the canopy ("+a.toFixed(1)+" → "+b.toFixed(1)+")",b>a);
+      }
+    }
+    {
+      // KING'S GUARD — both halves, measured beside the real king
+      const k=G.kings&&G.kings[0];
+      if(k&&k.root){
+        const near=mk(0,0,{kguard:1});
+        near.root.position.set(k.root.position.x+2,near.root.position.y,k.root.position.z+2);
+        const far=mk(0,0,{kguard:1});
+        check("v132.30 KING'S GUARD: the proximity test discriminates (near "+G.nearOwnKing(near)+
+          " / far "+G.nearOwnKing(far)+")",G.nearOwnKing(near)===true&&G.nearOwnKing(far)===false);
+        const v1=mk(1,0,{}), v2=mk(1,0,{});
+        const a=hit(far,v1), b=hit(near,v2);
+        check("v132.30 KING'S GUARD: +10% damage beside your King ("+a.toFixed(1)+" → "+b.toFixed(1)+")",b>a);
+        const dNear=mk(0,0,{kguard:1});
+        dNear.root.position.set(k.root.position.x+2,dNear.root.position.y,k.root.position.z+2);
+        const dFar=mk(0,0,{kguard:1});
+        const att=mk(1,0,{});
+        const p=hit(att,dFar), q=hit(att,dNear);
+        check("v132.30 KING'S GUARD: …and −10% taken there too ("+p.toFixed(1)+" → "+q.toFixed(1)+")",q<p);
+      }
+    }
+    // ---- victim-side ----
+    {
+      const beast=mk(2,0,{});                                  // the wilds
+      const plain=mk(0,0,{}), warded=mk(0,0,{warden:3});
+      const a=hit(beast,plain), b=hit(beast,warded);
+      check("v132.30 BEAST WARDEN: ×3 cuts the wilds' bite ("+a.toFixed(1)+" → "+b.toFixed(1)+")",b<a*0.75);
+    }
+    {
+      const att=mk(1,0,{}), taxed=mk(0,0,{tribute:1});
+      const g0=G.stock[0].gold; hit(att,taxed);
+      check("v132.30 BLOOD TAX: taking a blow pays 1 gold (+"+(G.stock[0].gold-g0)+")",
+        G.stock[0].gold===g0+1);
+    }
+    {
+      const att=mk(1,0,{}), sharp=mk(0,0,{thorns:2});
+      const h0=att.hp; hit(att,sharp);
+      check("v132.30 BRAMBLE MAIL: ×2 bites the melee attacker back for 2 ("+(h0-att.hp)+")",
+        h0-att.hp===2);
+      const bow=mk(1,0,{},"archer"); const h1=bow.hp; hit(bow,sharp);
+      check("v132.30 BRAMBLE MAIL: …and never a RANGED attacker ("+(h1-bow.hp)+")",h1===bow.hp);
+    }
+    // ---- the kill payouts ----
+    {
+      const killer=mk(0,0,{feast:2,purse:1,forage:1,trophy:1});
+      killer.hp=Math.max(1,Math.round(killer.maxHp*0.3));
+      const hpBefore=killer.hp, maxBefore=killer.maxHp;
+      const g0=G.stock[0].gold, f0=G.stock[0].food;
+      const prey=mk(1,0,{}); dmgOf(killer,prey,99999);
+      check("v132.30 SECOND WIND ×2: a kill restores 20% of max HP ("+hpBefore+" → "+killer.hp+")",
+        killer.hp>hpBefore);
+      check("v132.30 CUTPURSE / SCAVENGER: a kill pockets 10 gold and 10 food (+"+
+        (G.stock[0].gold-g0)+"g +"+(G.stock[0].food-f0)+"f)",
+        G.stock[0].gold===g0+10&&G.stock[0].food===f0+10);
+      check("v132.30 TROPHY HUNTER: a kill adds permanent max HP ("+maxBefore+" → "+killer.maxHp+
+        ", bonus "+(killer.hpBonus||0)+")",killer.hpBonus===1&&killer.maxHp===maxBefore+1);
+      // …and it must survive the recompute that arming up performs
+      G.setClassStats(killer);
+      check("v132.30 TROPHY HUNTER: …and it SURVIVES setClassStats — arming up must not erase it "+
+        "(maxHp "+killer.maxHp+", bonus "+killer.hpBonus+")",
+        killer.hpBonus===1&&killer.maxHp===maxBefore+1&&killer.dmg>0&&killer.spd>0&&killer.cd>0);
+    }
+    {
+      // CULLER — a wounded beast dies to a scratch; an unbuffed attacker leaves it standing
+      const beast1=mk(2,0,{}), beast2=mk(2,0,{});
+      beast1.hp=beast1.maxHp*0.10; beast2.hp=beast2.maxHp*0.10;
+      const plain=mk(0,0,{}), culler=mk(0,0,{cull:1});
+      dmgOf(plain,beast1,0.5);
+      dmgOf(culler,beast2,0.5);
+      check("v132.30 CULLER: a beast under 15% is finished outright, and only by the buff "+
+        "(control alive "+!!beast1.alive+", culled alive "+!!beast2.alive+")",
+        beast1.alive===true&&beast2.alive===false);
+    }
+    {
+      // DESPERATION — the attack CLOCK runs faster the more health is missing
+      const hurt=mk(0,0,{fervor:1}), whole=mk(0,0,{fervor:1});
+      hurt.hp=hurt.maxHp*0.2; whole.hp=whole.maxHp;
+      hurt.atkT=1.0; whole.atkT=1.0;
+      G.updateUnitCommon(hurt,0.1); G.updateUnitCommon(whole,0.1);
+      check("v132.30 DESPERATION: the swing clock runs faster when hurt (hurt "+hurt.atkT.toFixed(3)+
+        " vs whole "+whole.atkT.toFixed(3)+")",hurt.atkT<whole.atkT);
+    }
+    {
+      // PACK MULE — the same villager, laden and empty
+      const laden=mk(0,0,{mule:1},"villager"), empty=mk(0,0,{mule:1},"villager");
+      const cap=G.carryCap(laden);
+      laden.carry={food:cap,gold:0,stone:0,wood:0};
+      empty.carry={food:0,gold:0,stone:0,wood:0};
+      const z0a=laden.root.position.z, z0b=empty.root.position.z;
+      G.moveUnit(laden,0,1,0.2); G.moveUnit(empty,0,1,0.2);
+      const da=Math.abs(laden.root.position.z-z0a), db=Math.abs(empty.root.position.z-z0b);
+      check("v132.30 PACK MULE: a full pack moves further in the same tick ("+db.toFixed(3)+
+        " → "+da.toFixed(3)+")",da>db);
+    }
+    // ---- v132.31 BULWARK ----
+    {
+      const plain=mk(0,0,{}), bul=mk(0,0,{bulwark:1});
+      const full=G.BLD.stone_wall.cost, half=G.bldCost(bul,"stone_wall");
+      check("v132.31 BULWARK: a defensive structure costs half (stone "+(full.stone||0)+" → "+
+        (half.stone||0)+")",half.stone===Math.ceil(full.stone/2)&&half!==full);
+      check("v132.31 BULWARK: …and it does NOT discount a house (wood "+
+        (G.bldCost(bul,"house").wood||0)+" vs "+(G.BLD.house.cost.wood||0)+")",
+        G.bldCost(bul,"house").wood===G.BLD.house.cost.wood);
+      check("v132.31 BULWARK: an unbuffed builder pays full price ("+
+        (G.bldCost(plain,"stone_wall").stone||0)+")",
+        G.bldCost(plain,"stone_wall").stone===full.stone);
+      check("v132.31 BULWARK: the DEFENSIVE set is derived from BLD flags — walls, gates, both "+
+        "towers and the castle, and nothing else",
+        G.isDefensiveDef(G.BLD.stone_wall)&&G.isDefensiveDef(G.BLD.fort_gate)&&
+        G.isDefensiveDef(G.BLD.tower)&&G.isDefensiveDef(G.BLD.watch_tower)&&
+        G.isDefensiveDef(G.BLD.castle)&&
+        !G.isDefensiveDef(G.BLD.house)&&!G.isDefensiveDef(G.BLD.temple)&&
+        !G.isDefensiveDef(G.BLD.market)&&!G.isDefensiveDef(G.BLD.barracks));
+      // THE ONE THAT MATTERS: the gate and the charge must agree. Park the stockpile BETWEEN the
+      // two prices — there, a discount applied to only one of them cannot hide.
+      const st=G.stock[0];
+      const keep={food:st.food,gold:st.gold,stone:st.stone,wood:st.wood};
+      st.food=9999; st.gold=9999; st.wood=9999;
+      st.stone=Math.ceil(full.stone/2)+1;           // enough for the HALF price, not the full one
+      const gateSaysYes=G.canAfford(0,G.bldCost(bul,"stone_wall"));
+      const gateSaysNo =G.canAfford(0,G.bldCost(plain,"stone_wall"));
+      const before=st.stone; G.pay(0,G.bldCost(bul,"stone_wall")); const spent=before-st.stone;
+      check("v132.31 BULWARK: the affordability GATE and the CHARGE agree — with "+before+
+        " stone the buffed builder is allowed ("+gateSaysYes+"), the unbuffed one is not ("+
+        gateSaysNo+"), and the till took "+spent,
+        gateSaysYes===true&&gateSaysNo===false&&spent===Math.ceil(full.stone/2));
+      st.food=keep.food; st.gold=keep.gold; st.stone=keep.stone; st.wood=keep.wood;
+    }
+    // ---- v132.31: GILDED HARVEST and RICH SOIL, LIFTED FROM SOURCE ----
+    // These two live in the gather and harvest paths, which need a live node, a ripe farm and a
+    // driven player to exercise — more scaffolding than signal. Re-implementing their arithmetic
+    // in the test would be worthless: it would pass with the hooks deleted from the game, which is
+    // exactly the tautology this block replaced. So they are asserted the way this file already
+    // asserts the build-reach expressions — READ OUT OF THE SHIPPING SOURCE.
+    //
+    // The failure mode being gated is specific and has bitten this project repeatedly: gathering
+    // and harvesting each exist TWICE, once for the local player (09-main.js / 06-input.js) and
+    // once for a host-driven remote human (10-net.js). Patching only the first ships a buff that
+    // works for the host and is silently dead for every guest. Both halves are required here.
+    {
+      const src=(f)=>fs.readFileSync(path.join(ROOT,"js",f),"utf8");
+      const mainSrc=src("09-main.js"), netSrc=src("10-net.js"), inputSrc=src("06-input.js");
+      const has=(hay,needle)=>hay.indexOf(needle)>=0; // plain substring: a regex here loses its
+      // backslashes to the patch script’s own template literal, and a stripped \( turns into a
+      // capture group that silently matches nothing.
+      const ghLocal=has(mainSrc,'n.type==="gold"&&buffSt(player,"alchemy")');
+      const ghRemote=has(netSrc,'n.type==="gold"&&buffSt(u,"alchemy")');
+      check("v132.31 GILDED HARVEST is wired at BOTH gather sites — local "+ghLocal+
+        " / host-driven remote "+ghRemote+" (one without the other is dead for guests)",
+        ghLocal&&ghRemote);
+      const rsLocal=has(inputSrc,'buffSt(player,"reaping")');
+      const rsRemote=has(netSrc,'buffSt(u,"reaping")');
+      check("v132.31 RICH SOIL is wired at BOTH harvest sites — local "+rsLocal+
+        " / host-driven remote "+rsRemote,rsLocal&&rsRemote);
+      // and the ids really exist in the table, so a rename cannot leave these regexes matching
+      // dead code
+      check("v132.31 …and both ids are live in BUFFS, so the checks above cannot match a rename",
+        !!G.BUFF_BY_ID["alchemy"]&&!!G.BUFF_BY_ID["reaping"]);
+    }
+    G.NET.mode=_mode0;
+  }
+  // ---------- v132.32: BATCH B — the timed-modifier system ----------
+  {
+    const G=global.__G, dmgOf=G.dealDamage;
+    const _mB=G.NET.mode; G.NET.mode="host"; G.setGameOver(false);
+    let BX=-150, BZ=-95;
+    const mkB=(team,buffs,cls)=>{
+      BX+=3;
+      const v=G.makeUnit(team,cls||"clubman",BX,BZ,{name:"TB",bot:{role:"citizen"}});
+      v.bot=null; v.remote="tb"+BX; v.buffs=buffs||{}; v._tmods=null; v._lowLatch=false;
+      G.setClassStats(v); v.hp=v.maxHp; return v;
+    };
+    // ---- the system itself ----
+    {
+      const u=mkB(0,{});
+      G.tmodAdd(u,"spdmul",0.5,2,false);
+      check("v132.32 tmod: a modifier is live while its clock runs ("+G.tmodMul(u,"spdmul").toFixed(2)+"×)",
+        Math.abs(G.tmodMul(u,"spdmul")-1.5)<1e-9);
+      G.tmodTick(u,3);
+      check("v132.32 tmod: …and it EXPIRES — ticked past its duration it is gone ("+
+        G.tmodMul(u,"spdmul").toFixed(2)+"×, entries "+((u._tmods&&u._tmods.length)||0)+")",
+        Math.abs(G.tmodMul(u,"spdmul")-1)<1e-9&&!u._tmods);
+      // REFRESH, NOT DUPLICATE
+      for(let k=0;k<5;k++)G.tmodAdd(u,"spdmul",0.5,2,false);
+      check("v132.32 tmod: five applications leave ONE entry, refreshed — not five timers ("+
+        u._tmods.length+")",u._tmods.length===1);
+      // FADE
+      const f=mkB(0,{});
+      G.tmodAdd(f,"spdmul",1.0,2,true);
+      const at0=G.tmodMul(f,"spdmul"); G.tmodTick(f,1); const at1=G.tmodMul(f,"spdmul");
+      check("v132.32 tmod: a FADING modifier decays with its clock ("+at0.toFixed(2)+"× → "+
+        at1.toFixed(2)+"×)",at0>at1&&at1>1);
+      // a CAP that accumulates
+      const cp=mkB(0,{});
+      for(let k=0;k<12;k++)G.tmodAdd(cp,"dmgflat",2,7,false,10);
+      check("v132.32 tmod: an accumulating modifier stops at its cap (+"+G.tmodSum(cp,"dmgflat")+")",
+        G.tmodSum(cp,"dmgflat")===10);
+    }
+    // ---- KILLING FRENZY ----
+    {
+      const k1=mkB(0,{frenzy:1});
+      const p1=mkB(1,{}); dmgOf(k1,p1,99999);
+      check("v132.32 KILLING FRENZY: a kill grants +2 flat damage (+"+G.tmodSum(k1,"dmgflat")+")",
+        G.tmodSum(k1,"dmgflat")===2);
+      for(let k=0;k<8;k++){const p=mkB(1,{});dmgOf(k1,p,99999);}
+      check("v132.32 KILLING FRENZY: …accumulating to a ceiling of +10 (+"+G.tmodSum(k1,"dmgflat")+")",
+        G.tmodSum(k1,"dmgflat")===10);
+      const plain=mkB(0,{}), v1=mkB(1,{}), v2=mkB(1,{});
+      const hA=v1.hp; dmgOf(plain,v1,20); const dA=hA-v1.hp;
+      const hB=v2.hp; dmgOf(k1,v2,20);    const dB=hB-v2.hp;
+      check("v132.32 KILLING FRENZY: and the flat bonus reaches the blow ("+dA.toFixed(1)+" → "+
+        dB.toFixed(1)+")",dB>dA);
+      G.tmodTick(k1,8);
+      check("v132.32 KILLING FRENZY: …and it is gone after its 7 seconds (+"+
+        G.tmodSum(k1,"dmgflat")+")",G.tmodSum(k1,"dmgflat")===0);
+    }
+    // ---- BLOODRUSH ----
+    {
+      const r=mkB(0,{surge:1}), prey=mkB(1,{});
+      dmgOf(r,prey,99999);
+      const m0=G.tmodMul(r,"spdmul");
+      G.tmodTick(r,1);
+      const m1=G.tmodMul(r,"spdmul");
+      check("v132.32 BLOODRUSH: a kill quickens the step, and it FADES ("+m0.toFixed(2)+"× → "+
+        m1.toFixed(2)+"×)",m0>1.4&&m1<m0&&m1>1);
+    }
+    // ---- SURVIVAL INSTINCT: the latch is the whole assertion ----
+    {
+      const s1=mkB(0,{flight:1}), att=mkB(1,{});
+      s1.hp=s1.maxHp; dmgOf(att,s1,s1.maxHp*0.8);          // one blow takes it under the line
+      check("v132.32 SURVIVAL INSTINCT: crossing below "+(G.TMOD_LOW*100)+"% arms it ("+
+        G.tmodMul(s1,"spdmul").toFixed(2)+"×, latched "+!!s1._lowLatch+")",
+        G.tmodMul(s1,"spdmul")>1.3&&s1._lowLatch===true);
+      G.tmodTick(s1,2);                                     // part-spent: 5s clock now at 3s
+      // ⚠ MEASURE THE CLOCK, NOT THE MULTIPLIER. A re-arm refreshes the DURATION; for a
+      // non-fading modifier the magnitude is identical either way, so a multiplier comparison
+      // here passes whether or not the latch exists — verified by deleting the latch and
+      // watching this assertion stay green. The remaining time is the only witness.
+      const midT=s1._tmods&&s1._tmods[0]?s1._tmods[0].t:0;
+      dmgOf(att,s1,1); dmgOf(att,s1,1);                     // more blows, still under the line
+      const nowT=s1._tmods&&s1._tmods[0]?s1._tmods[0].t:0;
+      check("v132.32 SURVIVAL INSTINCT: further blows under the line do NOT re-arm it — the latch "+
+        "is what stops a trigger becoming a permanent buff (clock "+midT.toFixed(2)+"s → "+
+        nowT.toFixed(2)+"s, a re-arm would snap it back to 5.00)",
+        Math.abs(nowT-midT)<1e-9&&nowT<4.5);
+      s1.hp=s1.maxHp; G.tmodTick(s1,0.1);                   // healed back over the line
+      check("v132.32 SURVIVAL INSTINCT: …and healing past the line RELEASES the latch, so it can "+
+        "fire again (latched "+!!s1._lowLatch+")",s1._lowLatch===false);
+    }
+    // ---- LONG STRIDER ----
+    {
+      const st=mkB(0,{stride:1}), hot=mkB(0,{stride:1});
+      st._lastHurt=-999;                                    // long out of combat
+      hot._lastHurt=G.getT();                               // just hit
+      const z0=st.root.position.z, z1=hot.root.position.z;
+      G.moveUnit(st,0,1,0.2); G.moveUnit(hot,0,1,0.2);
+      const dS=Math.abs(st.root.position.z-z0), dH=Math.abs(hot.root.position.z-z1);
+      check("v132.32 LONG STRIDER: faster out of combat, ordinary in it ("+dH.toFixed(3)+
+        " → "+dS.toFixed(3)+")",dS>dH);
+    }
+    // ---- HUNTER'S STEP ----
+    {
+      const mel=mkB(0,{hunt:1}), bow=mkB(0,{hunt:1},"archer");
+      const v1=mkB(1,{}), v2=mkB(1,{});
+      dmgOf(mel,v1,5); dmgOf(bow,v2,5);
+      check("v132.32 HUNTER'S STEP: a MELEE blow quickens the step ("+
+        G.tmodMul(mel,"spdmul").toFixed(2)+"×)",G.tmodMul(mel,"spdmul")>1.05);
+      check("v132.32 HUNTER'S STEP: …and a RANGED one does not ("+
+        G.tmodMul(bow,"spdmul").toFixed(2)+"×)",Math.abs(G.tmodMul(bow,"spdmul")-1)<1e-9);
+    }
+      // ---- v132.36: BATCH E — procs and charges ----
+      {
+        const forceE=(fn)=>{const MR=Math.random;Math.random=()=>0;try{return fn();}finally{Math.random=MR;}};
+        const EX=-196, EZ=-140;
+        const put=(team,buffs,cls,dx,dz)=>{
+          const u=G.makeUnit(team,cls||"clubman",EX+(dx||0),EZ+(dz||0),{name:"E",bot:{role:"citizen"}});
+          u.bot=null; u.remote="e"+(dx||0)+"_"+(dz||0)+"_"+team; u.buffs=buffs||{}; u._tmods=null;
+          G.setClassStats(u); u.hp=u.maxHp; return u;
+        };
+        // ---- THE RECURSION GUARD ----
+        {
+          const slam=put(0,{quake:1},"clubman",0,0);
+          const mob=[];
+          for(let i=0;i<6;i++)mob.push(put(1,{},"clubman",1+i*0.5,1));
+          let ok=true, err="";
+          try{ forceE(()=>dmgOf(slam,mob[0],5)); }catch(e){ ok=false; err=e.message; }
+          check("v132.36 EARTHSHAKER: a forced slam with six bodies in range COMPLETES — without "+
+            "the recursion guard each splash slams again and it is a stack overflow, not a "+
+            "balance bug"+(ok?"":" ["+err+"]"),ok);
+          const hurt=mob.filter(m=>m.hp<m.maxHp).length;
+          check("v132.36 EARTHSHAKER: …and it splashed the crowd ("+hurt+" of "+mob.length+
+            " wounded)",hurt>=2);
+          for(const m of mob)m.alive=false;
+          slam.alive=false;
+        }
+        // ---- ARROW WARD / IRON GUARD: the discrimination, and the negation ----
+        {
+          const warded=put(0,{ward:1},"clubman",0,20);
+          const bow=put(1,{},"archer",2,20);
+          const fist=put(1,{},"clubman",3,20);
+          warded._wardT=-999; warded._guardT=-999;
+          const h0=warded.hp; dmgOf(bow,warded,20);
+          check("v132.36 ARROW WARD: a ranged blow is NEGATED, not reduced ("+h0.toFixed(1)+" → "+
+            warded.hp.toFixed(1)+")",Math.abs(warded.hp-h0)<1e-9);
+          const h1=warded.hp; dmgOf(bow,warded,20);
+          check("v132.36 ARROW WARD: …the charge is SPENT — the next arrow lands in full ("+
+            h1.toFixed(1)+" → "+warded.hp.toFixed(1)+")",warded.hp<h1);
+          // ⚠ RE-ARM BEFORE TESTING THE DISCRIMINATION. The first block stamped _wardT, so at
+          // this point the charge is on cooldown and a melee blow would land whatever the ranged
+          // condition said — the check passed even with the condition deleted. Verified.
+          warded.hp=warded.maxHp; warded._wardT=-999;
+          const h2=warded.hp; dmgOf(fist,warded,20);
+          check("v132.36 ARROW WARD: …and it does NOT stop a MELEE blow ("+h2.toFixed(1)+" → "+
+            warded.hp.toFixed(1)+")",warded.hp<h2);
+          const ironed=put(0,{guardup:1},"clubman",0,25);
+          ironed._wardT=-999; ironed._guardT=-999;
+          const g0=ironed.hp; dmgOf(fist,ironed,20);
+          check("v132.36 IRON GUARD: a melee blow is negated ("+g0.toFixed(1)+" → "+
+            ironed.hp.toFixed(1)+")",Math.abs(ironed.hp-g0)<1e-9);
+          ironed._guardT=-999;   // same re-arm, same reason
+          const g1=ironed.hp; dmgOf(bow,ironed,20);
+          check("v132.36 IRON GUARD: …and it does NOT stop an ARROW ("+g1.toFixed(1)+" → "+
+            ironed.hp.toFixed(1)+")",ironed.hp<g1);
+          // stacking shortens the cooldown
+          const one=put(0,{ward:1},"clubman",0,30), three=put(0,{ward:3},"clubman",0,35);
+          const now=G.getT();
+          one._wardT=now-12; three._wardT=now-12;   // 12s ago: ×1 needs 30, ×3 needs 10
+          const o0=one.hp; dmgOf(bow,one,20);
+          const t0=three.hp; dmgOf(bow,three,20);
+          check("v132.36 THE CHARGE: stacking shortens the cooldown — 12s after a block, x1 is "+
+            "still spent ("+(one.hp<o0?"took the hit":"blocked")+") and x3 is ready ("+
+            (Math.abs(three.hp-t0)<1e-9?"blocked":"took the hit")+")",
+            one.hp<o0&&Math.abs(three.hp-t0)<1e-9);
+          bow.alive=false; fist.alive=false; warded.alive=false; ironed.alive=false;
+          one.alive=false; three.alive=false;
+        }
+        // ---- RAPID VOLLEY: three BLOWS, measured by a per-hit effect ----
+        {
+          // Bloodthirst heals 1 HP per landed hit — so the heal COUNTS the blows. A "triple
+          // damage" implementation would pass a damage-total test and fail this one.
+          const archer=put(0,{volley:1,leech:1},"archer",0,45);
+          const tgt=put(1,{},"clubman",2,45);
+          archer.hp=Math.max(1,archer.maxHp-10);
+          archer._volleyT=-999;
+          const a0=archer.hp;
+          forceE(()=>dmgOf(archer,tgt,5));
+          const healed=archer.hp-a0;
+          check("v132.36 RAPID VOLLEY: THREE separate blows land, not one tripled — Bloodthirst "+
+            "healed "+healed.toFixed(0)+" (one per hit)",healed>=3);
+          archer.alive=false; tgt.alive=false;
+        }
+        // ---- KNIFE FIGHTER ----
+        {
+          const thrower=put(0,{knives:2},"clubman",0,60);
+          const mark=put(1,{},"clubman",4,60);
+          const m0=mark.hp;
+          forceE(()=>{for(let i=0;i<3;i++)G.knifeTick(thrower,1.0);}); // past the 2s clock
+          check("v132.36 KNIFE FIGHTER: the knife finds the nearest enemy in range ("+
+            m0.toFixed(1)+" → "+mark.hp.toFixed(1)+")",mark.hp<m0);
+          const far=put(1,{},"clubman",G.KNIFE_R+25,60);
+          const f0=far.hp;
+          forceE(()=>{for(let i=0;i<3;i++)G.knifeTick(thrower,1.0);});
+          check("v132.36 KNIFE FIGHTER: …and never one beyond its "+G.KNIFE_R+"-unit reach ("+
+            f0.toFixed(1)+" → "+far.hp.toFixed(1)+")",Math.abs(far.hp-f0)<1e-9);
+          thrower.alive=false; mark.alive=false; far.alive=false;
+        }
+      }
+    // ---- v132.35: BATCH D — radius auras ----
+    {
+      const AB=G.auraBuffTick, R=G.AURA_BR;
+      const scan=(u,secs)=>{for(let i=0;i<Math.ceil(secs/0.05);i++)AB(u,0.05);};
+      // ⚠ THESE TESTS NEED EMPTY GROUND. mkB lines its units up 3 apart, and the aura radius is
+      // 10 — so every actor from batches B and C sits INSIDE the radius. The first run of the
+      // KINSHIP check duly passed its "different class mends nothing" case by healing off a
+      // stray clubman from an earlier block. Move every Batch D actor to a clear corner, and
+      // ASSERT it is clear rather than assuming it.
+      const DX=-196, DZ=132;
+      const near=(x,z,r)=>{let n=0;for(const o of G.units){if(!o.alive)continue;
+        const dx=o.root.position.x-x,dz=o.root.position.z-z;if(dx*dx+dz*dz<=r*r)n++;}return n;};
+      check("v132.35 aura harness: the test ground is EMPTY before anything is staged on it ("+
+        near(DX,DZ,R*2)+" units within "+(R*2)+")",near(DX,DZ,R*2)===0);
+      const place=(u,dx,dz)=>{u.root.position.set(DX+(dx||0),u.root.position.y,DZ+(dz||0));return u;};
+      // THE COST PROPERTIES FIRST — they are the ones that fail silently
+      {
+        // stage three allies around the spot, then prove a NON-HOLDER never counts them.
+        // (A -1 sentinel proves nothing here: the early-out legitimately zeroes the counts so a
+        // buff that is lost does not leave a stale number behind.)
+        const n1=place(mkB(0,{}),1,0), n2=place(mkB(0,{}),2,0), n3=place(mkB(0,{}),3,0);
+        const idle=place(mkB(0,{}),0,0);            // holds NONE of the six
+        scan(idle,2);
+        check("v132.35 aura cost: a unit holding none of the six NEVER scans — three allies are "+
+          "standing on top of it and it counted "+idle._auraA+". The early-out is what stops 485 "+
+          "units walking 485 units every frame",idle._auraA===0);
+        const holder=place(mkB(0,{phalanx:1}),0,0);
+        holder._auraA=-1; AB(holder,0.05);          // one frame, well under AURA_SCAN
+        check("v132.35 aura cost: a holder does NOT scan every frame — 4 Hz, not 60 (after one "+
+          "16ms frame the count is still "+holder._auraA+")",holder._auraA===-1);
+        scan(holder,0.4);
+        check("v132.35 aura cost: …but it DOES scan once the "+G.AURA_SCAN+"s window elapses ("+
+          holder._auraA+")",holder._auraA>=0);
+      }
+      // SANCTUARY — the stillness clock, then the zone
+      {
+        const heal=place(mkB(0,{sanctuary:1}),0,20);
+        const friend=place(mkB(0,{}),2,20);
+        friend.hp=friend.maxHp*0.5; const f0=friend.hp;
+        heal.moving=true; scan(heal,4);
+        check("v132.35 SANCTUARY: no zone while you are MOVING ("+f0.toFixed(1)+" → "+
+          friend.hp.toFixed(1)+")",Math.abs(friend.hp-f0)<1e-9);
+        heal.moving=false; scan(heal,2);            // still under the 3s clock
+        check("v132.35 SANCTUARY: …and none before the "+G.AURA_STILL+"s of stillness are up ("+
+          friend.hp.toFixed(1)+")",Math.abs(friend.hp-f0)<1e-9);
+        scan(heal,3);                               // now past it
+        check("v132.35 SANCTUARY: …then it opens and mends the warband ("+f0.toFixed(1)+" → "+
+          friend.hp.toFixed(1)+")",friend.hp>f0);
+        // and the radius bounds it
+        const far=place(mkB(0,{}),R+15,20);
+        far.hp=far.maxHp*0.5; const x0=far.hp; scan(heal,2);
+        check("v132.35 SANCTUARY: …but not someone outside the "+R+"-unit radius ("+
+          x0.toFixed(1)+" → "+far.hp.toFixed(1)+")",Math.abs(far.hp-x0)<1e-9);
+        far.alive=false; friend.alive=false; heal.alive=false;
+      }
+      // SEARING PRESENCE — enemies only
+      {
+        const burn=place(mkB(0,{brand:1}),0,40);
+        const foe=place(mkB(1,{}),2,40);
+        const pal=place(mkB(0,{}),2,41);
+        const e0=foe.hp, a0=pal.hp;
+        scan(burn,2);
+        check("v132.35 SEARING PRESENCE: nearby enemies burn ("+e0.toFixed(1)+" → "+
+          foe.hp.toFixed(1)+")",foe.hp<e0);
+        check("v132.35 SEARING PRESENCE: …and allies do NOT ("+a0.toFixed(1)+" → "+
+          pal.hp.toFixed(1)+")",Math.abs(pal.hp-a0)<1e-9);
+        foe.alive=false; pal.alive=false; burn.alive=false;
+      }
+      // ---- v132.37: WHO HEARS THEM — the relay, and the dedicated-server shape ----
+      {
+        const N=G.NET, mode0=N.mode, bc0=N.bcast;
+        let wire=[]; N.bcast=(o)=>{wire.push(o);};
+        const CUES=Object.keys(G.SFX_NET);
+        const puppet=mkB(0,{});
+        try{
+          N.mode="host";
+          // ⚠ CLEAR THE STAMPS FIRST. The batch D and E gates above already drove seven of these
+          // twelve with NET.mode="host", and T does not advance between synchronous blocks — so
+          // without this the "first" call for those seven is really their second, at the same
+          // instant, and the throttle rightly refuses it. That reds a correct relay.
+          const stamps=G.sfxLast(); for(const k in stamps)delete stamps[k];
+          // every cue reaches the wire at least once
+          for(const k of CUES){G.sfxAt(k,puppet);}
+          const got=new Set(wire.filter(o=>o.t==="snd").map(o=>o.k));
+          const mute=CUES.filter(k=>!got.has(k));
+          check("v132.37 relay: all "+CUES.length+" buff cues go on the WIRE — ten of them fire "+
+            "from code a guest never runs (dealDamage bails on guests; the aura and knife ticks "+
+            "are host-loop), so without this a guest hears two of twelve"+
+            (mute.length?" [HOST-ONLY: "+mute.join(",")+"]":""),mute.length===0);
+          check("v132.37 relay: …positionally, so each guest culls and pans it against ITS OWN "+
+            "listener, not the host's ("+wire.length+" carried a position) — the length check is "+
+            "not decoration: every() is TRUE of an empty wire, so without it this gate passes "+
+            "loudest when nothing is broadcast at all",
+            wire.length>=CUES.length&&wire.every(o=>typeof o.x==="number"&&typeof o.z==="number"));
+          // the wire is throttled, on the clock
+          // THE FROZEN CLOCK IS THE INSTRUMENT: with T stopped a correct clock-throttle sends
+          // exactly one however many calls arrive, so this is an exact count, not a bound.
+          wire=[]; const K="bleedhit", W=G.SFX_NET[K];
+          delete stamps[K];
+          G.sfxAt(K,puppet); G.sfxAt(K,puppet); G.sfxAt(K,puppet);
+          const burst=wire.length;
+          check("v132.37 relay: the WIRE is throttled independently of the ear — the client "+
+            "throttle runs after the packet is already sent, so it protects nobody's bandwidth "+
+            "(3 calls at one instant, "+W+"s window → "+burst+" message"+(burst===1?"":"s")+")",
+            burst===1);
+          stamps[K]=G.getT()-W*2;                    // wind the window past, by hand
+          G.sfxAt(K,puppet);
+          check("v132.37 relay: …and it RE-ARMS on the clock, so it is a time window and not a "+
+            "call counter or a latch ("+wire.length+" total)",wire.length===2);
+          check("v132.37 relay: every cue has its own wire window, tuned at half the client's "+
+            "category throttle — the host relays denser than it plays and lets each guest thin "+
+            "it at its own position",CUES.every(k=>G.SFX_NET[k]>0));
+          // a guest never relays
+          // ⚠ CLEAR AGAIN. Without this the guest loop is refused for being too SOON (the host
+          // loop above stamped all twelve at this same frozen instant) rather than for being a
+          // guest — and the gate stayed green with NET.mode==="host" deleted from _sfxAt, which
+          // is precisely the bug it is named after. Verified by falsification, not by reading.
+          wire=[]; for(const k in stamps)delete stamps[k];
+          N.mode="guest"; for(const k of CUES)G.sfxAt(k,puppet);
+          check("v132.37 relay: a GUEST never relays, with every throttle stamp cleared so the "+
+            "MODE is the only thing refusing it — an echoing guest is a feedback loop and a "+
+            "client asserting authority over what other clients hear ("+wire.length+" of "+
+            CUES.length+" messages)",wire.length===0);
+        }finally{N.mode=mode0;N.bcast=bc0;puppet.alive=false;}
+      }
+      // ---- v132.37 THE DEDICATED SERVER: no local player, so the wire is the ONLY path ----
+      {
+        // Evaluated from the SHIPPED SOURCE with Sound shadowed to undefined. Reasoning that the
+        // relay is independent of the listener is not evidence; running it without one is.
+        const src=fs.readFileSync(path.join(ROOT,"js","05-combat.js"),"utf8");
+        const a=src.indexOf("const SFX_NET=");
+        const b=src.indexOf("\n};",src.indexOf("const _sfxAt="))+3;
+        const fnSrc=(a>=0&&b>2)?src.slice(a,b):"";
+        check("v132.37 dedicated server: the real _sfxAt source was extracted, so the next "+
+          "assertion is about shipped code and not about a stub ("+fnSrc.length+" chars)",
+          fnSrc.length>200&&/NET\.bcast/.test(fnSrc)&&/Sound\.play/.test(fnSrc));
+        let sent=[];
+        const fakeNET={mode:"host",bcast:(o)=>sent.push(o)};
+        const box={};
+        // Sound is a PARAMETER here, shadowing the global — inside, `typeof Sound` is "undefined"
+        new Function("Sound","NET","T","out",fnSrc+"\nout.f=_sfxAt;out.probe=typeof Sound;")
+          (undefined,fakeNET,1000,box);
+        check("v132.37 dedicated server: …and Sound really is absent inside it ("+box.probe+")",
+          box.probe==="undefined");
+        box.f("quakeslam",{root:{position:{x:11,z:-22}}});
+        check("v132.37 dedicated server: a host with NO Sound at all still puts the cue on the "+
+          "wire — on a server every player is a remote, so a locally-played cue is a cue nobody "+
+          "hears ("+sent.length+" sent"+(sent[0]?", "+sent[0].k+" @ "+sent[0].x+","+sent[0].z:"")+")",
+          sent.length===1&&sent[0].t==="snd"&&sent[0].k==="quakeslam"&&sent[0].x===11&&sent[0].z===-22);
+      }
+      // ---- v132.37: HOW OFTEN THE CONTINUOUS CUES SPEAK ----
+      {
+        const A=G.Sound, real=A.play;
+        const heard={}; A.play=(k)=>{heard[k]=(heard[k]||0)+1;return true;};
+        try{
+          // SANCTUARY: one tone per OPENING, not four a second for as long as you stand there
+          const holy=mkB(0,{sanctuary:1});
+          holy.moving=false; scan(holy,8);            // 3s to open + 5s of open zone = ~32 scans
+          check("v132.37 SANCTUARY cue: ONE harp tone for the opening, not one per 4 Hz scan — "+
+            "eight seconds of standing still produced "+(heard.sanctuary||0)+" (32 scans)",
+            heard.sanctuary===1);
+          holy.moving=true; scan(holy,1);             // walking shuts the zone
+          holy.moving=false; scan(holy,6);            // and standing again re-opens it
+          check("v132.37 SANCTUARY cue: …and it speaks AGAIN when the zone re-opens, so the latch "+
+            "is a latch and not a one-shot ("+(heard.sanctuary||0)+" total)",heard.sanctuary===2);
+          holy.alive=false;
+          // SEARING: throttled on the game CLOCK. With T frozen a correct throttle yields exactly
+          // one, and a cue that is not clock-throttled yields one per scan.
+          const burn=mkB(0,{brand:1});
+          const foe=mkB(1,{}); foe.root.position.set(burn.root.position.x+2,0,burn.root.position.z);
+          foe.hp=foe.maxHp*50;                        // deep enough to survive the whole burn
+          scan(burn,6);                               // 24 scans, clock stopped
+          check("v132.37 SEARING cue: a continuous burn is a periodic SIZZLE, not a buzz — 24 "+
+            "scans on a frozen clock produced "+(heard.sear||0)+", not 24",heard.sear===1);
+          burn._searT=G.getT()-3;                     // wind the clock past the 2.5s window
+          scan(burn,1);
+          check("v132.37 SEARING cue: …and it RE-ARMS once the window passes, so it is throttled "+
+            "and not latched off ("+(heard.sear||0)+" total)",heard.sear===2);
+          foe.alive=false; burn.alive=false;
+        }finally{A.play=real;}
+      }
+      // KINSHIP — a soldier of your OWN KIND, not merely any ally
+      {
+        const kinA=place(mkB(0,{kinship:1},"clubman"),0,60); kinA.hp=kinA.maxHp*0.5;
+        check("v132.35 KINSHIP harness: no stray same-class ally is already in range ("+
+          near(kinA.root.position.x,kinA.root.position.z,R)+" units within "+R+")",
+          near(kinA.root.position.x,kinA.root.position.z,R)===1);
+        const other=place(mkB(0,{},"archer"),2,60);
+        const h0=kinA.hp; scan(kinA,2);
+        check("v132.35 KINSHIP: a DIFFERENT class nearby mends nothing ("+h0.toFixed(1)+" → "+
+          kinA.hp.toFixed(1)+")",Math.abs(kinA.hp-h0)<1e-9);
+        const same=place(mkB(0,{},"clubman"),2,60);
+        scan(kinA,2);
+        check("v132.35 KINSHIP: …a soldier of your own kind does ("+h0.toFixed(1)+" → "+
+          kinA.hp.toFixed(1)+")",kinA.hp>h0);
+        other.alive=false; same.alive=false; kinA.alive=false;
+      }
+      // UNBOWED and PHALANX — scale with the count, stop at the cap
+      {
+        const stout=place(mkB(0,{resolve:1}),0,100), hitter=place(mkB(1,{}),2,100);
+        const probe=(n)=>{
+          stout._auraE=n;
+          const v=stout.hp; dmgOf(hitter,stout,20); const d=v-stout.hp; stout.hp=stout.maxHp; return d;
+        };
+        const d0=probe(0), d2=probe(2), d9=probe(9), d20=probe(20);
+        check("v132.35 UNBOWED: the more enemies around you the less it hurts ("+d0.toFixed(1)+
+          " → "+d2.toFixed(1)+" → "+d9.toFixed(1)+")",d2<d0&&d9<d2);
+        check("v132.35 UNBOWED: …and it STOPS at −25% ("+d9.toFixed(1)+" vs 20 enemies "+
+          d20.toFixed(1)+", floor "+(20*0.75).toFixed(1)+")",
+          Math.abs(d9-d20)<1e-9&&Math.abs(d20-15)<0.01);
+        const spear=place(mkB(0,{phalanx:1}),0,110), tgt=place(mkB(1,{}),2,110);
+        const pr=(n)=>{spear._auraA=n;const v=tgt.hp;dmgOf(spear,tgt,20);const d=v-tgt.hp;tgt.hp=tgt.maxHp;return d;};
+        const p0=pr(0), p2=pr(2), p8=pr(8), p30=pr(30);
+        check("v132.35 PHALANX: the more allies beside you the harder you hit ("+p0.toFixed(1)+
+          " → "+p2.toFixed(1)+" → "+p8.toFixed(1)+")",p2>p0&&p8>p2);
+        check("v132.35 PHALANX: …and it STOPS at +20% ("+p8.toFixed(1)+" vs 30 allies "+
+          p30.toFixed(1)+", ceiling "+(20*1.2).toFixed(1)+")",
+          Math.abs(p8-p30)<1e-9&&Math.abs(p30-24)<0.01);
+        hitter.alive=false; tgt.alive=false;
+      }
+      // STEWARD — a villager mends the stones
+      {
+        const stew=place(mkB(0,{steward:1},"villager"),0,80);
+        const hut=G.makeBuilding(0,"house",stew.root.position.x+3,stew.root.position.z,true);
+        hut.hp=hut.def.hp*0.5; const b0=hut.hp;
+        scan(stew,2);
+        check("v132.35 STEWARD: a villager mends a wounded friendly building ("+b0.toFixed(1)+
+          " → "+hut.hp.toFixed(1)+")",hut.hp>b0);
+        hut.alive=false;
+      }
+    }
+    // ---- v132.34: BATCH C — state on the ENEMY ----
+    {
+      const force=(fn)=>{const MR=Math.random;Math.random=()=>0;try{fn();}finally{Math.random=MR;}};
+      // SERRATED EDGE — 1 HP/s for 20s, and the total really is ~20
+      {
+        const cutter=mkB(0,{bleed:1}), prey=mkB(1,{});
+        force(()=>dmgOf(cutter,prey,1));
+        check("v132.34 SERRATED EDGE: a hit leaves a bleed on the victim ("+
+          G.tmodSum(prey,"bleed").toFixed(1)+" HP/s)",G.tmodSum(prey,"bleed")===1);
+        const hp0=prey.hp;
+        for(let i=0;i<200;i++)G.statusTick(prey,0.1);   // 20 seconds
+        check("v132.34 SERRATED EDGE: …and it burns ~20 HP over its 20 seconds, then stops ("+
+          Math.round(hp0-prey.hp)+" HP, bleed left "+G.tmodSum(prey,"bleed")+")",
+          Math.abs((hp0-prey.hp)-20)<1.5&&G.tmodSum(prey,"bleed")===0);
+      }
+      // VENOMOUS — damage AND a slow, the slow being a negative spdmul
+      {
+        const v=mkB(0,{venom:1}), prey=mkB(1,{});
+        force(()=>dmgOf(v,prey,1));
+        check("v132.34 VENOMOUS: poison damage and a HALVED move speed ("+
+          G.tmodSum(prey,"poison").toFixed(1)+" HP/s, ×"+G.tmodMul(prey,"spdmul").toFixed(2)+")",
+          G.tmodSum(prey,"poison")===1&&Math.abs(G.tmodMul(prey,"spdmul")-0.5)<1e-9);
+      }
+      // …AND A CREEP BURNS DOWN — the reason the tick had to leave questTick
+      {
+        const v=mkB(0,{venom:1});
+        const creep=G.makeUnit(2,"clubman",-150,-70,{name:"beast",bot:{role:"citizen"}});
+        G.setClassStats(creep); creep.hp=creep.maxHp;
+        force(()=>dmgOf(v,creep,1));
+        const hp0=creep.hp;
+        for(let i=0;i<50;i++)G.statusTick(creep,0.1);
+        check("v132.34 VENOMOUS: a NON-HUMAN victim burns too ("+Math.round(hp0-creep.hp)+
+          " HP) — questTick walks humans only, which is why the tick moved to the unit loop",
+          hp0-creep.hp>=4);
+        // ⚠ a NEUTRAL unit must never enter the respawn queue: respawnUnit reads
+        // TCPOS[u.team] and the wilds have no town centre, so it throws — and the crash
+        // reporter SWALLOWS it, which silently stops the rest of the host frame. Real camp
+        // creeps are safe because killUnit parks them at respawnT=Infinity; this synthetic one
+        // has to do the same by hand.
+        creep.alive=false; creep.respawnT=Infinity; creep.corpse=true;
+      }
+      // CONCUSSIVE BLOW — stops the victim moving, and the cooldown is the WIELDER's
+      {
+        const br=mkB(0,{concuss:1}), a=mkB(1,{}), b=mkB(1,{});
+        br._stunCd=-999;
+        force(()=>dmgOf(br,a,1));
+        check("v132.34 CONCUSSIVE BLOW: the victim is stunned and cannot move (stunned "+
+          G.isStunned(a)+")",G.isStunned(a)===true);
+        const z0=a.root.position.z; G.moveUnit(a,0,1,0.2);
+        check("v132.34 CONCUSSIVE BLOW: …moveUnit refuses while stunned (moved "+
+          Math.abs(a.root.position.z-z0).toFixed(3)+")",Math.abs(a.root.position.z-z0)<1e-9);
+        force(()=>dmgOf(br,b,1));
+        check("v132.34 CONCUSSIVE BLOW: the 30s cooldown belongs to the WIELDER — a second victim "+
+          "is NOT stunned, so nobody stun-locks a crowd by rotating targets (b stunned "+
+          G.isStunned(b)+")",G.isStunned(b)===false);
+        for(let i=0;i<25;i++)G.statusTick(a,0.1);
+        check("v132.34 CONCUSSIVE BLOW: …and the stun expires ("+G.isStunned(a)+")",
+          G.isStunned(a)===false);
+      }
+      // DEEP GASH — a priest cannot mend what it opened
+      {
+        const g=mkB(0,{gash:1}), prey=mkB(1,{});
+        force(()=>dmgOf(g,prey,1));
+        check("v132.34 DEEP GASH: the victim is heal-blocked ("+G.healBlocked(prey)+")",
+          G.healBlocked(prey)===true);
+        // ⚠ A CONTROL AND A REAL HEALER. The first version wounded one unit and called
+        // healTick with NO healing source anywhere near it — so nothing healed, the assertion
+        // held, and deleting the heal-block check left it green. Verified by doing exactly that.
+        const ctrl=mkB(1,{});                       // same team, same wound, NOT gashed
+        const priest=G.makeUnit(1,"priest",prey.root.position.x+1,prey.root.position.z,
+          {name:"medic",bot:{role:"citizen"}});
+        G.setClassStats(priest); priest.hp=priest.maxHp;
+        ctrl.root.position.set(prey.root.position.x+2,ctrl.root.position.y,prey.root.position.z);
+        prey.hp=prey.maxHp*0.4; ctrl.hp=ctrl.maxHp*0.4;
+        const hp0=prey.hp, hc0=ctrl.hp;
+        G.healTick(1.0);
+        check("v132.34 DEEP GASH: the control HEALS ("+hc0.toFixed(1)+" → "+ctrl.hp.toFixed(1)+
+          ") — so the healer is really in range and this test is not vacuous",ctrl.hp>hc0);
+        check("v132.34 DEEP GASH: …and the gashed victim does NOT ("+hp0.toFixed(1)+" → "+
+          prey.hp.toFixed(1)+")",Math.abs(prey.hp-hp0)<1e-9);
+        priest.alive=false; priest.respawnT=Infinity; ctrl.alive=false;
+      }
+      // SHRUG IT OFF — sheds what an enemy put on you, keeps what you earned
+      {
+        const tough=mkB(0,{shrug:1,surge:1});
+        G.tmodAdd(tough,"bleed",1,20,false);
+        G.tmodAdd(tough,"stun",1,2,false);
+        G.tmodAdd(tough,"spdmul",-0.5,10,false);        // an enemy slow
+        G.tmodAdd(tough,"spdmul2",0,1,false);           // (placeholder kind, ignored)
+        G.tmodAdd(tough,"dmgflat",4,7,false);           // …and something YOU earned
+        const shed=G.shedDebuffs(tough);
+        check("v132.34 SHRUG IT OFF: sheds bleed, stun and the enemy slow ("+shed+" shed; bleed "+
+          G.tmodSum(tough,"bleed")+", stunned "+G.isStunned(tough)+")",
+          shed>=3&&G.tmodSum(tough,"bleed")===0&&G.isStunned(tough)===false);
+        check("v132.34 SHRUG IT OFF: …and KEEPS what you earned — a cleanse that strips your own "+
+          "buffs is a punishment (+"+G.tmodSum(tough,"dmgflat")+" dmgflat still held)",
+          G.tmodSum(tough,"dmgflat")===4);
+      }
+      // NO DOUBLE-TICK: one frame must burn one frame of clock, not two
+      {
+        const h=mkB(0,{});
+        G.tmodAdd(h,"dmgflat",2,7,false);
+        const t0=h._tmods[0].t;
+        G.statusTick(h,0.5);
+        check("v132.34 tick topology: statusTick burns exactly its dt ("+t0.toFixed(2)+"s → "+
+          h._tmods[0].t.toFixed(2)+"s)",Math.abs((t0-h._tmods[0].t)-0.5)<1e-9);
+        // ⚠ …but the above drives statusTick DIRECTLY and so says nothing about how many callers
+        // there are. Re-adding tmodTick to questTick left it green — verified. The topology claim
+        // is about the SOURCE, so it is read from the source: 09-main.js must drive the timed
+        // system exactly once per frame, through statusTick and not also through tmodTick.
+        {
+          const mainSrc=fs.readFileSync(path.join(ROOT,"js","09-main.js"),"utf8");
+          const viaStatus=mainSrc.split("statusTick(u,dt)").length-1;
+          const viaTmod=mainSrc.split("tmodTick(").length-1;
+          check("v132.34 tick topology: 09-main drives the clock ONCE — statusTick x"+viaStatus+
+            ", tmodTick x"+viaTmod+" (a second caller halves every Batch B duration)",
+            viaStatus===1&&viaTmod===0);
+        }
+      }
+    }
+    // ---- v132.33: the guest predicts its own timed modifiers ----
+    {
+      const sent=[]; const bcast=[];
+      const savedMode=G.NET.mode, savedRemotes=G.NET.remotes;
+      G.NET.mode="host";
+      const owner=mkB(0,{surge:1}); owner.remote="tmpeer";
+      const other=mkB(0,{}); other.remote="otherpeer";
+      G.NET.remotes={tmpeer:{unit:owner,conn:{send:(m)=>sent.push(m)}},
+                     otherpeer:{unit:other,conn:{send:(m)=>bcast.push(m)}}};
+      G.tmodAdd(owner,"spdmul",0.5,2,true);
+      const mine=sent.filter(m=>m&&m.t==="tmd");
+      check("v132.33 tmod wire: applying a modifier puts a tmd on the OWNER's wire ("+
+        mine.length+" sent)",mine.length===1&&mine[0].k==="spdmul"&&
+        Math.abs(mine[0].m-0.5)<1e-9&&Math.abs(mine[0].d-2)<1e-9&&mine[0].f===1);
+      check("v132.33 tmod wire: …and it is NOT broadcast — a speed buff is private to its owner ("+
+        bcast.filter(m=>m&&m.t==="tmd").length+" leaked)",
+        bcast.filter(m=>m&&m.t==="tmd").length===0);
+      // the guest side: same numbers in, same multiplier out
+      const guest={team:0,cls:"clubman",buffs:{},_tmods:null};
+      const w=mine[0];
+      G.tmodAdd(guest,w.k,w.m,w.d,!!w.f,w.c||0);
+      check("v132.33 tmod wire: the guest computes the SAME multiplier the host does ("+
+        G.tmodMul(guest,"spdmul").toFixed(3)+"× vs "+G.tmodMul(owner,"spdmul").toFixed(3)+"×)",
+        Math.abs(G.tmodMul(guest,"spdmul")-G.tmodMul(owner,"spdmul"))<1e-9);
+      // …and the guest must EXPIRE it. Without its own tick a 2s buff would never end.
+      G.tmodTick(guest,3);
+      check("v132.33 tmod wire: the guest EXPIRES it on its own clock — without this a 2s buff "+
+        "runs until something replaces it ("+G.tmodMul(guest,"spdmul").toFixed(2)+"×)",
+        Math.abs(G.tmodMul(guest,"spdmul")-1)<1e-9);
+      // ⚠ THE ABOVE DRIVES tmodTick DIRECTLY, so it proves the CLOCK works and says nothing
+      // about whether the guest frame ever turns it. Deleting the call from guestFrame left every
+      // assertion green — verified by doing exactly that. This reads the shipping source, the way
+      // the build-reach checks do, so the WIRING is gated and not just the mechanism.
+      {
+        const netSrc=fs.readFileSync(path.join(ROOT,"js","10-net.js"),"utf8");
+        const wired=netSrc.indexOf("tmodTick(player,dt)")>=0;
+        const handler=netSrc.indexOf('d.t==="tmd"')>=0;
+        check("v132.33 tmod wire: guestFrame actually TURNS the clock (tmodTick wired "+wired+
+          ") and the tmd handler exists ("+handler+")",wired&&handler);
+      }
+      // the death clear reaches the owner
+      sent.length=0; G.tmodSyncClear(owner);
+      check("v132.33 tmod wire: the death wipe reaches the owner's screen too ("+
+        (sent.length&&sent[0].clr?"clear sent":"NOTHING SENT")+")",
+        sent.length===1&&sent[0].t==="tmd"&&sent[0].clr===1);
+      G.NET.remotes=savedRemotes; G.NET.mode=savedMode;
+      owner.alive=false; other.alive=false;
+    }
+    G.NET.mode=_mB;
+  }
   // ---------- v132.29: THE LEVEL AURA ----------
   {
     const G=global.__G, A=G.auraTick, ST=G.auraStats;

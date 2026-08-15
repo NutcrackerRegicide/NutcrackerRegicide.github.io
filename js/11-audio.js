@@ -43,6 +43,27 @@ const Sound=(function(){
   // (source ran ~5 LU hotter than the foley) + modest gains here: they sit UNDER combat.
   DEFS["wolfhowl"]=[0,1,0,0.55];                      // long howl — wolf camps, idle & hunting
   DEFS["wolfbite"]=[0,1,0,0.7];                       // snap — a wolf-camp creep's melee impact
+  // ---- v132.37 THE BUFF CUES. Twelve triggered buffs, twelve distinct Epic Stock Media files.
+  // Registered here or they do not exist: loadAll() and resolve() both key on DEFS, not SND_DATA.
+  DEFS["bleedhit"]  =[0,1,0,0.70];   // wet squirt — rides UNDER the impact that opened the wound
+  DEFS["venomhit"]  =[0,1,0,0.70];   // potion bubble
+  DEFS["gashcut"]   =[0,1,0,0.70];   // dagger slash, on the FIRST application only
+  DEFS["stunhit"]   =[0,1,0,1.00];   // shield bash — the biggest melee moment in the game, so it
+                                     // is the loudest of the twelve. It borrowed "hit" before.
+  DEFS["shrugoff"]  =[0,1,0,0.75];   // plate/chainmail foley — relief, and it needs to be heard
+  DEFS["sear"]      =[0,1,0,0.60];   // a burn that never stops: the quietest of the twelve
+  DEFS["knifethrow"]=[0,1,0,0.75];   // woosh
+  DEFS["volleyshot"]=[0,1,0,0.85];   // bow release — once every ten seconds at best, so it lands
+  DEFS["wardblock"] =[0,1,0,0.90];   // arrow turned aside — priced like parry (0.95), just under
+  DEFS["guardblock"]=[0,1,0,0.90];   // blow turned aside
+  DEFS["sanctuary"] =[0,1,0,0.80];   // harp tone, on the OPENING of the zone
+  DEFS["quakeslam"] =[0,1,0,1.00];   // ground rumble — a 5% proc that hits everything around you
+  // ---- v132.38: four buffs that had no voice. Baked composites (tools/sfxmix.js), each one
+  // screened against every other entry by tools/sfxdupe.js before it was allowed in. ----
+  DEFS["critstrike"]=[0,1,0,0.95];   // KEEN EYE — louder than the hit1 (0.90) it replaces
+  DEFS["dodgeswish"]=[0,1,0,0.80];   // SIXTH SENSE — a near miss is quieter than a landed blow
+  DEFS["lastlegs"]  =[0,1,0,1.00];   // SURVIVAL INSTINCT — once a fight, and it means you are dying
+  DEFS["cullkill"]  =[0,1,0,0.85];   // CULLER — rides ON TOP of the death sound, must not bury it
   const BUSNAME=["sfx","ambience"]; // busCode -> bus name (music/voip exist as buses but no v100 assets)
   const DIR="audio/sfx/";
   // groups: play("swing") picks a random loaded variant; single keys are their own group
@@ -54,10 +75,26 @@ const Sound=(function(){
     res:200,channel:300,basealarm:60000, // v113: was 4000 — a bombardment rang the town bell nonstop; one toll a minute
     treefall:150,stonecrumble:150,tradepay:800,bighaul:200,harvest:150,gate_wood:2000,gate_stone:2000,garrison:300,bazaarload:400,
     wolfhowl:6000,wolfbite:300, // v110: one howl at a time (7s file); bites ride the combat cadence
-    armup_infantry:300,armup_cavalry:300,armup_civilian:300};
+    armup_infantry:300,armup_cavalry:300,armup_civilian:300,
+    // v132.37 the buff cues. The per-unit clocks in 05-combat.js bound ONE unit; forty units in
+    // one melee are bounded only here. sear is already gated to 2.5s per holder — this stops a
+    // dozen holders from turning that into a continuous hiss. sanctuary is a near-unique event.
+    bleedhit:200,venomhit:200,gashcut:200,stunhit:150,shrugoff:250,sear:600,
+    knifethrow:150,volleyshot:120,wardblock:120,guardblock:120,sanctuary:900,quakeslam:250,
+    // v132.38. critstrike is the hot one: 5% per stack to a cap of 3 is ~15% of every blow you
+    // land, and in a real melee that is several a second across the field. 140ms is about the
+    // cadence of the swing cue it rides on. lastlegs is latched per unit per fight, so its window
+    // exists only to stop ten people crossing the line together sounding ten horns at once.
+    critstrike:140,dodgeswish:150,lastlegs:400,cullkill:200};
   const CAPPED={swing:1,hit:1,death:1,bow:1,arrowhit:1,siegefire:1,siegehit:1,march:1,build:1,mine:1,chop:1,farm:1,pickup:1,
     swingheavy:1,swinglight:1,spearhit:1,bldhit:1,bldhitwood:1,gore:1,deathheavy:1,block:1,gun:1,cannonfire:1,cannonhit:1,hooves:1,neigh:1,
-    wolfbite:1}; // v110: bites join the cap; the HOWL stays uncapped — atmosphere that always lands
+    wolfbite:1, // v110: bites join the cap; the HOWL stays uncapped — atmosphere that always lands
+    // v132.37: the FREQUENT cues yield to the 24-voice budget. The rare ones do not — a block or
+    // a slam dropped to make room for a crowd of bleed ticks is exactly the wrong trade.
+    bleedhit:1,venomhit:1,gashcut:1,stunhit:1,knifethrow:1,sear:1,
+    // v132.38: the two frequent ones yield to the voice budget. lastlegs and cullkill do not —
+    // one is once a fight and the other is an execute; neither should lose to a crowd of crits.
+    critstrike:1,dodgeswish:1};
   // v109: every vocal category gets a medium-density throttle and joins the voice cap —
   // EXCEPT vking (the regicide scream bypasses everything, like the stings do)
   for(const _k in DEFS){
