@@ -119,6 +119,10 @@ if("serviceWorker" in navigator && location.protocol.startsWith("http")){
 <div id="minimapwrap" class="panel"><canvas id="minimap" width="170" height="120"></canvas></div>
 <div id="feed"></div>
 <div id="crosshair"></div>
+<!-- v132.42 SURVIVAL INSTINCT. The only screen-space effect in the game: it is the one thing that
+     is about YOU rather than about somebody in the world, so it is the one thing that has to
+     reach you wherever the camera is pointing. pointer-events:none — it must never eat a click. -->
+<div id="vig"></div>
 <div id="lockhint" class="panel">Click to capture the mouse — Esc frees it</div>
 
 <div id="buildmenu" class="menu panel"></div>
@@ -192,7 +196,7 @@ if("serviceWorker" in navigator && location.protocol.startsWith("http")){
   </div>
   <div id="whoami">You fight as <b id="myname">—</b>
     <button id="btnrename" class="renamebtn" type="button" title="change your name">✎</button></div>
-  <p class="verstamp">v132.40 — WHAT THEY’RE CARRYING</p>
+  <p class="verstamp">v132.45 — IT LOOKS LIKE A KNIFE</p>
 </div>
 
 <!-- ====================== SCREEN 3 — HOST, JOIN, THE HALL =======================

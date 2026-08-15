@@ -795,8 +795,28 @@ function tickObjectiveFade(){
   setTimeout(()=>{o.style.display="none";},1100);
 }
 // camera chase + atmosphere + draw — shared by the host/solo sim and the guest's thin frame
+// v132.42 SURVIVAL INSTINCT. Own player only, no wire: a guest already knows its own hp
+// (authoritative every snapshot) and its own buffs, so the crossing is detectable on the client
+// that needs to see it. The host's _lowLatch gates the speed BUFF and never reaches a guest.
+// ⚠ It clears at 40%, not at 25%. Clearing at the same line makes a player hovering there flash
+// the whole screen every time a heal ticks them over it and a blow takes them back under.
+let _vigT=0, _vigLatch=false;
+function tickVignette(dt){
+  const el=(typeof document!=="undefined")?document.getElementById("vig"):null;
+  if(!el||typeof player==="undefined"||!player)return;
+  const frac=(player.maxHp>0)?Math.max(0,player.hp)/player.maxHp:1;
+  const has=(typeof buffSt==="function")&&buffSt(player,"flight")>0;
+  if(has&&player.alive&&frac<0.25&&!_vigLatch){_vigLatch=true;_vigT=1.0;}
+  if(frac>0.40||!player.alive)_vigLatch=false;
+  if(_vigT>0){
+    _vigT=Math.max(0,_vigT-dt*1.6);
+    el.style.opacity=String((0.55*_vigT*(0.72+0.28*Math.sin(_vigT*17))).toFixed(3));
+  }else if(el.style.opacity!=="0")el.style.opacity="0";
+}
 function renderFrame(dt){
   tickObjectiveFade();
+  tickVignette(dt);   // ⚠ HERE, not in tickBody: renderFrame is the one function all three frame
+                      // paths call, so a guest sees it too. tickBody is trap #12.
   // v129.3 THE MENU BED. Same reasoning as the fade above, and the same reason it lives HERE:
   // Sound.tick never runs while inMenu (tickBody returns at the menu branch below), so the menu
   // track cannot ride musTick. renderFrame is the one function all three frame paths call.

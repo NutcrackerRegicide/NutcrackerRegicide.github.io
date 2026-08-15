@@ -66,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,tickVignette,KGUARD_R,nearOwnKing};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -2887,8 +2887,8 @@ global.__G.setGameOver(false);
     // v132.0 26 -> 27 with the map rework: MAP.x/MAP.z moved, so every node moved, and the netcode
   // indexes nodes positionally. The assertion is that the number MOVED WITH THE WORLD, which is the
   // thing a peer actually needs — a stale literal here is how two builds shake hands and disagree.
-  check("v132.40 wire: PROTO is 42 — public buff rows (s.bfa), so a client knows every player's "+
-    "loadout and not only its own",NET.PROTO===42);
+  check("v132.44 wire: PROTO is 45 — the set-piece channel, public timed modifiers and the "+
+    "thrown-knife kind",NET.PROTO===45);
     // the version stamp is READ from the page, not frozen in the recorder. Every log John
     // field-tested on v125.1 said ver:"v98", because that literal was written in v98 and never
     // touched again — a flight recorder you have to take somebody's word about.
@@ -3380,8 +3380,8 @@ global.__G.setGameOver(false);
   const w=G.NET.packWorld(1);
   let snapAres=null;
   try{G.NET._lastRow=null;const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
-  check("v115/v132.40 net: PROTO 42 (public loadouts) and `ares` still rides both payloads",
-    G.NET.PROTO===42&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
+  check("v115/v132.44 net: PROTO 45 (the thrown knife) and `ares` still rides both payloads",
+    G.NET.PROTO===45&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
     Array.isArray(snapAres)&&Math.abs(snapAres[0]-42.5)<0.06);
   G.ageResT[0]=0;
 
@@ -4266,8 +4266,15 @@ global.__G.setGameOver(false);
         // ⚠ ISOLATE. buffFxStats reports the WHOLE SCENE, and by now the campaign above has real
         // units holding real Batch D buffs — so an absolute count here measures somebody else's
         // rings. Park every other mask, restore at the end.
-        const _parked=[];
-        for(const u of G.units)if(u._fxMask){_parked.push([u,u._fxMask]);u._fxMask=0;}
+        // ⚠ PARK THE BUFFS TOO, as of v132.42. KING'S GUARD draws a ring at the feet of anyone
+        // in their king's light and reuses _ringAt, so it lands in the same counter these gates
+        // read — a buff alone is now enough to put a ring on the ground, which was not true when
+        // this parking was written. A shared pool quietly widens every gate that counts it.
+        const _parked=[], _parkedB=[];
+        for(const u of G.units){
+          if(u._fxMask){_parked.push([u,u._fxMask]);u._fxMask=0;}
+          if(u.buffs){_parkedB.push([u,u.buffs]);u.buffs={};}   // R is not created yet
+        }
         // THE SEEDED WINDOW. This cannot be a runtime check: the geometry was correctly built,
         // lazily, hundreds of frames ago, and there is no moment late enough to place a gate and
         // early enough to see an unbuilt pool. It is a claim about the SOURCE, so assert that.
@@ -4275,16 +4282,21 @@ global.__G.setGameOver(false);
           const src=fs.readFileSync(path.join(ROOT,"js","05-combat.js"),"utf8");
           const i=src.indexOf("function _ringBuild(){"), j=src.indexOf("\n}",i);
           const body=(i>=0&&j>i)?src.slice(i,j):"";
-          const declNull=/let _ringGeo=null/.test(src);
+          // ⚠ STATE THE INVARIANT, do not count call sites. The first version asserted
+          // "_ringBuild appears exactly twice" and went red in v132.41 when a SECOND lazy caller
+          // was added — a change that violates nothing. What matters is that no builder runs at
+          // LOAD, so that is what is checked: nothing invoked at column zero, every geometry
+          // handle declared null. A third lazy caller will not redden this; one top-level call will.
+          const declNull=/let _ringGeo=null/.test(src)&&/let _hexPool=null,_hexGeo=null/.test(src);
           const mkGeo=(src.match(/new THREE\.RingGeometry\(0\.94/g)||[]).length;
           const inBuild=(body.match(/new THREE\.RingGeometry\(0\.94/g)||[]).length;
-          const calls=(src.match(/_ringBuild\(\)/g)||[]).length;   // decl + the one call site
-          const calledFromTick=/function buffFxTick\(dt\)\{[\s\S]{0,220}_ringBuild\(\)/.test(src);
-          check("v132.39 rings: NO geometry is minted at LOAD — _ringGeo is declared null, both "+
-            "ring geometries are built inside _ringBuild() ("+inBuild+" of "+mkGeo+"), and "+
-            "_ringBuild is called only from buffFxTick. A BufferGeometry constructed inside the "+
-            "seeded window costs four random draws and moves every tree on the map (invariant #2)",
-            declNull&&mkGeo===2&&inBuild===2&&calls===2&&calledFromTick);
+          const topLevel=(src.match(/^(_ringBuild|_fxBuild)\(\)/gm)||[]);
+          check("v132.39/41: NO geometry is minted at LOAD — every handle is declared null, both "+
+            "ring geometries are built inside _ringBuild() ("+inBuild+" of "+mkGeo+"), and no "+
+            "lazy builder is invoked at top level ("+topLevel.length+" such calls). A geometry "+
+            "constructed inside the seeded window costs four random draws and moves every tree "+
+            "on the map (invariant #2)",
+            declNull&&mkGeo===2&&inBuild===2&&topLevel.length===0);
         }
         const R=mkB(0,{}); R._fxMask=0;
         FX(0.016);
@@ -4433,7 +4445,332 @@ global.__G.setGameOver(false);
         }
         R.alive=false; R._fxMask=0;
         for(const [u,m] of _parked)u._fxMask=m;   // give the world its rings back
+        for(const [u,b] of _parkedB)u.buffs=b;    // …and its loadouts
         FX(0.016);
+      }
+      // ---- v132.43: PUBLIC TIMED MODIFIERS ----
+      {
+        const N=G.NET, mode0=N.mode, P=G.getPlayer(), q0=N.lastQ, t0=P._tmods;
+        // ⚠ THE BUILDER SHIPS `player` PLUS EVERY NET.remotes[k].unit — nothing else. Earlier
+        // blocks leave behind probe units that set u.remote to a made-up key without registering
+        // there; such a unit passes isHuman() and is invisible to the builder, which is how the
+        // first version of this gate came to ask why the wire had shipped nothing about a unit
+        // the wire had never heard of. And at this point in the run there are no real remotes at
+        // all, so one is REGISTERED here and removed in the finally.
+        const _rkey="__tmprobe";
+        const other=mkB(0,{});
+        other.remote=_rkey;
+        G.NET.remotes[_rkey]={unit:other,name:"tmprobe",oldName:"tmprobe",
+                              conn:{open:false,send(){}}};
+        check("v132.43 tmods: a registered remote exists to test against — the builder ships "+
+          "`player` and NET.remotes only, so without one every assertion below would pass by "+
+          "never running",!!G.NET.remotes[_rkey].unit);
+        try{
+          N.mode="host";
+          const pack3=()=>{const o=[];for(let i=0;i<3;i++)o.push(N.packSnap());return o;};
+          if(other){
+            other._tmods=[{k:"bleed",mag:1,t:12.5,dur:20,fade:false},
+                          {k:"spdmul",mag:0.5,t:1.25,dur:2,fade:true}];
+            const A=pack3().filter(x=>x.tm);
+            const row=A.length?(A[0].tm||[]).find(r=>r[0]===other.id):null;
+            check("v132.43 tmods: the row carries the MAGNITUDE and the CLOCK — an event can say "+
+              "'bleeding started', only this can say 'bleeding, 12.5s left, at this strength' "+
+              "("+(row?JSON.stringify(row[1]):"no row")+")",
+              !!row&&row[1].length===8&&row[1][2]===1250&&row[1][7]===1);
+            // …and it round-trips onto the right unit
+            other._tmods=null;
+            N.mode="guest";
+            if(A.length){
+              A[0].q=N.lastQ+1; N.applySnap(A[0]);
+              const got=other._tmods||[];
+              const bleed=got.find(e=>e.k==="bleed"), spd=got.find(e=>e.k==="spdmul");
+              check("v132.43 tmods: …and a GUEST rebuilds them on the right unit, magnitudes and "+
+                "clocks intact ("+got.length+" kinds, bleed t="+(bleed?bleed.t:"—")+", spdmul "+
+                "fade="+(spd?spd.fade:"—")+")",
+                got.length===2&&!!bleed&&Math.abs(bleed.t-12.5)<0.02&&!!spd&&spd.fade===true);
+            }
+            // COMPLETE, not sparse
+            N.mode="host"; other._tmods=null;
+            const B=pack3().filter(x=>x.tm);
+            const row2=B.length?(B[0].tm||[]).find(r=>r[0]===other.id):null;
+            check("v132.43 tmods: a human with NOTHING on them is still listed — a sparse list "+
+              "cannot say 'cleared', third time this trap has come up ("+
+              (row2?"listed, "+row2[1].length+" entries":"MISSING")+")",
+              !!row2&&row2[1].length===0);
+            // THE LOCAL PLAYER IS LEFT ALONE — it has the private immediate channel
+            N.mode="guest";
+            P._tmods=[{k:"stun",mag:1,t:9,dur:9,fade:false}];
+            if(B.length){ B[0].q=N.lastQ+1; N.applySnap(B[0]); }
+            check("v132.43 tmods: the guest's OWN player is left to its private channel — that "+
+              "arrives at once rather than at 5 Hz, and the immediacy is what made guest "+
+              "prediction match the host in v132.33 (own stun survived: "+
+              (!!(P._tmods&&P._tmods.length))+")",!!(P._tmods&&P._tmods.length===1));
+          }
+        }finally{ N.mode=mode0; P._tmods=t0; N.lastQ=q0;
+                  if(other){other._tmods=null;other.alive=false;}
+                  delete G.NET.remotes[_rkey]; }
+      }
+      // ---- v132.43: THE TWO EFFECTS IT UNBLOCKED ----
+      {
+        const S=G.buffFxStats, FX=G.buffFxTick;
+        const _p=[],_pt=[];
+        for(const u of G.units){
+          if(u.buffs&&Object.keys(u.buffs).length){_p.push([u,u.buffs]);u.buffs={};}
+          if(u._tmods){_pt.push([u,u._tmods]);u._tmods=null;}
+        }
+        try{
+          const K=mkB(0,{}); K.buffs={}; K._tmods=null;
+          FX(0.016);
+          const base=S().lookVis;
+          K._tmods=[{k:"dmgflat",mag:4,t:5,dur:7,fade:false}];   // +4 = two kills
+          FX(0.016); const two=S().lookVis-base;
+          K._tmods=[{k:"dmgflat",mag:10,t:5,dur:7,fade:false}];  // +10 = the cap
+          FX(0.016); const five=S().lookVis-base;
+          check("v132.43 KILLING FRENZY: the chevrons COUNT the stack — +4 draws "+two+", +10 "+
+            "draws "+five+". Neither the stack nor its seven-second window has ever been visible; "+
+            "this shows the first directly and the second by winking out",two===2&&five===5);
+          K._tmods=null; FX(0.016);
+          check("v132.43 KILLING FRENZY: …and they go when the modifier does ("+
+            (S().lookVis-base)+")",S().lookVis-base===0);
+          K.alive=false;
+        }finally{ for(const [u,b] of _p)u.buffs=b; for(const [u,t2] of _pt)u._tmods=t2; FX(0.016); }
+      }
+      // ---- v132.42: THE PERSISTENT LOOKS ----
+      {
+        const S=G.buffFxStats, FX=G.buffFxTick;
+        // ⚠ PARK _tmods TOO, as of v132.43. KILLING FRENZY draws chevrons from a timed modifier
+        // alone — the pool's THIRD tenant, and the note at the end of
+        // tools/patch-smoketest-rings-fix4.js said to expect exactly this.
+        const _pk=[], _pkT=[];
+        for(const u of G.units){
+          if(u.buffs&&Object.keys(u.buffs).length){_pk.push([u,u.buffs]);u.buffs={};}
+          if(u._tmods){_pkT.push([u,u._tmods]);u._tmods=null;}
+        }
+        try{
+          const L=mkB(0,{}); L.buffs={};
+          FX(0.016);
+          check("v132.42 looks: the stage is clear before the block ("+S().lookVis+" visible)",
+            S().lookVis===0);
+          // a look appears from the HOLDING alone — no event, nothing to trigger it
+          L.buffs={captain:1}; FX(0.016);
+          const cap=S().looks;
+          check("v132.42 CAPTAIN'S BANNER: the look appears from the HOLDING alone — no event "+
+            "fires it, which is the whole difference between these and every effect before them "+
+            "("+cap+")",cap===1);
+          // …and vanishes the moment the buff goes
+          L.buffs={}; FX(0.016);
+          // ⚠ lookVis, NOT looks. looks counts draws THIS FRAME, so deleting the hide-all pass —
+          // which leaves every look ever drawn on screen for the rest of the match, the exact bug
+          // named here — still reads 0. Same vacuity as the ring version earlier this session.
+          check("v132.42 looks: …and it VANISHES when the buff does, with nothing having to "+
+            "notice ("+S().lookVis+" still visible)",S().lookVis===0);
+          // DESPERATION scales with missing health
+          L.buffs={fervor:1}; L.hp=L.maxHp*0.95; FX(0.016);
+          const nearFull=S().looks;
+          L.hp=L.maxHp*0.20; FX(0.016);
+          const hurt=S().looks;
+          check("v132.42 DESPERATION: nothing at 95% health, a haze at 20% — it is a GRADIENT, "+
+            "and drawn flat it would say the wrong thing ("+nearFull+" → "+hurt+")",
+            nearFull===0&&hurt===1);
+          // KING'S GUARD respects its CONDITION, not merely the holding
+          L.buffs={kguard:1}; L.hp=L.maxHp;
+          // ⚠ THE KING HAS TO BE ALIVE. nearOwnKing() requires it, and by the time these gates
+          // run a two-hundred-second campaign has been fighting over exactly that — a dead king
+          // makes both halves false and the gate fails for a reason that is nothing to do with
+          // the look. Revived here, restored after.
+          const k=G.kings&&G.kings[0];
+          if(k&&k.root){
+            const wasAlive=k.alive; k.alive=true;
+            const kx=k.root.position.x, kz=k.root.position.z;
+            L.root.position.set(kx+G.KGUARD_R+40,0,kz);
+            const pFar=G.nearOwnKing(L); FX(0.016); const far=S().rings;
+            L.root.position.set(kx+2,0,kz);
+            const pNear=G.nearOwnKing(L); FX(0.016); const near=S().rings;
+            k.alive=wasAlive;
+            // assert the ring TRACKS the predicate, and report BOTH — a gate that fails without
+            // saying which half broke costs a whole run to find out which one it was
+            check("v132.42 KING'S GUARD: the ring tracks nearOwnKing() rather than merely the "+
+              "holding — a look that ignores its condition is a look that lies, and this one "+
+              "exists to explain why a unit is suddenly hard to kill (predicate "+pFar+"→"+pNear+
+              ", rings "+far+"→"+near+", delta "+(near-far)+")",
+              // ⚠ A DELTA, not an absolute. This block parks other units' BUFFS but not their
+              // Batch D _fxMask, so seven real rings are already on the ground when it runs. The
+              // claim is "walking into the king's light adds exactly one ring", and that is true
+              // whatever else the campaign is drawing. Third time an absolute has bitten in this
+              // family of gates: a shared pool plus a live campaign means never assert a total.
+              pFar===false&&pNear===true&&(near-far)===1);
+          }
+          L.buffs={}; L.alive=false; FX(0.016);
+        }finally{ for(const [u,b] of _pk)u.buffs=b;
+                  for(const [u,t2] of _pkT)u._tmods=t2; FX(0.016); }
+      }
+      // ---- v132.42: SURVIVAL INSTINCT — the latch is the design ----
+      {
+        const P=G.getPlayer(), b0=P.buffs, hp0=P.hp;
+        const el=document.getElementById("vig");
+        const op=()=>parseFloat(el.style.opacity||"0");
+        try{
+          P.buffs={flight:1}; P.alive=true;
+          P.hp=P.maxHp; G.tickVignette(0.016);
+          for(let i=0;i<80;i++)G.tickVignette(0.016);      // drain any leftover pulse
+          check("v132.42 vignette: dark at full health ("+op().toFixed(2)+")",op()===0);
+          P.hp=P.maxHp*0.20; G.tickVignette(0.016);
+          const lit=op();
+          check("v132.42 vignette: it lights on CROSSING under a quarter health ("+lit.toFixed(2)+
+            ")",lit>0);
+          for(let i=0;i<80;i++)G.tickVignette(0.016);      // still under, still parked there
+          check("v132.42 vignette: …and it does NOT re-fire while you sit at 20% — it is an EDGE, "+
+            "not a level, or a wounded player strobes the whole screen ("+op().toFixed(2)+")",
+            op()===0);
+          P.hp=P.maxHp*0.30; G.tickVignette(0.016);
+          P.hp=P.maxHp*0.20; G.tickVignette(0.016);
+          check("v132.42 vignette: …and healing to 30% does NOT re-arm it. Clearing at the same "+
+            "line as it fires makes anyone hovering there flash every time a heal ticks them over "+
+            "and a blow takes them back under ("+op().toFixed(2)+")",op()===0);
+          P.hp=P.maxHp*0.60; G.tickVignette(0.016);        // recovered past 40% — re-armed
+          P.hp=P.maxHp*0.20; G.tickVignette(0.016);
+          check("v132.42 vignette: …but recovering past 40% DOES re-arm it, so the second time "+
+            "you are in real trouble it still speaks ("+op().toFixed(2)+")",op()>0);
+        }finally{ P.buffs=b0; P.hp=hp0; for(let i=0;i<80;i++)G.tickVignette(0.016); }
+      }
+      // ---- v132.41: THE SET-PIECES ----
+      {
+        const X=G.fxStats, PLAY=G.vfxPlay;
+        const settle=()=>{for(let i=0;i<400;i++)G.fxTick(0.05);};   // 20s — past the longest life
+        settle();
+        check("v132.41 set-pieces: the stage starts empty ("+X().live+" live), so the counts "+
+          "below are this block's and not the campaign's",X().live===0);
+        // every kind draws something. A kind that fell out of the switch is silent, not broken.
+        const KINDS=[["EARTHSHAKER",1,100,0],["KEEN EYE",2,0,0],["CULLER",3,0,0],
+                     ["SHRUG IT OFF",4,0,0],["SIXTH SENSE",5,120,0],["ARROW WARD",6,120,0],
+                     ["IRON GUARD",7,120,0],["RAPID VOLLEY",8,60,60],["SERRATED EDGE",9,6,0],
+                     ["VENOMOUS",10,5,0],["CONCUSSIVE",11,15,0],["SECOND WIND",12,0,0],
+                     ["KNIFE FIGHTER",13,700,700]];
+        const silent=[];
+        for(const [nm,k,p,q] of KINDS){
+          settle(); const b=X().live;
+          PLAY([k,50,50,p,q]);
+          if(X().live<=b)silent.push(nm+"(#"+k+")");
+        }
+        // ---- v132.45: does it LOOK like a knife? ----
+        {
+          const TX=G.fxTex();
+          const alpha=(t2,u,v)=>{const im=t2.image,w=im.width,h=im.height;
+            const x=Math.min(w-1,Math.max(0,Math.round(u*(w-1))));
+            const y=Math.min(h-1,Math.max(0,Math.round(v*(h-1))));
+            return im.data[(y*w+x)*4+3]/255;};
+          const width=(t2,u)=>{let n=0;const h=t2.image.height;
+            for(let i=0;i<h;i++)if(alpha(t2,u,i/(h-1))>0.5)n++; return n/h;};
+          const B=TX.blade;
+          check("v132.45 shapes: the blade texture was built ("+(B?B.image.width+"x"+B.image.height:"none")+
+            ")",!!B&&B.image.width>=32);
+          if(B){
+            const wGuard=width(B,0.30), wMid=width(B,0.62), wTip=width(B,0.98), wGrip=width(B,0.12);
+            // a KNIFE: widest at the guard, narrowest at the tip, a grip thinner than the guard
+            check("v132.45 shapes: it has the PROPERTIES of a knife — widest at the guard ("+
+              wGuard.toFixed(2)+"), narrower at mid-blade ("+wMid.toFixed(2)+"), a point at the "+
+              "tip ("+wTip.toFixed(2)+"), and a grip thinner than the guard ("+wGrip.toFixed(2)+
+              "). A square satisfies none of these, and the square is what v132.44 shipped",
+              wGuard>wMid&&wMid>wTip&&wTip<0.10&&wGrip<wGuard&&wGrip>0);
+            let mono=true, prev=1;
+            for(let u=0.36;u<=0.99;u+=0.04){const w=width(B,u); if(w>prev+0.02){mono=false;break;} prev=w;}
+            check("v132.45 shapes: …and the blade tapers MONOTONICALLY from guard to point — a "+
+              "shape that bulges is not a blade whatever it is named",mono);
+          }
+          // and the knife actually USES it, pointed where it is going
+          settle();
+          G.vfxPlay([13,500,500,700,500]);            // due east, bearing 0
+          const mp=G.fxStats().maps;
+          const lead=mp.length?mp[0]:null;
+          check("v132.45 shapes: the thrown knife CARRIES the blade map and points along its "+
+            "bearing (blade="+(lead&&lead.blade)+", rot="+(lead?lead.rot.toFixed(2):"—")+
+            "). A texture built and never applied is the same bug in a new coat",
+            !!lead&&lead.blade===true&&Math.abs(lead.rot)<0.01);
+          const soft=mp.filter(m=>m.soft).length;
+          check("v132.45 shapes: …and its trail uses the soft dot, not the blade — two more "+
+            "knives behind the knife would read as three knives ("+soft+" of "+mp.length+")",
+            soft===mp.length-1);
+          settle();
+        }
+        // v132.44: the knife must TRAVEL, not sit where it was thrown — three static puffs read
+        // as three separate things happening rather than one thing flying, which was the whole
+        // complaint the worksheet made about it.
+        {
+          settle();
+          G.vfxPlay([13,500,500,700,700]);            // from (50,50) to (70,70)
+          const st0=G.fxStats().live;
+          const p0=G.fxStats().pos.slice();
+          for(let i=0;i<12;i++)G.fxTick(0.016);       // ~0.2s of flight
+          const p1=G.fxStats().pos;
+          // ⚠ DISPLACEMENT, not population. The first version of this counted three particles —
+          // and three appear whether the knife flies or sits where it was thrown, so it stayed
+          // GREEN with the velocity zeroed, which is exactly the behaviour being replaced.
+          const far=p1.length?Math.max.apply(null,p1.map(q=>Math.hypot(q.x-50,q.z-50))):0;
+          const dist=Math.hypot(20,20);
+          check("v132.44 KNIFE FIGHTER: the knife TRAVELS — after 0.2s the lead sprite has covered "+
+            far.toFixed(1)+" of the "+dist.toFixed(1)+" units to its mark. Three static puffs read "+
+            "as three things happening in a row rather than one thing flying, which was the whole "+
+            "complaint ("+st0+" particles launched from "+(p0.length?"the thrower":"nowhere")+")",
+            st0===3&&far>dist*0.5);
+          settle();
+        }
+        check("v132.41 set-pieces: all "+KINDS.length+" wire kinds DRAW — a kind that fell out of "+
+          "the switch throws nothing and draws nothing, so it is invisible from the host's chair "+
+          "unless you are the one it happens to"+(silent.length?" [SILENT: "+silent.join(", ")+"]":""),
+          silent.length===0);
+        // the pools have ceilings
+        settle();
+        for(let i=0;i<1000;i++)PLAY([2,50,50,0,0]);      // 8 sprites a pop = 8000 requested
+        const st=X();
+        check("v132.41 set-pieces: the sprite pool has a CEILING — 8000 particles requested left "+
+          st.sprites+" meshes, not 8000. Unbounded here is a leak that only shows up in the one "+
+          "match that goes long",st.sprites<=260);
+        // …and they expire
+        settle();
+        check("v132.41 set-pieces: …and every particle EXPIRES ("+X().live+" left after 20s). One "+
+          "that never dies is the same leak wearing a different hat",X().live===0);
+        // the wire queue is capped
+        {
+          const N=G.NET, mode0=N.mode;
+          try{
+            N.mode="host"; N._vfx.length=0;
+            for(let i=0;i<500;i++)N.vfxPush([2,0,0,0,0]);
+            check("v132.41 set-pieces: the WIRE queue is capped at "+N.VFX_MAX+" — 500 pushed, "+
+              N._vfx.length+" queued. One slam catching thirty units, each rolling its own proc, "+
+              "must not put a thousand rows on a snapshot",N._vfx.length===N.VFX_MAX);
+            N._vfx.length=0;
+            N.mode="guest";
+            for(let i=0;i<10;i++)N.vfxPush([2,0,0,0,0]);
+            check("v132.41 set-pieces: …and a GUEST never queues — it would echo every effect back "+
+              "at a host that already drew it ("+N._vfx.length+" queued)",N._vfx.length===0);
+          }finally{ N.mode=mode0; N._vfx.length=0; }
+        }
+        // a guest DRAWS them, from a standing start, through a real frame
+        {
+          const N=G.NET, mode0=N.mode;
+          try{
+            // ⚠ A REAL snapshot. A hand-made {vfx:[…]} throws inside applySnap long before the
+            // batched channels, and the throw leaves NET half-configured — the first version of
+            // this took SIX assertions down with it, in three other blocks, describing three
+            // other features. Same mistake tools/patch-smoketest-rings-net2.js exists to record.
+            N.mode="host"; N._vfx.length=0;
+            N.vfxPush([1,500,500,100,0]);
+            const snap=N.packSnap();
+            settle();
+            const zero=X().live;
+            check("v132.41 set-pieces: the host queued the row onto a REAL snapshot ("+
+              ((snap.vfx||[]).length)+" row), so the guest assertion below is about the wire and "+
+              "not about a hand-made object",(snap.vfx||[]).length===1);
+            N.mode="guest";
+            snap.q=N.lastQ+1; N.applySnap(snap);
+            const after=X().live;
+            check("v132.41 set-pieces: a GUEST draws them from a standing start ("+zero+" → "+
+              after+"). Everything here fires inside dealDamage, which returns on its first line "+
+              "for a guest — third time this trap has been in play",zero===0&&after>0);
+          }catch(e){ check("v132.41 set-pieces: a GUEST draws them ["+e.message+"]",false); }
+          finally{ N.mode=mode0; }
+        }
+        settle();
       }
       // ---- v132.40: WHAT EVERY PLAYER IS CARRYING ----
       {

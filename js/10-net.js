@@ -24,7 +24,11 @@ var NET={
   // v132.9 29 -> 30: the Viking road's bow was reversed. The spine moved, so its clearance corridor
   // moved, so the trees moved; and the two team bazaars are defined ON the spine, so they moved too
   // and took their own clearance with them. Every node index downstream is different.
-  PROTO:42,             // v132.40 public buff rows (s.bfa) — every client learns every player's
+  PROTO:45,             // v132.44 the thrown-knife kind. Was:
+                        // v132.43 public timed modifiers (s.tm) — the other half of "a client
+                        // knows what other units are carrying". Was:
+                        // v132.41 the batched set-piece channel (s.vfx). Was:
+                        // v132.40 public buff rows (s.bfa) — every client learns every player's
                         // loadout, not just its own. Was:
                         // v132.39 the aura-ring rows (s.ar) — new snapshot vocabulary. Was:
                         // v132.36 five proc/charge ids — the forge now speaks all 60, which
@@ -327,6 +331,12 @@ NET.viewTime=function(){
   return (NET.now()-NET._hOff)-NET.gapAvg;
 };
 NET.bcast=function(o){for(const c of NET.conns){try{if(c.open)c.send(o);}catch(_){}}};
+// v132.41 THE SET-PIECE QUEUE. Batched onto the snapshot like the arrow theatre above it. Capped:
+// one slam catching thirty units, each rolling its own proc, must not put a thousand rows on the
+// wire — past the cap the rest of the frame is dropped, and dropping a spark nobody could pick
+// out of the forty before it is the right failure. Silently unbounded is not.
+NET._vfx=[]; NET.VFX_MAX=48;
+NET.vfxPush=function(row){ if(NET.mode==="host"&&NET._vfx.length<NET.VFX_MAX)NET._vfx.push(row); };
 NET.laneBuf=function(c){ // bytes sitting UNSENT in a lane's pipe — the honest congestion signal
   try{const dc=c&&c.dataChannel;return(dc&&typeof dc.bufferedAmount==="number")?dc.bufferedAmount:0;}
   catch(_){return 0;}
@@ -1536,6 +1546,20 @@ NET.packSnap=function(){
     // rows forever, and the ring outlives the buff that drew it.
     if(_ar.length||NET._arLast)s.ar=_ar;
     NET._arLast=_ar.length;
+    // v132.43 EVERY PLAYER'S TIMED MODIFIERS, on this same 5 Hz branch. The remaining time only
+    // needs to ARRIVE — a guest ticks it down itself between arrivals, the same way the
+    // age-research countdown two fields up already works.
+    if(typeof TMOD_KINDS!=="undefined"){
+      const _tm=[];
+      const _tmRow=(x)=>{ if(!x||!x.alive)return;
+        const packed=[]; const a=x._tmods||[];
+        for(const e of a){ const i=TMOD_KINDS.indexOf(e.k); if(i<0)continue;
+          packed.push(i,Math.round(e.mag*100),Math.round(Math.max(0,e.t)*100),e.fade?1:0); }
+        _tm.push([x.id,packed]); };
+      _tmRow(player);
+      for(const k in NET.remotes){const rr=NET.remotes[k];if(rr.unit)_tmRow(rr.unit);}
+      s.tm=_tm;   // COMPLETE, not sparse — a human with nothing on them still gets a row, or a
+    }             // guest cannot tell "cleared" from "not mentioned"
   }
   // v132.40 EVERY PLAYER'S LOADOUT, on FULL snaps only (~1 Hz). Indexed into BUFFS rather than
   // named: about 40 bytes a player against 150. The list is COMPLETE — a human holding nothing
@@ -1571,6 +1595,7 @@ NET.packSnap=function(){
    if(full||NET._lastBz!==bzk){NET._lastBz=bzk;
      s.bz=neutralMarkets.map(m=>[m.owner,Math.round(m.cap*100),m.capTeam]);}}
   if(NET._fx.length)s.fx=NET._fx.splice(0,NET._fx.length); // batched arrow theatre rides the snap
+  if(NET._vfx.length)s.vfx=NET._vfx.splice(0,NET._vfx.length); // v132.41 the set-pieces, same ride
   // wire-size estimate for the guest's KB/s readout. v127: it used to add a flat 140 for the
   // envelope and never counted `carry` at all, which was harmless while every envelope field
   // shipped every snap and actively misleading now that most of them don't. Measured against
@@ -1580,6 +1605,8 @@ NET.packSnap=function(){
   s.bs=ub.byteLength+(s.bb?s.bb.byteLength:0)+(s.sc?s.sc.length*22:0)+(s.fx?s.fx.length*10:0)+
     (s.ar?s.ar.length*16:0)+ // v132.39: seven small ints a row — netlog stays honest
     (s.bfa?s.bfa.reduce((a,r)=>a+8+r[1].length*3,0):0)+ // v132.40: the loadouts, on full snaps
+    (s.vfx?s.vfx.length*12:0)+ // v132.41: five small ints a set-piece
+    (s.tm?s.tm.reduce((a,r)=>a+8+r[1].length*3,0):0)+ // v132.43: the timed modifiers
     (s.stock0?42:0)+(s.carry?14*Object.keys(carry).length:0)+(s.ares?8:0)+45;
   return s;
 };
@@ -1986,6 +2013,7 @@ NET.applySnap=function(s){
     u.garrison=(gar>=0)?NET.bldById(gar):null; // rendered on the deck in guestFrame (wire is id+1; 0 = none)
     if(gWas!==u.garrison){u.deckX=u.deckZ=0;}
   }
+  if(s.vfx&&typeof vfxPlay==="function")for(const v of s.vfx)vfxPlay(v); // v132.41 the set-pieces
   if(s.fx)for(const f of s.fx){ // v95: batched arrow theatre — damage is host-only, this is the show
     const att=f[0]>=0?NET.unitById(f[0]):NET.bldById(f[1]);
     const tgt=f[2]>=0?NET.unitById(f[2]):NET.bldById(f[3]);
@@ -2011,6 +2039,23 @@ NET.applySnap=function(s){
     }
   }
   if(s.sc){NET.scores=s.sc;syncNameTags(s.sc);}
+  if(s.tm&&typeof TMOD_KINDS!=="undefined"){ // v132.43 — see patch-tmods-public.js
+    for(const row of s.tm){
+      const un=NET.unitById(row[0]); if(!un)continue;
+      // ⚠ NOT the local player. It already has the private {t:"tmd"} channel, which arrives at
+      // once rather than at 5 Hz — and that immediacy is exactly what made guest prediction match
+      // the host in v132.33. Replacing it with a stepped 5 Hz overwrite would undo that for no
+      // gain: the values are identical, both computed by the same host in the same tick.
+      if(un===player)continue;
+      const p=row[1]||[], list=[];
+      for(let i=0;i+3<p.length;i+=4){
+        const k=TMOD_KINDS[p[i]]; if(!k)continue;
+        const t=p[i+2]/100;
+        list.push({k:k,mag:p[i+1]/100,t:t,dur:Math.max(0.001,t),fade:!!p[i+3]});
+      }
+      un._tmods=list.length?list:null;
+    }
+  }
   if(s.bfa){ // v132.40 every player's loadout — see patch-buffs-public.js
     if(!NET._bfIdx&&typeof BUFFS!=="undefined"){NET._bfIdx={};BUFFS.forEach((b,i)=>{NET._bfIdx[b.id]=i;});}
     const named=new Set();
@@ -2216,6 +2261,11 @@ NET.guestFrame=function(dt){
   // v132.33: the guest expires its OWN timed modifiers. Without this the clock never runs on
   // their side and a 2-second buff would last until the next one replaced it.
   if(typeof tmodTick==="function"&&typeof player!=="undefined"&&player)tmodTick(player,dt);
+  // v132.43: …and the other humans, whose modifiers now arrive at 5 Hz. Without this a FADING
+  // modifier holds full magnitude for the 200ms between rows, which is the whole duration of some
+  // of them. isHuman keeps it to a handful; the 480-unit army is untouched.
+  if(typeof tmodTick==="function"&&typeof isHuman==="function")
+    for(const u of units)if(u!==player&&u._tmods&&isHuman(u))tmodTick(u,dt);
   updateEffects(dt);
   updateProjectiles(dt); // pure theatre — damage is host-only
   if(typeof tickAgeResearch==="function")tickAgeResearch(dt,false); // v107: smooth countdown between snaps (display only)

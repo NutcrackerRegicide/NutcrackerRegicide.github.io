@@ -8,6 +8,9 @@ const TMOD_OOC=5;      // seconds unhit before LONG STRIDER opens up — the sam
                        // same field, Second Skin already uses, so the game has ONE definition of
                        // "out of combat" rather than two that drift apart.
 const TMOD_LOW=0.25;   // the SURVIVAL INSTINCT line
+// v132.43: the kinds, in a FIXED order, because the wire ships an index rather than a name.
+// Appending is safe; reordering is a PROTO change. Same contract as the BUFFS index in v132.40.
+const TMOD_KINDS=["bleed","poison","stun","healblock","spdmul","dmgflat"];
 function tmodAdd(u,k,mag,dur,fade,cap){
   if(!u)return;
   if(!u._tmods)u._tmods=[];
@@ -89,8 +92,10 @@ function knifeTick(u,dt){
     if(d2<bd){bd=d2;best=o;}
   }
   if(!best)return;
-  for(let k=1;k<=3;k++)                                   // a line of puffs stands in for the flight
-    puff(px+(best.root.position.x-px)*k/4,1.6,pz+(best.root.position.z-pz)*k/4,0xd8dde2,0.35);
+  // v132.44: it FLIES now. The three static puffs read as three separate things happening rather
+  // than as one thing travelling — which was the whole complaint in the worksheet. And it goes on
+  // the wire: knifeTick runs in the host unit loop, so the old dots drew on the host alone.
+  _vfx(VFX_KNIFE,px,pz,Math.round(best.root.position.x*10),Math.round(best.root.position.z*10));
   _sfxAt("knifethrow",u);
   dealDamage(u,best,(u.dmg||5)*0.6*st);
 }
@@ -220,8 +225,51 @@ function buffFxTick(dt){
   _ringBuild();
   for(const m of _ringPool)m.visible=false;              // hide-all then re-arm: a unit that died
   for(const m of _threadPool)m.visible=false;            // or dropped a buff leaves nothing behind
-  _ringOn=0;
+  if(_lookPool)for(const m of _lookPool)m.visible=false; // v132.42 the persistent looks, same rule
+  _ringOn=0; _lookOn=0;
   const t=(typeof T!=="undefined")?T:0;
+  // v132.42 THE PERSISTENT LOOKS. Keyed on what a unit HOLDS rather than on the ring mask, which
+  // is why they had to wait for v132.40 — before that a client knew only its own loadout. Only
+  // humans can hold a buff, so the check that skips the other 480 units is the first thing done.
+  if(typeof buffSt==="function"&&typeof isHuman==="function")for(const u of units){
+    if(!u.alive||!u.root||!isHuman(u)||!u.buffs)continue;
+    const kg=buffSt(u,"kguard");
+    if(kg&&typeof nearOwnKing==="function"&&nearOwnKing(u))
+      _ringAt(u,1.7,0xFFD98A,0.30+0.10*Math.sin(t*2.2));   // standing in the king's light
+    const fv=buffSt(u,"fervor");
+    if(fv&&u.maxHp>0){                                     // DESPERATION — a gradient, not an edge
+      const miss=1-Math.max(0,u.hp)/u.maxHp;
+      if(miss>0.12)_lookAt(u,1.5,0xc4402a,2.6,Math.min(0.42,0.42*miss));
+    }
+    if(buffSt(u,"yeoman")&&u.cls==="villager")             // a farmer who fights — an opponent
+      _lookAt(u,3.0,0xE0C53A,0.75,0.85);                   // deserves to see that coming
+    if(buffSt(u,"captain"))                                // "form up on me"
+      _lookAt(u,3.4,(typeof TEAMCOL!=="undefined"&&TEAMCOL[u.team]!==undefined)?TEAMCOL[u.team]:0xffffff,
+        0.8,0.9);
+    // v132.43 KILLING FRENZY — a chevron per +2 damage. The stack count and the seven-second
+    // window were both invisible; this shows the first directly and the second by winking out.
+    if(typeof tmodSum==="function"&&u._tmods){
+      const fl=tmodSum(u,"dmgflat");
+      if(fl>0){const nch=Math.min(5,Math.round(fl/2));
+        for(let i=0;i<nch;i++)_lookAt(u,3.6+i*0.34,0xE05A3A,0.42,0.9);}
+      // …and a trail while the unit is moving faster than it should be. This reads the MODIFIER,
+      // not BLOODRUSH: HUNTER'S STEP and SURVIVAL INSTINCT push the same value, and drawing a
+      // trail for one of three things that move you would be a lie about what you are seeing.
+      if(typeof tmodMul==="function"&&typeof fxs==="function"&&tmodMul(u,"spdmul")>1.05&&u.moving){
+        u._trailT=(u._trailT||0)+dt;
+        if(u._trailT>=0.055){u._trailT=0;
+          fxs(u.root.position.x,u.root.position.y+0.85,u.root.position.z,0xBFD8FF,0.34,0.30,
+              0,0.5,0,0,0.7,0.42);}
+      }
+    }
+    const rg=buffSt(u,"regen");                            // SECOND SKIN — one mote every two
+    if(rg&&u.hp<u.maxHp&&typeof fxs==="function"){         // seconds. Near-subliminal on purpose:
+      u._regT=(u._regT||0)+dt;                             // a permanent state drawn loudly is
+      if(u._regT>=2){u._regT=0;                            // wallpaper inside a minute
+        fxs(u.root.position.x+(Math.random()-0.5)*0.6,u.root.position.y+0.9,
+            u.root.position.z+(Math.random()-0.5)*0.6,0x9FE0A8,0.20,1.5,0,1.1,0,0,1,0.55);}
+    }
+  }
   for(const u of units){
     const fx=u._fxMask|0;
     if(!fx||!u.alive||!u.root)continue;
@@ -274,10 +322,287 @@ function buffFxTick(dt){
 }
 // Test surface. `live` is what is ON SCREEN this frame — radius, opacity and colour per ring —
 // so a gate can assert that UNBOWED tightened rather than merely that something was drawn.
-function buffFxStats(){return {rings:_ringOn,pool:_ringPool?_ringPool.length:0,
+// v132.42 THE PERSISTENT LOOKS. One pooled billboard, four looks, same hide-all-then-re-arm rule
+// as the rings above — a unit that died or dropped the buff leaves nothing behind, and no code
+// has to notice that it did.
+let _lookPool=null,_lookOn=0;
+function _lookAt(u,yOff,col,size,op){
+  if(!_lookPool)_lookPool=[];
+  let m=null;
+  for(const q of _lookPool)if(!q.visible){m=q;break;}
+  if(!m){ m=new THREE.Sprite(new THREE.SpriteMaterial({color:0xffffff,transparent:true,
+    opacity:1,depthWrite:false})); scene.add(m); _lookPool.push(m); }
+  m.visible=true; m.material.color.setHex(col); m.material.opacity=op;
+  m.scale.set(size,size,1);
+  m.position.set(u.root.position.x,u.root.position.y+yOff,u.root.position.z);
+  _lookOn++;
+}
+// ⚠ rings/looks count what was DRAWN THIS FRAME; ringVis/lookVis count what is ON SCREEN. They
+// answer different questions and only the second one can see a hide-all pass that stopped
+// running — a draw counter reads zero either way. See tools/patch-looks-visible.js.
+function buffFxStats(){return {rings:_ringOn,looks:_lookOn,lookPool:_lookPool?_lookPool.length:0,
+  lookVis:_lookPool?_lookPool.filter(m=>m.visible).length:0,
+  ringVis:_ringPool?_ringPool.filter(m=>m.visible).length:0,
+  pool:_ringPool?_ringPool.length:0,
   threads:_threadPool?_threadPool.filter(m=>m.visible).length:0,built:!!_ringGeo,
   live:_ringPool?_ringPool.filter(m=>m.visible).map(m=>({r:m.scale.x,
     op:m.material.opacity,col:m.material.color.getHex()})):[]};}
+// ---------- v132.41 THE SET-PIECES: three pooled primitives ----------
+// Ceilings, not limits-by-hope. Past them the OLDEST particle is recycled, so a hundred-unit
+// melee degrades by dropping the stalest spark rather than by allocating for ever.
+const FXS_MAX=260, FXHEX_MAX=24, FXRING_MAX=24;
+let _fxsPool=null,_fxsGeo=null,_fxsNext=0;
+// v132.45 THE SHAPES. Raw-byte DataTextures, the same way _auraDot does it and for the same
+// reason: canvas is stubbed in the headless harness. Built LAZILY — three textures at load would
+// each mint a uuid inside the seeded window and move every tree on the map (invariant #2).
+let _texSoft=null,_texBlade=null,_texSliver=null;
+function _mkTex(w,h,fn){
+  const d=new Uint8Array(w*h*4);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const a=Math.max(0,Math.min(1,fn((x+0.5)/w,(y+0.5)/h)));
+    const i=(y*w+x)*4; d[i]=255;d[i+1]=255;d[i+2]=255;d[i+3]=Math.round(255*a);
+  }
+  const t=new THREE.DataTexture(d,w,h,THREE.RGBAFormat); t.needsUpdate=true; return t;
+}
+function _texBuild(){
+  if(_texSoft)return;
+  // a round falloff — what a mote, a drip, a shard or a spark should look like
+  _texSoft=_mkTex(16,16,(u,v)=>{const r=Math.hypot(u-0.5,v-0.5)*2; const a=1-r; return a*a;});
+  // A KNIFE, pointing along +u. Proportions matter more than resolution here: the first cut had a
+  // guard nearly as tall as the image and a blade 62% of the height, which rendered as a cleaver.
+  // A knife is mostly THIN — a slim grip, a guard barely wider than it, and a long narrow blade
+  // that carries a slight belly before the point. 48px of length so the taper is smooth rather
+  // than stepped; the alpha is anti-aliased at the edge for the same reason.
+  _texBlade=_mkTex(48,16,(u,v)=>{
+    const dy=Math.abs(v-0.5)*2;                        // 0 at the spine, 1 at the edges
+    const edge=(w)=>Math.max(0,Math.min(1,(w-dy)*7));  // soft edge instead of a hard step
+    if(u>=0.34){                                       // the blade: a belly, then a point
+      const t=(u-0.34)/0.66;                           // 0 at the guard, 1 at the tip
+      const w=0.40*Math.sqrt(Math.max(0,1-t*t))*(1-0.15*t);
+      return edge(w);
+    }
+    if(u>=0.28)return edge(0.62);                      // the guard — wider than the grip, no more
+    if(u>=0.03)return edge(0.20);                      // a slim grip
+    return 0;
+  });
+  // A SHARD for the crit burst, pointing along +u. Concave sides so it reads as a splinter of
+  // light rather than as a triangle.
+  _texSliver=_mkTex(32,8,(u,v)=>{
+    const dy=Math.abs(v-0.5)*2;
+    const w=0.92*Math.pow(1-u,1.6);
+    return Math.max(0,Math.min(1,(w-dy)*9));
+  });
+}
+// ⚠ _hexGeo, NOT _facetGeo. 04-units.js already has a top-level function of that name — the
+// low-poly helper every unit body is built with — and the fourteen files evaluate as ONE script,
+// so every top-level binding in any of them shares one namespace. The clash was a hard LOAD FAIL
+// here; with a different declaration order it would instead have silently shadowed the helper and
+// broken every unit mesh in the game. Check new top-level names against the whole bundle.
+let _hexPool=null,_hexGeo=null;
+let _xringPool=null;
+const _fxLive=[];        // {m,t,dur,kind,...} — everything animating this frame
+function _fxBuild(){     // LAZY. Never at load — invariant #2, the seeded window.
+  if(_fxsPool)return;
+  _ringBuild();          // the v132.41 shockwave rides the v132.39 ring geometry
+  _texBuild();
+  _fxsPool=[]; _hexPool=[]; _xringPool=[];
+  _hexGeo=new THREE.CircleGeometry(1,6);   // six sides: a FACET, not a puff
+}
+function _fxsTake(){
+  if(_fxsPool.length<FXS_MAX){
+    // ⚠ BORN WITH A MAP. no-map → map changes the shader defines and forces a recompile; texture
+    // → texture is a uniform swap. So it starts with the soft dot and only ever exchanges it.
+    const m=new THREE.Sprite(new THREE.SpriteMaterial({color:0xffffff,transparent:true,opacity:1,
+      depthWrite:false,map:_texSoft}));
+    scene.add(m); _fxsPool.push(m); return m;
+  }
+  const m=_fxsPool[_fxsNext++%FXS_MAX];      // recycle the oldest
+  return m;
+}
+// ONE sprite, many behaviours. vy<0 falls, g pulls, grow<1 shrinks — drips, shards, spikes,
+// sparks and after-images are all this with different numbers.
+// opts: {tex:"blade"|"sliver", rot:radians, spin:rad/s, ar:aspect}. Everything without opts gets
+// the soft dot, which is why drips, shards, motes and sparks all improved without a call site
+// changing. Shape only matters where the thing is meant to be recognisable.
+function fxs(x,y,z,col,size,life,vx,vy,vz,g,grow,fade0,opts){
+  if(typeof scene==="undefined"||typeof THREE==="undefined")return null;
+  _fxBuild();
+  const m=_fxsTake(); m.visible=true;
+  const o=opts||{};
+  m.material.map=(o.tex==="blade")?_texBlade:(o.tex==="sliver")?_texSliver:_texSoft;
+  m.material.rotation=o.rot||0;
+  m.position.set(x,y,z);
+  const ar=o.ar||1;                                    // a blade is longer than it is wide
+  m.scale.set(size*ar,size,1);
+  m.material.color.setHex(col); m.material.opacity=(fade0===undefined?1:fade0);
+  const e={m,t:life,dur:life,vx:vx||0,vy:vy||0,vz:vz||0,g:g||0,grow:(grow===undefined?1:grow),
+    op0:(fade0===undefined?1:fade0),kind:"s",spin:o.spin||0};
+  _fxLive.push(e); return e;
+}
+function fxRing(x,z,r0,r1,life,col,op0){    // an expanding ground ring — the shockwave
+  if(typeof scene==="undefined"||typeof THREE==="undefined")return null;
+  _fxBuild();
+  let m=null;
+  for(const q of _xringPool)if(!q.visible){m=q;break;}
+  if(!m){
+    if(_xringPool.length>=FXRING_MAX)m=_xringPool[0];
+    else{ m=new THREE.Mesh(_ringGeo,new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,
+      opacity:1,depthWrite:false,side:THREE.DoubleSide})); m.renderOrder=-1;
+      scene.add(m); _xringPool.push(m); }
+  }
+  m.visible=true; m.material.color.setHex(col);
+  m.position.set(x,(typeof terrainHeight==="function"?terrainHeight(x,z):0)+RING_Y+0.02,z);
+  m.scale.set(r0,1,r0);
+  const e={m,t:life,dur:life,r0,r1,op0:(op0===undefined?0.75:op0),kind:"r"};
+  _fxLive.push(e); return e;
+}
+function fxFacet(x,y,z,ang,col,life,size){  // a hexagon standing in the air, facing the attacker
+  if(typeof scene==="undefined"||typeof THREE==="undefined")return null;
+  _fxBuild();
+  let m=null;
+  for(const q of _hexPool)if(!q.visible){m=q;break;}
+  if(!m){
+    if(_hexPool.length>=FXHEX_MAX)m=_hexPool[0];
+    else{ m=new THREE.Mesh(_hexGeo,new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,
+      opacity:1,depthWrite:false,side:THREE.DoubleSide})); scene.add(m); _hexPool.push(m); }
+  }
+  m.visible=true; m.material.color.setHex(col);
+  m.position.set(x,y,z); m.rotation.set(0,ang,0); m.scale.set(size||1.5,size||1.5,1);
+  const e={m,t:life,dur:life,op0:0.85,kind:"f"};
+  _fxLive.push(e); return e;
+}
+function fxTick(dt){
+  if(!_fxLive.length)return;
+  for(let i=_fxLive.length-1;i>=0;i--){
+    const e=_fxLive[i]; e.t-=dt;
+    const k=Math.max(0,e.t/e.dur);            // 1 at birth, 0 at death
+    if(e.t<=0){ e.m.visible=false; _fxLive.splice(i,1); continue; }
+    if(e.kind==="s"){
+      e.vy-=e.g*dt;
+      e.m.position.x+=e.vx*dt; e.m.position.y+=e.vy*dt; e.m.position.z+=e.vz*dt;
+      if(e.grow!==1)e.m.scale.multiplyScalar(1+(e.grow-1)*dt);
+      if(e.spin)e.m.material.rotation+=e.spin*dt;      // a thrown knife tumbles
+      e.m.material.opacity=e.op0*k;
+    }else if(e.kind==="r"){
+      const r=e.r0+(e.r1-e.r0)*(1-k);         // out from r0 to r1 over its life
+      e.m.scale.set(r,1,r);
+      e.m.material.opacity=e.op0*k*k;         // squared: bright at the front, gone at the edge
+    }else{
+      e.m.material.opacity=e.op0*k;
+      e.m.scale.multiplyScalar(1+0.6*dt);
+    }
+  }
+}
+// The wire vocabulary. Small integers, because the row is [kind,x*10,z*10,p,q] and p/q mean
+// whatever the kind needs — an angle, a destination, a duration.
+const VFX_QUAKE=1, VFX_CRIT=2, VFX_CULL=3, VFX_SHRUG=4, VFX_DODGE=5,
+      VFX_WARD=6, VFX_GUARD=7, VFX_VOLLEY=8, VFX_BLEED=9, VFX_VENOM=10, VFX_STUN=11,
+      VFX_FEAST=12,   // v132.42 SECOND WIND
+      VFX_KNIFE=13;   // v132.44 KNIFE FIGHTER — the only buff whose fiction is a thrown object
+// ONE path: draw it here, and put it on the wire. Identical reasoning to _sfxAt in v132.37 —
+// dealDamage returns early on a guest, so without this every set-piece is a host-only slideshow,
+// and on a dedicated server it draws into an empty room.
+// the bearing from whoever swung to whoever was hit, so a facet faces the blow it stopped
+function _fxAng(att,victim){
+  if(!att||!att.root||!victim||!victim.root)return 0;
+  return Math.atan2(att.root.position.x-victim.root.position.x,
+                    att.root.position.z-victim.root.position.z);
+}
+function _vfx(kind,x,z,p,q){
+  vfxPlay([kind,Math.round(x*10),Math.round(z*10),p|0,q|0]);
+  if(typeof NET!=="undefined"&&NET.mode==="host"&&NET.vfxPush)
+    NET.vfxPush([kind,Math.round(x*10),Math.round(z*10),p|0,q|0]);
+}
+// …and this is the ONLY place a set-piece is drawn, host and guest alike, so there is no second
+// site to forget and no branch that asks which machine it is running on.
+function vfxPlay(v){
+  if(typeof scene==="undefined"||typeof THREE==="undefined")return;
+  const k=v[0], x=v[1]/10, z=v[2]/10, p=v[3], q=v[4];
+  const gy=(typeof terrainHeight==="function"?terrainHeight(x,z):0);
+  switch(k){
+    case VFX_QUAKE: {          // EARTHSHAKER — the radius made visible, plus the dirt it throws
+      fxRing(x,z,0.6,(p||100)/10,0.38,0xc9a06a,0.8);
+      for(let i=0;i<6;i++){const a=Math.PI*2*i/6+0.3;
+        fxs(x+Math.cos(a)*1.2,gy+0.5,z+Math.sin(a)*1.2,0x9a8a6a,0.55,0.55,
+            Math.cos(a)*7,5.5,Math.sin(a)*7,14,1,0.9);}
+      break; }
+    case VFX_CRIT: {           // KEEN EYE — a SPIKE burst. Sharp and quick, because at 3 stacks
+      for(let i=0;i<8;i++){    // it rides ~15% of your blows and a bigger flash becomes wallpaper
+        const a=Math.PI*2*i/8;
+        fxs(x,gy+2.4,z,0xfff4d0,0.26,0.19,Math.cos(a)*13,1.2,Math.sin(a)*13,0,0.55,1,
+            {tex:"sliver",ar:2.4,rot:a});}   // v132.45: the worksheet said SPIKE burst, and eight
+                                             // squares are not spikes
+      break; }
+    case VFX_CULL:             // CULLER — one hard white flash. It skipped the fight; say so.
+      fxs(x,gy+1.8,z,0xffffff,2.2,0.16,0,0.6,0,0,0.35,1);
+      break;
+    case VFX_SHRUG: {          // SHRUG IT OFF — the debuffs SHATTER and fly off
+      const cols=[0xb3262a,0x8fd45a,0xffe9a8,0xd8dde2,0xb3262a];
+      for(let i=0;i<7;i++){const a=Math.PI*2*i/7+0.4;
+        fxs(x,gy+1.9,z,cols[i%cols.length],0.34,0.45,Math.cos(a)*6.5,3.2,Math.sin(a)*6.5,9,0.8,1);}
+      break; }
+    case VFX_DODGE: {          // SIXTH SENSE — a sidestep AFTER-IMAGE, not a small blue hit
+      const a=(p/100)+Math.PI/2;
+      for(let i=0;i<4;i++)
+        fxs(x+Math.cos(a)*0.75,gy+0.7+i*0.55,z+Math.sin(a)*0.75,0x9fd8ff,0.62-i*0.06,0.22,
+            Math.cos(a)*1.4,0.3,Math.sin(a)*1.4,0,1,0.55);
+      break; }
+    case VFX_WARD:             // ARROW WARD — a hex FACET. A block must not read as a hit, and
+      fxFacet(x,gy+2.0,z,p/100,0x9fd8ff,0.30,1.7);   // shape carries that better than colour
+      break;
+    case VFX_GUARD:            // IRON GUARD — the same facet in steel: one idea, two damage types
+      fxFacet(x,gy+2.0,z,p/100,0xd8dde2,0.30,1.7);
+      break;
+    case VFX_VOLLEY: {         // RAPID VOLLEY — THREE streaks, staggered onto the three twangs
+      const tx=p/10, tz=q/10;
+      for(let n=0;n<3;n++)for(let i=1;i<=4;i++){
+        const f=i/5;
+        fxs(x+(tx-x)*f,gy+1.7,z+(tz-z)*f,0xe8dcc0,0.22,0.16+n*0.115,0,0,0,0,1,0.85);
+      }
+      break; }
+    case VFX_BLEED:            // SERRATED EDGE — it keeps bleeding, so the mark LINGERS
+    case VFX_VENOM: {          // VENOMOUS — the same idea in green; they are the same kind of thing
+      const col=(k===VFX_BLEED)?0xb3262a:0x8fd45a;
+      const n=Math.max(1,Math.min(10,p|0));
+      for(let i=0;i<n;i++)
+        fxs(x+(Math.random()-0.5)*0.7,gy+1.9,z+(Math.random()-0.5)*0.7,col,0.20,0.9+i*0.55,
+            0,-0.4,0,5.5,1,0.85);
+      break; }
+    case VFX_FEAST: {          // SECOND WIND — a quick upward wash. Relief, not a spell.
+      for(let i=0;i<5;i++){const a=Math.PI*2*i/5;
+        fxs(x+Math.cos(a)*0.5,gy+0.5,z+Math.sin(a)*0.5,0x9FE0A8,0.42,0.28,0,3.4,0,0,0.9,0.8);}
+      break; }
+    case VFX_KNIFE: {          // KNIFE FIGHTER — it FLIES. One pooled sprite along the bearing to
+      const tx=p/10, tz=q/10;  // its mark, plus two motes trailing. No projectile kind, no
+      const dx=tx-x, dz=tz-z;  // collision, no lag compensation: the damage resolved instantly
+      const d=Math.hypot(dx,dz)||0.001;              // and still does. This is a knife you SEE
+      const life=Math.min(0.34,0.055+d*0.019);       // thrown, not one whose flight decides
+      // v132.45: a BLADE, pointed along its travel and tumbling. Sprite rotation is screen-space,
+      // so the bearing is taken in screen terms — good enough at this speed and this size, and it
+      // is what turns "a thing sliding sideways" into "a thing thrown".
+      fxs(x,gy+1.7,z,0xe8e4d8,0.30,life,dx/d*(d/life),0.55,dz/d*(d/life),1.2,1,0.95,
+          {tex:"blade",ar:2.0,rot:Math.atan2(dz,dx),spin:11});
+      for(let i=1;i<=2;i++)                          // …and a little of the air it left behind
+        fxs(x+dx*(i*0.13),gy+1.7,z+dz*(i*0.13),0xd8dde2,0.20,life*0.55,
+            dx/d*(d/life)*0.6,0.3,dz/d*(d/life)*0.6,0.8,0.85,0.5);
+      break; }
+    case VFX_STUN: {           // CONCUSSIVE BLOW — sparks ORBITING for the stun's own duration,
+      const dur=Math.max(0.4,(p||15)/10);           // so the ring is the timer: you can see it end
+      for(let i=0;i<3;i++){const a=Math.PI*2*i/3;
+        fxs(x+Math.cos(a)*0.85,gy+2.9,z+Math.sin(a)*0.85,0xffe9a8,0.30,dur,
+            -Math.sin(a)*2.6,0.15,Math.cos(a)*2.6,0,1,0.95);}
+      break; }
+  }
+}
+// The 'pos' view is where the live sprites actually are. A count can say something was drawn; only this
+// can say it MOVED — and "the knife flies" is a claim about displacement, not about population.
+function fxTex(){return {soft:_texSoft,blade:_texBlade,sliver:_texSliver};}
+function fxStats(){return {maps:_fxLive.filter(e=>e.kind==="s").map(e=>({
+    blade:e.m.material.map===_texBlade,sliver:e.m.material.map===_texSliver,
+    soft:e.m.material.map===_texSoft,rot:e.m.material.rotation})),
+  pos:_fxLive.filter(e=>e.kind==="s").map(e=>({x:e.m.position.x,z:e.m.position.z})),
+  live:_fxLive.length,sprites:_fxsPool?_fxsPool.length:0,
+  facets:_hexPool?_hexPool.length:0,rings:_xringPool?_xringPool.length:0,built:!!_fxsPool};}
 // ---------- v132.34: the DEBUFF half of the timed system ----------
 // Damage-over-time is applied HERE and only here, from the host's own unit loop. It deliberately
 // does not live in updateUnitCommon: 10-net.js calls that on the guest too, and a guest owns no
@@ -641,6 +966,7 @@ function updateEffects(dt){
   auraTick(dt);
   if(typeof buffFxTick==="function")buffFxTick(dt); // v132.39 the Batch D rings — same reasoning
                                                    // as the aura above: BOTH frame paths land here
+  if(typeof fxTick==="function")fxTick(dt);         // v132.41 the set-pieces, same reasoning again
   for(let i=effects.length-1;i>=0;i--){
     const e=effects[i]; e.t-=dt;
     e.s.scale.multiplyScalar(1+dt*4); e.s.material.opacity=Math.max(0,e.t*2.5);
@@ -812,7 +1138,8 @@ function dealDamage(att,victim,dmg){
     const cs=buffSt(attU,"crit");                                  // KEEN EYE
     if(cs&&Math.random()<0.05*cs){
       m*=2; puff(victim.root.position.x,2.4,victim.root.position.z,0xffd24a,1.1);
-      _sfxAt("critstrike",victim);        // v132.38: it prints CRITICAL HIT in gold and sounded
+      _vfx(VFX_CRIT,victim.root.position.x,victim.root.position.z,0,0);         // v132.41: sharp and quick — at 3 stacks this
+      _sfxAt("critstrike",victim);                // rides ~15% of blows        // v132.38: it prints CRITICAL HIT in gold and sounded
       if(attU.isPlayer)msg("CRITICAL HIT!","gold");   // like every other blow
     }
     dmg*=m;
@@ -832,6 +1159,8 @@ function dealDamage(att,victim,dmg){
     const ds=buffSt(victim,"dodge");                               // SIXTH SENSE
     if(ds&&Math.random()<0.05*ds){
       puff(victim.root.position.x,1.6,victim.root.position.z,0x9fd8ff);
+      // ⚠ BEFORE the return below — dealDamage bails on a dodge, so anything after never runs
+      _vfx(VFX_DODGE,victim.root.position.x,victim.root.position.z,Math.round((victim.facing||0)*100),0);
       _sfxAt("dodgeswish",victim);        // v132.38: ⚠ BEFORE the return — dealDamage bails out on
       if(victim.isPlayer)msg("Dodged!","blue");       // a dodge, so anything after it never runs
       victim._lastHurt=T;
@@ -848,6 +1177,7 @@ function dealDamage(att,victim,dmg){
       if(rangedBlow&&wd&&T-(victim._wardT||-999)>=30/wd){
         victim._wardT=T; victim._lastHurt=T;
         puff(victim.root.position.x,2.2,victim.root.position.z,0x9fd8ff,1.0);
+        _vfx(VFX_WARD,victim.root.position.x,victim.root.position.z,Math.round(_fxAng(att,victim)*100),0);
         _sfxAt("wardblock",victim);   // v132.37: _sfxAt relays it — the archer whose shot was
                                       // stopped should hear it, and on their screen it happened
                                       // to somebody else. (Was hand-broadcast here; that would
@@ -858,6 +1188,7 @@ function dealDamage(att,victim,dmg){
       if(!rangedBlow&&gd&&att&&att.cls&&T-(victim._guardT||-999)>=30/gd){
         victim._guardT=T; victim._lastHurt=T;
         puff(victim.root.position.x,2.2,victim.root.position.z,0xd8dde2,1.0);
+        _vfx(VFX_GUARD,victim.root.position.x,victim.root.position.z,Math.round(_fxAng(att,victim)*100),0);
         _sfxAt("guardblock",victim);  // v132.37: relayed by _sfxAt, as above
         if(victim.isPlayer&&typeof msg==="function")msg("Blow turned aside!","blue");
         return;
@@ -885,6 +1216,7 @@ function dealDamage(att,victim,dmg){
      victim.hp<victim.maxHp*0.15){
     victim.hp=0;
     puff(victim.root.position.x,1.8,victim.root.position.z,0xd8e070,1.2);
+    _vfx(VFX_CULL,victim.root.position.x,victim.root.position.z,0,0);
     _sfxAt("cullkill",victim);            // v132.38: rides ON TOP of the ordinary death sound —
                                           // the kill path below still runs, so this says "that
                                           // was you", it does not replace the creature dying
@@ -911,7 +1243,8 @@ function dealDamage(att,victim,dmg){
       const R=(typeof AURA_BR!=="undefined"?AURA_BR:10);   // than inventing a third idea of "near"
       const R2=R*R, px=attU.root.position.x, pz=attU.root.position.z;
       puff(px,0.6,pz,0xc9a06a,2.2);
-      _sfxAt("quakeslam",attU);
+      _vfx(VFX_QUAKE,px,pz,Math.round(R*10),0);   // v132.41: the shockwave carries the RADIUS —
+      _sfxAt("quakeslam",attU);                   // nobody could tell what it reached before
       for(const o of units){
         if(!o.alive||o===attU||o===victim||o.team===attU.team)continue;
         const dx=o.root.position.x-px, dz=o.root.position.z-pz;
@@ -925,6 +1258,8 @@ function dealDamage(att,victim,dmg){
       _volleyIn=true;                                      // damage, so per-hit buffs stay honest
       for(let k=0;k<2&&victim.alive;k++)dealDamage(attU,victim,dmg);
       _volleyIn=false;
+      _vfx(VFX_VOLLEY,attU.root.position.x,attU.root.position.z,                  // v132.41: three streaks, staggered onto
+        Math.round(victim.root.position.x*10),Math.round(victim.root.position.z*10)); // the three twangs already in the sound
       _sfxAt("volleyshot",attU);
       if(attU.isPlayer&&typeof msg==="function")msg("Rapid volley!","gold");
     }
@@ -936,6 +1271,7 @@ function dealDamage(att,victim,dmg){
     if(bl&&Math.random()<0.05*bl){                      // SERRATED EDGE — 1 HP/s for 20s = 20 HP
       tmodAdd(victim,"bleed",1,20,false); victim._dotBy=attU;
       puff(victim.root.position.x,2.0,victim.root.position.z,0xb3262a,0.7);
+      _vfx(VFX_BLEED,victim.root.position.x,victim.root.position.z,6,0);  // drips while it bleeds — you can see who is dying
       _sfxAt("bleedhit",victim);
     }
     const vn=buffSt(attU,"venom");
@@ -943,6 +1279,7 @@ function dealDamage(att,victim,dmg){
       tmodAdd(victim,"poison",1,10,false); victim._dotBy=attU;
       tmodAdd(victim,"spdmul",-0.5,10,false);           // a NEGATIVE spdmul is the whole slow
       puff(victim.root.position.x,2.0,victim.root.position.z,0x8fd45a,0.8);
+      _vfx(VFX_VENOM,victim.root.position.x,victim.root.position.z,5,0);
       _sfxAt("venomhit",victim);
     }
     const cc=buffSt(attU,"concuss");
@@ -950,6 +1287,7 @@ function dealDamage(att,victim,dmg){
       attU._stunCd=T;                                   // the 30s belongs to the WIELDER, or one
       tmodAdd(victim,"stun",1,1.5,false);               // player stun-locks a crowd by rotating
       puff(victim.root.position.x,2.8,victim.root.position.z,0xffe9a8,1.1);
+      _vfx(VFX_STUN,victim.root.position.x,victim.root.position.z,15,0);  // 1.5s — the same clock tmodAdd just set above
       _sfxAt("stunhit",victim);   // v132.37: its own cue. It borrowed the generic "hit" before,
                                   // which made the game's biggest melee moment sound like a jab.
     }
@@ -964,6 +1302,7 @@ function dealDamage(att,victim,dmg){
   if(isHuman(victim)&&victim._tmods&&buffSt(victim,"shrug")&&
      Math.random()<0.10*buffSt(victim,"shrug")){
     if(shedDebuffs(victim)){
+      _vfx(VFX_SHRUG,victim.root.position.x,victim.root.position.z,0,0);
       _sfxAt("shrugoff",victim);
       if(victim.isPlayer&&typeof msg==="function")msg("You shrug it off!","blue");
     }
@@ -1040,7 +1379,8 @@ function dealDamage(att,victim,dmg){
     // ---- v132.30 BATCH A: what a kill pays the killer ----
     if(attU&&isHuman(attU)&&attU.alive&&attU.team!==victim.team){
       const fe=buffSt(attU,"feast");                                  // SECOND WIND
-      if(fe)attU.hp=Math.min(attU.maxHp,attU.hp+attU.maxHp*0.10*fe);
+      if(fe){attU.hp=Math.min(attU.maxHp,attU.hp+attU.maxHp*0.10*fe);
+        _vfx(VFX_FEAST,attU.root.position.x,attU.root.position.z,0,0);} // relief, not a spell
       const fr=buffSt(attU,"frenzy");                                 // KILLING FRENZY
       if(fr)tmodAdd(attU,"dmgflat",2*fr,7,false,10*fr);                // +2 a kill, capped at +10
       const su=buffSt(attU,"surge");                                   // BLOODRUSH

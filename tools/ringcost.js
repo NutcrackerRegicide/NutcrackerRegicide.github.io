@@ -28,12 +28,15 @@ const HERE=__dirname;
 if(process.env.RINGHOLDERS===undefined){
   const run=(n)=>cp.execSync("node "+JSON.stringify(__filename),
     {cwd:path.join(HERE,".."),env:Object.assign({},process.env,{RINGHOLDERS:String(n)})}).toString().trim();
-  const a=run(0), b=run(8);
-  console.log("  holders=0   "+a);
-  console.log("  holders=8   "+b);
+  const a=run(0), b=run(8), c=run("8fx");
+  console.log("  holders=0            "+a);
+  console.log("  holders=8            "+b);
+  console.log("  holders=8 + 200 fx   "+c);
   const ms=(s)=>parseFloat(s);
   console.log("\n  the rings add "+((ms(b)-ms(a))*1000).toFixed(1)+
-    " microseconds a frame with a full lobby holding all four ringed buffs.");
+    " microseconds a frame with a full lobby holding all four ringed buffs;");
+  console.log("  the v132.41 set-pieces add "+((ms(c)-ms(b))*1000).toFixed(1)+
+    " more with 200 particles alive at once.");
   process.exit(0);
 }
 // ---- the measured child ----
@@ -57,21 +60,25 @@ const ROOT=path.join(HERE,"..");
 const order=["00-data","01-engine","02-world","03-buildings","04-units","05-combat",
   "06-input","07-ai","08-ui","09-main","10-net","11-audio","12-touch","13-deskui"];
 let b=order.map(f=>fs.readFileSync(path.join(ROOT,"js",f+".js"),"utf8")).join("\n");
-b+=";global.__B={units,buffFxTick,buffFxStats,FX_SANCT,FX_BRAND,FX_RESOLVE,FX_PHALANX};";
+b+=";global.__B={units,buffFxTick,buffFxStats,FX_SANCT,FX_BRAND,FX_RESOLVE,FX_PHALANX,fxTick,vfxPlay,fxStats};";
 const log=console.log; console.log=()=>{};
 (0,eval)(b);
 console.log=log;
-const B=global.__B, N=parseInt(process.env.RINGHOLDERS,10);
+const B=global.__B;
+const RAW=process.env.RINGHOLDERS, WANTFX=/fx$/.test(RAW), N=parseInt(RAW,10);
 for(const u of B.units.filter(u=>u.alive).slice(0,N)){
   u._fxMask=B.FX_SANCT|B.FX_BRAND|B.FX_RESOLVE|B.FX_PHALANX;
   u._fxStill=1; u._auraA=4; u._auraE=5;
 }
-B.buffFxTick(0.016);                                   // warm — build the pool once
+B.buffFxTick(0.016); B.fxTick(0.016);                  // warm — build both pools once
+// keep ~200 set-piece particles alive for the whole run when asked, by re-seeding each frame
+const seed=()=>{ if(!WANTFX)return; for(let i=0;i<3;i++)B.vfxPlay([2,500,500,0,0]); };
+for(let i=0;i<60;i++){seed();B.fxTick(0.016);}
 const F=4000, t0=process.hrtime.bigint();
-for(let i=0;i<F;i++)B.buffFxTick(0.016);
+for(let i=0;i<F;i++){seed();B.buffFxTick(0.016);B.fxTick(0.016);}
 const ms=Number(process.hrtime.bigint()-t0)/1e6/F;
-const st=B.buffFxStats();
-console.log(ms.toFixed(4)+" ms/frame   rings drawn="+st.rings+"  pool="+st.pool+
+const st=B.buffFxStats(), fx=B.fxStats();
+console.log(ms.toFixed(4)+" ms/frame   rings="+st.rings+"  particles="+fx.live+
   "  units walked="+B.units.length);
 // ⚠ exit HARD. The bundle's own boot tick schedules timers (a HUD toast, the autoplay retry), and
 // one of them fires a second later into a stubbed DOM and takes the process with it — after the
