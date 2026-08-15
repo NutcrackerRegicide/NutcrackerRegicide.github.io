@@ -24,7 +24,10 @@ var NET={
   // v132.9 29 -> 30: the Viking road's bow was reversed. The spine moved, so its clearance corridor
   // moved, so the trees moved; and the two team bazaars are defined ON the spine, so they moved too
   // and took their own clearance with them. Every node index downstream is different.
-  PROTO:40,             // v132.36 five proc/charge ids — the forge now speaks all 60, which
+  PROTO:42,             // v132.40 public buff rows (s.bfa) — every client learns every player's
+                        // loadout, not just its own. Was:
+                        // v132.39 the aura-ring rows (s.ar) — new snapshot vocabulary. Was:
+                        // v132.36 five proc/charge ids — the forge now speaks all 60, which
                         // completes John CSV. Vocabulary again; a .39 peer cannot name them.
                         // v132.35 six aura ids at the forge — vocabulary again, same as .30/.34.
                         // v132.34 five debuff ids at the forge, and `tmd` now also carries stun,
@@ -1523,6 +1526,31 @@ NET.packSnap=function(){
   if(NET._snapN%3===0){ // 5Hz is plenty for scores/levels — tags cache by text anyway
     s.sc=[[NET.myName,Math.round(player.score||0),player.team,player.id,player.lvl||0]];
     for(const k in NET.remotes){const rr=NET.remotes[k];if(rr.unit)s.sc.push([rr.name,Math.round(rr.unit.score||0),rr.unit.team,rr.unit.id,rr.unit.lvl||0]);}
+    // v132.39 THE AURA RINGS. Holders only, and holders are isHuman — a full lobby is eight rows.
+    const _ar=[];
+    const _arRow=(u)=>{ if(u&&u.alive&&(u._fxMask|0))_ar.push(
+      [u.id,u._fxMask|0,u._auraA|0,u._auraE|0,Math.round((u._fxStill||0)*100),u._fxKin|0,u._fxStw|0]); };
+    _arRow(player);
+    for(const k in NET.remotes){const rr=NET.remotes[k];if(rr.unit)_arRow(rr.unit);}
+    // ⚠ send the EMPTY list once. Skipping it to save bytes leaves every guest holding the last
+    // rows forever, and the ring outlives the buff that drew it.
+    if(_ar.length||NET._arLast)s.ar=_ar;
+    NET._arLast=_ar.length;
+  }
+  // v132.40 EVERY PLAYER'S LOADOUT, on FULL snaps only (~1 Hz). Indexed into BUFFS rather than
+  // named: about 40 bytes a player against 150. The list is COMPLETE — a human holding nothing
+  // still gets a row — because a sparse list cannot say "this one has none", and the guest below
+  // relies on that to clear a deserter's.
+  if(full&&typeof BUFFS!=="undefined"){
+    if(!NET._bfIdx){NET._bfIdx={};BUFFS.forEach((b,i)=>{NET._bfIdx[b.id]=i;});}
+    const _bfa=[];
+    const _bfRow=(x)=>{ if(!x||!x.alive)return;
+      const packed=[]; const bb=x.buffs||{};
+      for(const k in bb){const i=NET._bfIdx[k]; if(i!==undefined&&bb[k]>0)packed.push(i,bb[k]|0);}
+      _bfa.push([x.id,packed]); };
+    _bfRow(player);
+    for(const k in NET.remotes){const rr=NET.remotes[k];if(rr.unit)_bfRow(rr.unit);}
+    s.bfa=_bfa;
   }
   { // v95: buildings ship as DELTAS — only rows that changed (usually none), full set on refresh.
     // v97: rows are BINARY (8B) and the delta key IS the quantized wire row — sub-quantum
@@ -1550,6 +1578,8 @@ NET.packSnap=function(){
   // only when actually present. Still an estimate — netprofile is the instrument — but an
   // estimate that moves when the thing it measures moves.
   s.bs=ub.byteLength+(s.bb?s.bb.byteLength:0)+(s.sc?s.sc.length*22:0)+(s.fx?s.fx.length*10:0)+
+    (s.ar?s.ar.length*16:0)+ // v132.39: seven small ints a row — netlog stays honest
+    (s.bfa?s.bfa.reduce((a,r)=>a+8+r[1].length*3,0):0)+ // v132.40: the loadouts, on full snaps
     (s.stock0?42:0)+(s.carry?14*Object.keys(carry).length:0)+(s.ares?8:0)+45;
   return s;
 };
@@ -1981,6 +2011,32 @@ NET.applySnap=function(s){
     }
   }
   if(s.sc){NET.scores=s.sc;syncNameTags(s.sc);}
+  if(s.bfa){ // v132.40 every player's loadout — see patch-buffs-public.js
+    if(!NET._bfIdx&&typeof BUFFS!=="undefined"){NET._bfIdx={};BUFFS.forEach((b,i)=>{NET._bfIdx[b.id]=i;});}
+    const named=new Set();
+    for(const row of s.bfa){
+      const un=NET.unitById(row[0]); if(!un)continue;
+      named.add(un.id);
+      const b={}; const p=row[1]||[];
+      for(let i=0;i+1<p.length;i+=2){const d=BUFFS[p[i]]; if(d)b[d.id]=p[i+1];}
+      un.buffs=b;
+      if(typeof applyBuffStats==="function")applyBuffStats(un); // keep derived stats honest —
+    }                                                          // the host still owns hp/maxHp
+    // ⚠ anything CARRYING buffs but absent from a complete list has lost them: a deserter whose
+    // body went back to the AI, or a player who left. A sparse list could not say this.
+    for(const un of units)
+      if(un.buffs&&!named.has(un.id)){for(const _k in un.buffs){un.buffs={};break;}}
+  }
+  if(s.ar){ // v132.39 the aura rings — see patch-buff-rings-net.js
+    // ⚠ CLEAR FIRST. A unit that dropped the buff sends no row at all rather than a row of zeros,
+    // so anything absent from this list has to go dark or its ring stays on the ground.
+    for(const u of units)if(u._fxMask)u._fxMask=0;
+    for(const r of s.ar){
+      const u=NET.unitById(r[0]); if(!u)continue;
+      u._fxMask=r[1]|0; u._auraA=r[2]|0; u._auraE=r[3]|0;
+      u._fxStill=(r[4]|0)/100; u._fxKin=r[5]|0; u._fxStw=r[6]|0;
+    }
+  }
   if(s.carry&&s.carry[NET.myUid]){
     const c=s.carry[NET.myUid];
     player.carry.food=c[0];player.carry.gold=c[1];player.carry.stone=c[2];player.carry.wood=c[3];

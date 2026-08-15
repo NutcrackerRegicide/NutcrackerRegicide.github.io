@@ -68,6 +68,11 @@
     display:flex;flex-wrap:wrap;gap:2px 18px;}
   .scbuffhead{flex-basis:100%;font-size:10.5px;letter-spacing:1.5px;color:#9fd8ff;opacity:.8;margin-bottom:2px;}
   .scbuff{font-size:11.5px;line-height:1.45;color:#d9d2bd;flex:0 1 auto;}
+  /* v132.40: how many pieces THAT player is carrying, on their scoreboard row. The full list is
+     the title attribute — sixty possible buffs will not fit inline. Distinct from .scbuff above,
+     which styles your own loadout panel at the foot of the board. */
+  .scload{font-style:normal;font-size:10.5px;color:#9fd8ff;opacity:.85;margin-left:5px;
+    padding:0 4px;border:1px solid rgba(159,216,255,.3);border-radius:3px;cursor:help;}
   .scbuff b{color:#9fd8ff;font-weight:600;}
   /* minimap */
   #minimapwrap{position:fixed;top:10px;right:10px;padding:5px;z-index:10}

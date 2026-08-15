@@ -105,7 +105,11 @@ function auraBuffTick(u,dt){
   if(!u.alive||typeof isHuman!=="function"||!isHuman(u))return;
   const sanct=buffSt(u,"sanctuary"), brand=buffSt(u,"brand"), kin=buffSt(u,"kinship"),
         stew=buffSt(u,"steward"), res=buffSt(u,"resolve"), pha=buffSt(u,"phalanx");
-  if(!(sanct||brand||kin||stew||res||pha)){u._auraE=0;u._auraA=0;u._stillT=0;return;}
+  if(!(sanct||brand||kin||stew||res||pha)){
+    u._auraE=0;u._auraA=0;u._stillT=0;
+    u._fxMask=0;u._fxKin=0;u._fxStw=0;u._fxStill=0;      // v132.39: …and drop the ring. A stale
+    return;                                              // mask here is a ring that never leaves.
+  }
   // SANCTUARY's clock. Deliberately not reset by taking damage — standing your ground under fire
   // is the whole fantasy.
   u._stillT=u.moving?0:(u._stillT||0)+dt;
@@ -117,7 +121,12 @@ function auraBuffTick(u,dt){
   // the cue belongs to the MOMENT the zone opens, not to every scan while it is open
   if(zoneOpen&&!u._zoneWasOpen)_sfxAt("sanctuary",u);
   u._zoneWasOpen=zoneOpen;
-  let allies=0, enemies=0, kinNear=false;
+  // v132.39: what the RINGS need. The display reads only these fields, so host and guest run the
+  // same drawing code and a dedicated server needs no special case. Six bits, two counts, one
+  // clock, two ids — see patch-buff-rings-net.js for how they reach a guest.
+  u._fxMask=(sanct?1:0)|(brand?2:0)|(kin?4:0)|(stew?8:0)|(res?16:0)|(pha?32:0);
+  u._fxStill=Math.min(1,(u._stillT||0)/AURA_STILL);
+  let allies=0, enemies=0, kinNear=false, kinId=0;
   // ONE pass. Six effects.
   for(const o of units){
     if(!o.alive||o===u)continue;
@@ -125,7 +134,8 @@ function auraBuffTick(u,dt){
     if(dx*dx+dz*dz>R2)continue;
     if(o.team===u.team){
       allies++;
-      if(kin&&!kinNear&&o.cls===u.cls&&!o.isKing)kinNear=true;
+      if(kin&&!kinNear&&o.cls===u.cls&&!o.isKing){kinNear=true;kinId=o.id;} // v132.39: WHICH one,
+                                                                            // for the thread
       if(zoneOpen&&o.hp<o.maxHp){                       // SANCTUARY mends the whole warband
         o.hp=Math.min(o.maxHp,o.hp+u.maxHp*0.03*sanct*step);
         if(o.bar&&typeof setBar==="function")setBar(o.bar,o.hp/o.maxHp);
@@ -140,6 +150,7 @@ function auraBuffTick(u,dt){
     }
   }
   u._auraA=allies; u._auraE=enemies;                     // cached for the damage-time readers
+  u._fxKin=kinId;                                        // v132.39: 0 when nobody of your kind is near
   if(zoneOpen&&u.hp<u.maxHp){                            // …and it mends the one who opened it
     u.hp=Math.min(u.maxHp,u.hp+u.maxHp*0.03*sanct*step);
     if(u.isPlayer&&typeof updatePlayerHud==="function")updatePlayerHud();
@@ -148,15 +159,125 @@ function auraBuffTick(u,dt){
     u.hp=Math.min(u.maxHp,u.hp+1.0*kin*step);
     if(u.bar&&typeof setBar==="function")setBar(u.bar,u.hp/u.maxHp);
   }
+  let _stw=0;
   if(stew&&u.cls==="villager"&&typeof buildings!=="undefined"){ // STEWARD
     for(const b of buildings){
       if(!b.alive||b.team!==u.team||!b.built||b.hp>=b.def.hp)continue;
       const bx=b.x-px, bz=b.z-pz;
       if(bx*bx+bz*bz>R2)continue;
       b.hp=Math.min(b.def.hp,b.hp+0.5*stew*step);
+      if(!_stw)_stw=b.id;                                // v132.39: the first one mended gets the ring
+    }
+  }
+  u._fxStw=_stw;
+}
+// ---------- v132.39 BATCH D MADE VISIBLE: the ground rings ----------
+// FX_* are the six mask bits, in the order auraBuffTick writes them.
+const FX_SANCT=1, FX_BRAND=2, FX_KIN=4, FX_STEW=8, FX_RESOLVE=16, FX_PHALANX=32;
+const RING_SEGS=48, RING_ARCS=16;   // sixteen pre-built arcs = Sanctuary's sweep without churn
+const RING_TIGHTEN=1;               // 0 draws UNBOWED at its true radius instead of closing in
+const RING_MIN=6;                   // …and this is how far in it closes at the cap
+const RING_Y=0.16;                  // clear of the ground, under everything else
+const FX_COL={sanct:0xFFD98A, brand:0xC4402A, resolve:0x8FA4B8, stew:0xC9A06A, kin:0x9FE0A8};
+let _ringGeo=null,_ringArc=null,_ringPool=null,_threadGeo=null,_threadPool=null,_ringOn=0;
+function _ringBuild(){ // LAZY. Never at load — see invariant #2, the seeded window.
+  if(_ringGeo)return;
+  _ringGeo=new THREE.RingGeometry(0.94,1.0,RING_SEGS);
+  _ringGeo.rotateX(-Math.PI/2);                          // bake the lie-flat into the geometry so
+  _ringArc=[];                                           // the mesh's own rotation stays free
+  for(let i=1;i<=RING_ARCS;i++){
+    const g=new THREE.RingGeometry(0.94,1.0,RING_SEGS,1,Math.PI/2,-(Math.PI*2)*(i/RING_ARCS));
+    g.rotateX(-Math.PI/2); _ringArc.push(g);
+  }
+  _threadGeo=new THREE.CylinderGeometry(0.05,0.05,1,5);
+  _threadGeo.translate(0,0.5,0);                         // origin at one END, so scale.y IS length
+  _ringPool=[]; _threadPool=[];
+}
+function _ringTake(){ // one pooled flat ring, hidden when not in use
+  for(const m of _ringPool)if(!m.visible)return m;
+  const m=new THREE.Mesh(_ringGeo,new THREE.MeshBasicMaterial({
+    color:0xffffff,transparent:true,opacity:0,depthWrite:false,side:THREE.DoubleSide}));
+  m.renderOrder=-1; scene.add(m); _ringPool.push(m); return m;
+}
+function _threadTake(){
+  for(const m of _threadPool)if(!m.visible)return m;
+  const m=new THREE.Mesh(_threadGeo,new THREE.MeshBasicMaterial({
+    color:FX_COL.kin,transparent:true,opacity:0,depthWrite:false}));
+  scene.add(m); _threadPool.push(m); return m;
+}
+function _ringAt(u,R,col,op,arc){
+  const m=_ringTake(); m.visible=true;
+  m.geometry=(arc!==undefined&&arc<RING_ARCS-1)?_ringArc[Math.max(0,arc|0)]:_ringGeo;
+  const x=u.root.position.x, z=u.root.position.z;
+  m.position.set(x,(typeof terrainHeight==="function"?terrainHeight(x,z):0)+RING_Y,z);
+  m.scale.set(R,1,R); m.material.color.setHex(col); m.material.opacity=op;
+  _ringOn++;
+}
+// THE ONE DISPLAY PATH. Reads only the _fx* fields, which the host computes and the wire
+// replicates — so this runs identically on a host, a guest and a headless server.
+function buffFxTick(dt){
+  if(typeof scene==="undefined"||typeof THREE==="undefined"||typeof units==="undefined")return;
+  _ringBuild();
+  for(const m of _ringPool)m.visible=false;              // hide-all then re-arm: a unit that died
+  for(const m of _threadPool)m.visible=false;            // or dropped a buff leaves nothing behind
+  _ringOn=0;
+  const t=(typeof T!=="undefined")?T:0;
+  for(const u of units){
+    const fx=u._fxMask|0;
+    if(!fx||!u.alive||!u.root)continue;
+    if(fx&FX_SANCT){
+      // the ring GROWS over the stillness clock, so the wind-up is the effect, then holds and
+      // pulses in time with the heal
+      const p=u._fxStill||0, open=p>=1;
+      const R=AURA_BR*(open?1:p), pulse=open?(0.55+0.20*Math.sin(t*5.2)):0.30+0.30*p;
+      if(R>0.4)_ringAt(u,R,FX_COL.sanct,pulse,open?undefined:Math.floor(p*RING_ARCS));
+    }
+    if(fx&FX_BRAND){
+      // "ragged" as an irregular opacity flicker rather than gapped geometry — reads as heat,
+      // costs a sine
+      const f=0.42+0.16*Math.sin(t*11.3)+0.08*Math.sin(t*27.7);
+      _ringAt(u,AURA_BR,FX_COL.brand,f);
+    }
+    if(fx&FX_RESOLVE){
+      // TIGHTENS as enemies crowd you. The cap is 5 (−5% each, floor −25%).
+      const n=Math.min(5,u._auraE||0);
+      const R=RING_TIGHTEN?(AURA_BR-(AURA_BR-RING_MIN)*(n/5)):AURA_BR;
+      const cap=n>=5;
+      _ringAt(u,R,FX_COL.resolve,0.22+0.10*n+(cap?0.12*Math.abs(Math.sin(t*4)):0));
+    }
+    if(fx&FX_PHALANX){
+      // the mirror of UNBOWED: brightens as allies gather, second ring at the +20% cap (4 allies)
+      const n=Math.min(4,u._auraA||0);
+      const col=(typeof TEAMCOL!=="undefined"&&TEAMCOL[u.team]!==undefined)?TEAMCOL[u.team]:0xffffff;
+      _ringAt(u,AURA_BR,col,0.16+0.13*n);
+      if(n>=4)_ringAt(u,AURA_BR*0.88,col,0.16+0.10*Math.abs(Math.sin(t*3.1)));
+    }
+    if((fx&FX_STEW)&&u._fxStw&&typeof buildings!=="undefined"){
+      const b=buildings.find(x=>x.id===u._fxStw);
+      if(b&&b.alive)_ringAt({root:{position:{x:b.x,z:b.z}}},4.2,FX_COL.stew,0.30+0.16*Math.sin(t*3.6));
+    }
+    if((fx&FX_KIN)&&u._fxKin){
+      const o=units.find(x=>x.id===u._fxKin);
+      if(o&&o.alive&&o.root){
+        const m=_threadTake(); m.visible=true;
+        const a=u.root.position, b2=o.root.position;
+        const dx=b2.x-a.x, dy=(b2.y+1.4)-(a.y+1.4), dz=b2.z-a.z;
+        const len=Math.hypot(dx,dy,dz)||0.001;
+        m.position.set(a.x,a.y+1.4,a.z);
+        m.scale.set(1,len,1);
+        m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),
+          new THREE.Vector3(dx/len,dy/len,dz/len));
+        m.material.opacity=0.34+0.14*Math.sin(t*2.4);
+      }
     }
   }
 }
+// Test surface. `live` is what is ON SCREEN this frame — radius, opacity and colour per ring —
+// so a gate can assert that UNBOWED tightened rather than merely that something was drawn.
+function buffFxStats(){return {rings:_ringOn,pool:_ringPool?_ringPool.length:0,
+  threads:_threadPool?_threadPool.filter(m=>m.visible).length:0,built:!!_ringGeo,
+  live:_ringPool?_ringPool.filter(m=>m.visible).map(m=>({r:m.scale.x,
+    op:m.material.opacity,col:m.material.color.getHex()})):[]};}
 // ---------- v132.34: the DEBUFF half of the timed system ----------
 // Damage-over-time is applied HERE and only here, from the host's own unit loop. It deliberately
 // does not live in updateUnitCommon: 10-net.js calls that on the guest too, and a guest owns no
@@ -518,6 +639,8 @@ function updateEffects(dt){
   // tickBody (09-main.js) and NET.guestFrame (10-net.js:2133). Putting it in tickBody alone is
   // trap #12, the v128.8 ribbon a guest could never clear.
   auraTick(dt);
+  if(typeof buffFxTick==="function")buffFxTick(dt); // v132.39 the Batch D rings — same reasoning
+                                                   // as the aura above: BOTH frame paths land here
   for(let i=effects.length-1;i>=0;i--){
     const e=effects[i]; e.t-=dt;
     e.s.scale.multiplyScalar(1+dt*4); e.s.material.opacity=Math.max(0,e.t*2.5);

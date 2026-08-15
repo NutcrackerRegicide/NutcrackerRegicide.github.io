@@ -66,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -2887,7 +2887,8 @@ global.__G.setGameOver(false);
     // v132.0 26 -> 27 with the map rework: MAP.x/MAP.z moved, so every node moved, and the netcode
   // indexes nodes positionally. The assertion is that the number MOVED WITH THE WORLD, which is the
   // thing a peer actually needs — a stale literal here is how two builds shake hands and disagree.
-  check("v132 wire: PROTO is 40 — five proc ids, completing the 60-buff forge",NET.PROTO===40);
+  check("v132.40 wire: PROTO is 42 — public buff rows (s.bfa), so a client knows every player's "+
+    "loadout and not only its own",NET.PROTO===42);
     // the version stamp is READ from the page, not frozen in the recorder. Every log John
     // field-tested on v125.1 said ver:"v98", because that literal was written in v98 and never
     // touched again — a flight recorder you have to take somebody's word about.
@@ -3379,8 +3380,8 @@ global.__G.setGameOver(false);
   const w=G.NET.packWorld(1);
   let snapAres=null;
   try{G.NET._lastRow=null;const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
-  check("v115/v132 net: PROTO 40 (the full 60-buff forge) and `ares` still rides both payloads",
-    G.NET.PROTO===40&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
+  check("v115/v132.40 net: PROTO 42 (public loadouts) and `ares` still rides both payloads",
+    G.NET.PROTO===42&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
     Array.isArray(snapAres)&&Math.abs(snapAres[0]-42.5)<0.06);
   G.ageResT[0]=0;
 
@@ -4258,6 +4259,236 @@ global.__G.setGameOver(false);
         check("v132.35 SEARING PRESENCE: …and allies do NOT ("+a0.toFixed(1)+" → "+
           pal.hp.toFixed(1)+")",Math.abs(pal.hp-a0)<1e-9);
         foe.alive=false; pal.alive=false; burn.alive=false;
+      }
+      // ---- v132.39: THE BATCH D RINGS ----
+      {
+        const S=G.buffFxStats, FX=G.buffFxTick;
+        // ⚠ ISOLATE. buffFxStats reports the WHOLE SCENE, and by now the campaign above has real
+        // units holding real Batch D buffs — so an absolute count here measures somebody else's
+        // rings. Park every other mask, restore at the end.
+        const _parked=[];
+        for(const u of G.units)if(u._fxMask){_parked.push([u,u._fxMask]);u._fxMask=0;}
+        // THE SEEDED WINDOW. This cannot be a runtime check: the geometry was correctly built,
+        // lazily, hundreds of frames ago, and there is no moment late enough to place a gate and
+        // early enough to see an unbuilt pool. It is a claim about the SOURCE, so assert that.
+        {
+          const src=fs.readFileSync(path.join(ROOT,"js","05-combat.js"),"utf8");
+          const i=src.indexOf("function _ringBuild(){"), j=src.indexOf("\n}",i);
+          const body=(i>=0&&j>i)?src.slice(i,j):"";
+          const declNull=/let _ringGeo=null/.test(src);
+          const mkGeo=(src.match(/new THREE\.RingGeometry\(0\.94/g)||[]).length;
+          const inBuild=(body.match(/new THREE\.RingGeometry\(0\.94/g)||[]).length;
+          const calls=(src.match(/_ringBuild\(\)/g)||[]).length;   // decl + the one call site
+          const calledFromTick=/function buffFxTick\(dt\)\{[\s\S]{0,220}_ringBuild\(\)/.test(src);
+          check("v132.39 rings: NO geometry is minted at LOAD — _ringGeo is declared null, both "+
+            "ring geometries are built inside _ringBuild() ("+inBuild+" of "+mkGeo+"), and "+
+            "_ringBuild is called only from buffFxTick. A BufferGeometry constructed inside the "+
+            "seeded window costs four random draws and moves every tree on the map (invariant #2)",
+            declNull&&mkGeo===2&&inBuild===2&&calls===2&&calledFromTick);
+        }
+        const R=mkB(0,{}); R._fxMask=0;
+        FX(0.016);
+        check("v132.39 rings: …and it IS built by the time anything draws",S().built===true);
+        check("v132.39 rings: a unit holding none of the six draws nothing ("+S().rings+")",
+          S().rings===0);
+        // SANCTUARY grows over the stillness clock
+        R._fxMask=G.FX_SANCT; R._fxStill=1; FX(0.016);
+        const full=S().live[0]?S().live[0].r:0;
+        R._fxStill=0.5; FX(0.016);
+        const half=S().live[0]?S().live[0].r:0;
+        check("v132.39 SANCTUARY: the ring GROWS over the 3s stillness clock, so the wind-up you "+
+          "cannot otherwise see IS the effect (half-wound "+half.toFixed(1)+" vs open "+
+          full.toFixed(1)+" units)",full>0&&half>0&&Math.abs(half-full/2)<0.6);
+        check("v132.39 SANCTUARY: …and open, it is drawn at the REAL scan radius ("+full.toFixed(1)+
+          " vs AURA_BR "+G.AURA_BR+")",Math.abs(full-G.AURA_BR)<0.01);
+        // UNBOWED tightens
+        R._fxMask=G.FX_RESOLVE; R._auraE=0; FX(0.016);
+        const wide=S().live[0].r;
+        R._auraE=5; FX(0.016);
+        const tight=S().live[0].r;
+        check("v132.39 UNBOWED: the ring TIGHTENS as enemies crowd you — a ring closing in IS the "+
+          "sentence 'surrounded makes you tougher' ("+wide.toFixed(1)+" -> "+tight.toFixed(1)+
+          " units at the 5-enemy cap)",G.RING_TIGHTEN?(tight<wide-1&&Math.abs(tight-G.RING_MIN)<0.01)
+                                                     :Math.abs(tight-wide)<0.01);
+        // PHALANX is its mirror: a second ring at the cap
+        R._fxMask=G.FX_PHALANX; R._auraA=0; FX(0.016);
+        const one=S().rings;
+        R._auraA=4; FX(0.016);
+        const two=S().rings;
+        check("v132.39 PHALANX: a SECOND concentric ring appears at the +20% cap, so you can see "+
+          "you are getting the full bonus ("+one+" ring below the cap, "+two+" at it)",
+          one===1&&two===2);
+        // dropping the buff leaves nothing behind
+        R._fxMask=0; FX(0.016);
+        // ⚠ VISIBLE MESHES, not _ringOn. _ringOn counts what was DRAWN this frame, so deleting
+        // the hide-all pass — which leaves every ring ever drawn on the ground forever, the exact
+        // bug named here — still reads 0. Found by mutation; the first version was vacuous.
+        check("v132.39 rings: dropping the buff CLEARS the ring — hide-all then re-arm, or a "+
+          "Sanctuary you walked out of stays painted on the ground for the rest of the match ("+
+          S().live.length+" still visible)",S().live.length===0);
+        // THE POOL IS A POOL
+        const before=S().pool;
+        for(let i=0;i<200;i++){R._fxMask=(i%2)?G.FX_SANCT:0;R._fxStill=1;FX(0.016);}
+        R._fxMask=0; FX(0.016);
+        check("v132.39 rings: the pool is a POOL — 200 frames of rings appearing and vanishing "+
+          "did not grow it (was "+before+", now "+S().pool+"). A mesh added per frame is how a "+
+          "display feature becomes a frame-rate bug three minutes in",S().pool<=before+1);
+        // ---- 1. THE FRAME PATH. Driven through a REAL guest frame, not by reading the source.
+        {
+          const mode0=G.NET.mode;
+          R._fxMask=G.FX_SANCT; R._fxStill=1;
+          FX(0.016); const hostRings=S().live.length;
+          // ⚠ DRIVE THE COUNTER TO A KNOWN ZERO. The first version measured after its own direct
+          // FX() call, so it asserted "a ring was drawn recently" — true whoever drew it, and it
+          // stayed GREEN with buffFxTick made host-only, which is the exact bug it is named for.
+          R._fxMask=0; FX(0.016);
+          const zeroed=S().live.length;
+          R._fxMask=G.FX_SANCT;            // armed, but NOTHING has drawn it — only a guest frame can
+          G.NET.mode="guest";
+          let threw="";
+          try{ G.NET.guestFrame(0.016); }catch(e){ threw=e.message; }
+          const guestRings=S().live.length;
+          G.NET.mode=mode0;
+          check("v132.39 rings on a GUEST: …and the counter really was at zero before the guest "+
+            "frame ran ("+zeroed+"), so the next assertion cannot pass on the host's leftovers",
+            zeroed===0);
+          check("v132.39 rings on a GUEST: a real NET.guestFrame draws them from a standing start "+
+            "— buffFxTick rides updateEffects because BOTH frame paths call it. Display code in "+
+            "tickBody's host branch is trap #12, and that shipped once already (host "+hostRings+
+            ", zeroed 0, guest "+guestRings+")"+(threw?" ["+threw+"]":""),
+            !threw&&hostRings>=1&&guestRings>=1);
+        }
+        // ---- 2. THE STATE. Buffs are per-player-only and auraBuffTick is host-only, so without
+        // a wire row a guest has nothing to draw FROM however correct the drawing is. Tested
+        // against the REAL builder and the REAL applySnap.
+        // ⚠ every NET mutation below is inside try/finally: the first version of this block threw
+        // partway through and left NET half-configured, which reddened four assertions in the
+        // v132.37 relay block further down. A test that damages later tests is worse than one
+        // that simply fails, because the failure surfaces somewhere else wearing a disguise.
+        {
+          // ⚠ getPlayer(), not G.player. The by-value export is a ghost after any respawn — see
+          // tools/patch-smoketest-liveplayer.js. Writing to the ghost is a silent no-op, which
+          // is how this block came to ask the real builder why it had shipped nothing.
+          const N=G.NET, mode0=N.mode, P=G.getPlayer(), m0=P._fxMask, q0=N.lastQ;
+          try{
+            N.mode="host";
+            P._fxMask=G.FX_SANCT; P._auraA=3; P._auraE=1; P._fxStill=1; P._fxKin=0; P._fxStw=0;
+            // ⚠ DIAGNOSTIC, kept: G.player is captured once when __G is built, and the game
+            // reassigns `player` on respawn — so a stale reference here would set the mask on an
+            // object the builder never looks at. Assert they are the same object rather than
+            // hoping, because the failure mode is a silent no-op that looks like a wire bug.
+            const LIVE=G.units.find(u=>u.isPlayer);
+            check("v132.39 ring wire: the harness holds the LIVE player (same="+(LIVE===P)+
+              ", alive="+(P&&P.alive)+", stale G.player is a different object: "+
+              (G.player!==P)+") — the by-value export goes stale the moment the game rebinds "+
+              "`player` on respawn, and writing to the ghost is a silent no-op that makes every "+
+              "assertion below vacuously false",LIVE===P&&P.alive===true);
+            // the rows ride the 5 Hz scoreboard branch, so three packs guarantee one carrying it
+            const pack3=()=>{const o=[];for(let i=0;i<3;i++)o.push(N.packSnap());return o;};
+            const A=pack3().filter(x=>x.ar!==undefined);
+            const row=A.length?(A[0].ar||[]).find(r=>r[0]===P.id):null;
+            check("v132.39 ring wire: the REAL snapshot builder ships a row for a holder — id, "+
+              "mask, both counts, the stillness clock and the two ids ("+(row?JSON.stringify(row):"none")+
+              ")",!!row&&row[1]===G.FX_SANCT&&row[2]===3&&row[3]===1&&row[4]===100);
+            // the holder drops it: ONE snapshot must still carry an EMPTY list
+            P._fxMask=0;
+            const B=pack3().filter(x=>x.ar!==undefined);
+            check("v132.39 ring wire: when the last holder drops it, ONE snapshot still carries an "+
+              "EMPTY list — skipping it to save bytes leaves every guest holding the old rows and "+
+              "the ring outlives the buff ("+B.length+" carried it, length "+
+              (B.length?B[0].ar.length:"n/a")+")",B.length===1&&B[0].ar.length===0);
+            const C=pack3().filter(x=>x.ar!==undefined);
+            check("v132.39 ring wire: …and then it goes QUIET rather than shipping an empty array "+
+              "forever ("+C.length+" of 3 carried it)",C.length===0);
+            // and a guest applies it, through the real applySnap
+            // ⚠ BOTH halves are REAL snapshots. A hand-made {ar:[]} throws inside applySnap long
+            // before the scoreboard rows, which silently swallowed the second assertion below —
+            // it never ran in any build, so deleting the very thing it tests changed nothing.
+            P._fxMask=G.FX_RESOLVE; P._auraE=4; P._fxStill=1;
+            const D=pack3().filter(x=>x.ar&&x.ar.length);        // …carrying rows
+            P._fxMask=0; P._auraE=0;
+            const E=pack3().filter(x=>x.ar&&x.ar.length===0);    // …carrying the empty list
+            N.mode="guest";
+            check("v132.39 ring wire: the harness got BOTH real snapshots it needs — one with "+
+              "rows ("+D.length+") and one with the empty list ("+E.length+") — so neither "+
+              "assertion below can pass by never running",D.length>0&&E.length>0);
+            if(D.length&&E.length){
+              let threw="";
+              try{
+                D[0].q=N.lastQ+1; N.applySnap(D[0]);
+                const got=P._fxMask===G.FX_RESOLVE&&P._auraE===4;
+                check("v132.39 ring wire: a GUEST applies the arriving row to the right unit by "+
+                  "id, wiped locally first so only the wire could have restored it (mask "+
+                  P._fxMask+", enemies "+P._auraE+")",got);
+                E[0].q=N.lastQ+1; N.applySnap(E[0]);
+                check("v132.39 ring wire: …and the EMPTY list takes the ring away, which is the "+
+                  "whole reason it is sent — without the guest-side clear-first pass the mask "+
+                  "stands and the ring outlives the buff (mask now "+P._fxMask+")",
+                  P._fxMask===0);
+              }catch(e){ threw=e.message; }
+              check("v132.39 ring wire: …and applying real snapshots did not throw"+
+                (threw?" ["+threw+"]":""),!threw);
+            }
+          }finally{ N.mode=mode0; P._fxMask=m0; N.lastQ=q0; }
+        }
+        R.alive=false; R._fxMask=0;
+        for(const [u,m] of _parked)u._fxMask=m;   // give the world its rings back
+        FX(0.016);
+      }
+      // ---- v132.40: WHAT EVERY PLAYER IS CARRYING ----
+      {
+        const N=G.NET, mode0=N.mode, P=G.getPlayer(), q0=N.lastQ, b0=P.buffs;
+        try{
+          N.mode="host";
+          // only humans can hold one — assert that rather than assuming it
+          const holders=G.units.filter(u=>u.buffs&&Object.keys(u.buffs).length);
+          const nonHuman=holders.filter(u=>!G.isHuman(u));
+          check("v132.40 loadouts: every unit carrying buffs is a HUMAN — useBlacksmith and "+
+            "smithPick are reachable only for the local player and a remote's unit, so isHuman "+
+            "is the complete set of holders, not a convenient subset ("+holders.length+" holding, "+
+            nonHuman.length+" of them bots)",nonHuman.length===0);
+          // a full snapshot carries the loadout, with STACKS
+          P.buffs={dmg:3,hp:5,sanctuary:1};
+          let full=null;
+          for(let i=0;i<16&&!full;i++){const sn=N.packSnap(); if(sn.bfa)full=sn;}
+          const row=full?(full.bfa||[]).find(r=>r[0]===P.id):null;
+          check("v132.40 loadouts: a FULL snapshot carries every player's loadout, indexed into "+
+            "BUFFS ("+(row?JSON.stringify(row[1]):"no row")+")",
+            !!row&&row[1].length===6);
+          // …and it round-trips onto the right unit WITH the stacks
+          P.buffs={};
+          N.mode="guest";
+          if(full){
+            full.q=N.lastQ+1; N.applySnap(full);
+            const b=P.buffs||{};
+            check("v132.40 loadouts: …and a GUEST rebuilds it on the right unit with the right "+
+              "STACKS — a mis-strided [idx,stacks] pairing gives plausible buffs at wrong counts, "+
+              "which is the bug that would never look like one ("+JSON.stringify(b)+")",
+              b.dmg===3&&b.hp===5&&b.sanctuary===1);
+          }
+          // COMPLETENESS: a player holding nothing is still listed, and that is what lets the
+          // guest clear a deserter
+          N.mode="host"; P.buffs={};
+          let full2=null;
+          for(let i=0;i<16&&!full2;i++){const sn=N.packSnap(); if(sn.bfa)full2=sn;}
+          const row2=full2?(full2.bfa||[]).find(r=>r[0]===P.id):null;
+          check("v132.40 loadouts: a player holding NOTHING is still listed — a sparse list "+
+            "cannot say 'this one has none', which is how a deserter's loadout would stay on "+
+            "every guest's scoreboard for the rest of the match ("+
+            (row2?"listed, "+row2[1].length+" entries":"MISSING")+")",
+            !!row2&&row2[1].length===0);
+          // THE CLEAR: a unit carrying buffs but absent from a complete list has lost them
+          N.mode="guest";
+          const ghost=G.units.find(u=>u.alive&&!u.isPlayer&&!u.remote);
+          if(ghost&&full2){
+            ghost.buffs={dmg:2};
+            full2.q=N.lastQ+1; N.applySnap(full2);
+            check("v132.40 loadouts: a unit carrying buffs the complete list never mentions has "+
+              "LOST them — this is the deserter case, and the body really does go back to the AI "+
+              "with its loadout wiped ("+JSON.stringify(ghost.buffs)+")",
+              !ghost.buffs||Object.keys(ghost.buffs).length===0);
+          }
+        }finally{ N.mode=mode0; P.buffs=b0; N.lastQ=q0; }
       }
       // ---- v132.37: WHO HEARS THEM — the relay, and the dedicated-server shape ----
       {

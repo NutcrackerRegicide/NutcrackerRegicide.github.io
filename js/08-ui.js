@@ -10,6 +10,25 @@ function msg(text,kind){
   setTimeout(()=>{el.style.transition="opacity 1s";el.style.opacity="0";
     setTimeout(()=>el.remove(),1000);},6000);
 }
+// v132.40: what that player is carrying. Reads u.buffs by unit id, which now means the same
+// thing on a host and on a guest — see patch-buffs-public.js. Before that a guest knew only its
+// own loadout, so this could not have been written.
+function _scBuffs(id){
+  if(typeof units==="undefined"||id===undefined)return "";
+  const u=units.find(x=>x.id===id);
+  if(!u||!u.buffs)return "";
+  const held=[];
+  for(const k in u.buffs)if(u.buffs[k]>0){
+    const d=(typeof BUFF_BY_ID!=="undefined")?BUFF_BY_ID[k]:null;
+    held.push((d?d.name:k)+(u.buffs[k]>1?" ×"+u.buffs[k]:""));
+  }
+  if(!held.length)return "";
+  // the count in the row, the full list on hover — sixty possible pieces will not fit inline
+  // ⚠ .scload, NOT .scbuff. .scbuff already styles the items in the player's OWN loadout panel at
+  // the foot of the scoreboard; borrowing it would tie two unrelated elements together so that
+  // restyling either one silently moves the other.
+  return " <i class='scload' title='"+held.join(" · ").replace(/'/g,"&#39;")+"'>⚒"+held.length+"</i>";
+}
 function showScoreboard(on){
   const el=document.getElementById("scoreboard");
   if(!el)return;
@@ -28,7 +47,8 @@ function showScoreboard(on){
     return "<div class='sccol'><div class='schead "+(t===0?"scblue":"scred")+"'>"+
       (t===0?"⚑ BLUE":"⚑ RED")+"</div>"+
       (list.length?list.map((r,i)=>
-        "<div class='scrow'><span>"+(i+1)+". "+r[0]+(r[4]?" <i class='sclvl'>⭐"+r[4]+"</i>":"")+"</span><b>"+r[1]+"</b></div>").join("")
+        "<div class='scrow'><span>"+(i+1)+". "+r[0]+(r[4]?" <i class='sclvl'>⭐"+r[4]+"</i>":"")+
+        _scBuffs(r[3])+"</span><b>"+r[1]+"</b></div>").join("")
       :"<div class='scrow scempty'>—</div>")+"</div>";
   };
   // v89: the FULL quest text lives here — the feed message scrolls away, TAB never does
