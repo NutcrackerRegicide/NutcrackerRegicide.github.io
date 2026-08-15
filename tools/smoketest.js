@@ -43,7 +43,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "tradeGold,tick,teamAge,stock,updateBot,tryMeleeAttack,tryAttack,setGameOver,launchLob,BLUE,RED,lineUnitFor,CLS,clock,isSiege,nodes,validFor,teamTC,terrainHeight,TCPOS,makeBuilding,buildingMesh,BLD,NET,player,keys,directors,wallLineSegments,placeGateOnWall,kings,healTick,snapToWallEnd,dealDamage,restyleBuildings,rebuildRoads,roadGroups,nearestFriendlySite,BSCALE,moveToward,steerAroundBuildings,restyleUnits,drainVisualQueue,syncNameTags,manageBands,killUnit,respawnUnit,resurrectUnit,updatePriestChannel,tryResurrect,RES_CHARGE,RES_CD,"+
   "campStates,campTick,campNewWave,updateCreep,inCampGround,CAMPS,CAMP_R,CAMP_RESPAWN,CREEP_N,NEUTRAL,MAP,moveUnit,"+
   "orderCharge,toggleRally,toggleRallyFor,rallyCapFor,RALLY_CAP,CHARGE_DIST,camera,rps,setClass,economyTick,"+
-  "QUESTS,BUFFS,XP_MAX_LVL,BUFF_MAX_STACK,BOARD_REACH,QUEST_REROLL_MAX,buffMax,BUFF_BY_ID,townBoards,boardFor,questDraft,questPick,questRedraw,cargoFrac,updateCargoVisual,"+
+  "ENLIGHTENMENT_AGE,ENLIGHTEN_TRICKLE,QUESTS,BUFFS,XP_MAX_LVL,BUFF_MAX_STACK,BOARD_REACH,QUEST_REROLL_MAX,buffMax,BUFF_BY_ID,townBoards,boardFor,questDraft,questPick,questRedraw,cargoFrac,updateCargoVisual,"+
   "buffSt,carryCap,grantBuff,applyBuffStats,useTownBoard,useBlacksmith,questProgress,questTick,"+
   "bazaarTier,addConstructionHit,damageBuilding,interactCandidateD2,ageBuff,isHuman,showScoreboard,smithOffer,smithPick,"+
   "closeMenus,cancelPlacing,releaseWarband,rallyLeaderFor,shootArrow:(a,b)=>shootArrow(a,b),"+
@@ -66,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,tickVignette,KGUARD_R,nearOwnKing};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -742,6 +742,7 @@ check("corn grows on farms",buildings.some(b=>b.type==="farm"&&b.crop>0));
 // v113: passive farm income is 2 food every 3 seconds (2/3 per sec) — v86 halved it to 0.5,
 // John's field test called that over-nerfed. Harvest payout untouched.
 // Direct economyTick calls (no live tick), so no directors spend between measurements.
+const G_ENL=global.__G.ENLIGHTENMENT_AGE;
 {
   const {economyTick}=global.__G;
   global.__G.makeBuilding(0,"farm",120,40,true); // guarantee BLUE owns at least one farm
@@ -749,9 +750,17 @@ check("corn grows on farms",buildings.some(b=>b.type==="farm"&&b.crop>0));
   const farms0=buildings.filter(b=>b.alive&&b.built&&b.type==="farm"&&b.team===0).length;
   const f0=stock[0].food;
   economyTick(1.0); // exactly one 1.0s step
-  const gained=stock[0].food-f0, want=(teamAge[0]+1)+(2/3)*farms0;
-  check("v113 farm passive = 2 food / 3s: +"+gained.toFixed(2)+" food/s, "+farms0+" farms (want "+want.toFixed(2)+")",
-    farms0>=1&&Math.abs(gained-want)<1e-6);
+  // v132.47: the age trickle is gone below Enlightenment, so this is farms ALONE — which is what
+  // an assertion named "farm passive" should always have measured. Summing two systems into one
+  // number is why a change to the economy reddened a gate named after farms.
+  const age0=(teamAge[0]>=G_ENL)?1:0;
+  const gained=stock[0].food-f0, want=age0+(2/3)*farms0;
+  check("v113 farm passive = 2 food / 3s: +"+gained.toFixed(2)+" food/s from "+farms0+
+    " farms (want "+want.toFixed(2)+(age0?", incl. the Enlightenment 1/s":", no age trickle below "+
+    "Enlightenment")+")",farms0>=1&&Math.abs(gained-want)<1e-6);
+  check("v132.47 economy: aging up pays NOTHING below Enlightenment — it used to pay (age+1) of "+
+    "every resource a second, stacking on the bazaars. John: \"too much\" (team age "+teamAge[0]+
+    ", age term "+age0+")",teamAge[0]>=G_ENL?age0===1:age0===0);
 }
 // ================= v94: THE AI MARSHALS — personalities & difficulty =================
 global.__G.setGameOver(false); // an accidental regicide in the campaign must not mute this section
@@ -785,7 +794,10 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
   const r0=stock[1].food, b0=stock[0].food;
   G.economyTick(1.0);
   const rGain=stock[1].food-r0, bGain=stock[0].food-b0;
-  const rWant=((teamAge[1]+1)+(2/3)*rF)*1.2, bWant=(teamAge[0]+1)+(2/3)*bF; // v113 FARM_PASSIVE
+  // v132.47: the age term is gone below Enlightenment. ecoMul is UNTOUCHED — it is the difficulty
+  // handicap, not part of what was too generous — so this still measures exactly what it names.
+  const _a=(t)=>(teamAge[t]>=G_ENL)?1:0;
+  const rWant=(_a(1)+(2/3)*rF)*1.2, bWant=_a(0)+(2/3)*bF;
   check("HARD economy runs 20% hot for the AI only (red +"+rGain.toFixed(2)+" want "+rWant.toFixed(2)+
         " · blue +"+bGain.toFixed(2)+" want "+bWant.toFixed(2)+")",
     Math.abs(rGain-rWant)<1e-6&&Math.abs(bGain-bWant)<1e-6);
@@ -1074,11 +1086,44 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
   // bazaar tiers rank near/mid/far from EACH throne
   const tiers=[0,1].map(t=>neutralMarkets.map(m=>bazaarTier(t,m)).sort().join(""));
   check("bazaar tiers rank 0/1/2 from both thrones ("+tiers.join(" & ")+")",tiers[0]==="012"&&tiers[1]==="012");
-  // death takes its due
-  qh.lvl=7; qh.xp=2; qh.quest={i:0,prog:10}; qh.buffs={dmg:3,spd:1}; qh.smithOffer=["dmg","spd","hp"];
+  // ---- v132.48 DEATH TAKES HALF. John: "Losing all levels and xp at death is too harsh." ----
+  // His two worked examples, verbatim, as assertions.
+  qh.lvl=20; qh.xp=0; qh.alive=true; qh.buffs={}; qh.quest=null; qh.smithOffer=null;
   killUnit(qh,null);
-  check("death wipes level, XP, quest, every buff AND the smith's standing offer",
-    qh.lvl===0&&qh.xp===0&&!qh.quest&&Object.keys(qh.buffs).length===0&&!qh.smithOffer);
+  check("v132.48 death: a level 20 rises at "+qh.lvl+" with "+qh.xp+" XP (John's example: 10 and "+
+    "10) — half the climb comes back as coin to re-forge with",qh.lvl===10&&qh.xp===10);
+  qh.alive=true; qh.lvl=8; qh.xp=0;
+  killUnit(qh,null);
+  check("v132.48 death: …and a level 8 rises at "+qh.lvl+" with "+qh.xp+" XP (his second example: "+
+    "4 and 4)",qh.lvl===4&&qh.xp===4);
+  // ⚠ SET, NOT ADDED. Otherwise banking XP is the optimal play and dying rich is a strategy.
+  qh.alive=true; qh.lvl=20; qh.xp=6;
+  killUnit(qh,null);
+  check("v132.48 death: the new XP REPLACES what you were holding — a level 20 with 6 banked "+
+    "rises with "+qh.xp+", not 16. Hoarding is neither rewarded nor punished",qh.xp===10);
+  // odd levels round DOWN
+  qh.alive=true; qh.lvl=7; qh.xp=0;
+  killUnit(qh,null);
+  check("v132.48 death: odd levels round down (7 → "+qh.lvl+")",qh.lvl===3&&qh.xp===3);
+  // …and everything else still goes
+  qh.alive=true; qh.lvl=12; qh.xp=3; qh.quest={i:0,prog:10}; qh.buffs={dmg:3,spd:1};
+  qh.smithOffer=["dmg","spd","hp"]; qh.qRerolls=2; qh.hpBonus=40;
+  killUnit(qh,null);
+  check("v132.48 death: the BUFFS still go entirely, with the quest, the standing offer, the "+
+    "banked rerolls and Trophy Hunter's earnings — that is where all sixty pieces of power live, "+
+    "and it is what keeps a rule this generous from making death free",
+    Object.keys(qh.buffs).length===0&&!qh.quest&&!qh.smithOffer&&qh.qRerolls===0&&qh.hpBonus===0);
+  // and the STATS follow the wipe, through a real respawn
+  {
+    qh.alive=true; qh.lvl=10; qh.buffs={hp:5};
+    global.__G.setClassStats(qh);
+    const buffedMax=qh.maxHp;
+    killUnit(qh,null);
+    global.__G.respawnUnit(qh);
+    check("v132.48 death: …and the STATS follow the loadout through a real respawn — you do not "+
+      "keep the maxHp a lost STOUT HEART was paying for ("+buffedMax.toFixed(0)+" → "+
+      qh.maxHp.toFixed(0)+")",qh.maxHp<buffedMax);
+  }
   // v88: nothing may bury a Town Board. Self-calibrating: find ground where a house
   // IS legal, stand a fake board there, and watch the SAME spot flip to refused —
   // so only the board guard can be the cause. (Naive probes at the real boards are
@@ -2887,8 +2932,8 @@ global.__G.setGameOver(false);
     // v132.0 26 -> 27 with the map rework: MAP.x/MAP.z moved, so every node moved, and the netcode
   // indexes nodes positionally. The assertion is that the number MOVED WITH THE WORLD, which is the
   // thing a peer actually needs — a stale literal here is how two builds shake hands and disagree.
-  check("v132.44 wire: PROTO is 45 — the set-piece channel, public timed modifiers and the "+
-    "thrown-knife kind",NET.PROTO===45);
+  check("v132.46 wire: PROTO is 46 — the set-piece channel, public timed modifiers, the "+
+    "thrown knife and the damage-number message",NET.PROTO===46);
     // the version stamp is READ from the page, not frozen in the recorder. Every log John
     // field-tested on v125.1 said ver:"v98", because that literal was written in v98 and never
     // touched again — a flight recorder you have to take somebody's word about.
@@ -3380,8 +3425,8 @@ global.__G.setGameOver(false);
   const w=G.NET.packWorld(1);
   let snapAres=null;
   try{G.NET._lastRow=null;const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
-  check("v115/v132.44 net: PROTO 45 (the thrown knife) and `ares` still rides both payloads",
-    G.NET.PROTO===45&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
+  check("v115/v132.46 net: PROTO 46 (the damage number) and `ares` still rides both payloads",
+    G.NET.PROTO===46&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
     Array.isArray(snapAres)&&Math.abs(snapAres[0]-42.5)<0.06);
   G.ageResT[0]=0;
 
@@ -4231,10 +4276,51 @@ global.__G.setGameOver(false);
         const heal=place(mkB(0,{sanctuary:1}),0,20);
         const friend=place(mkB(0,{}),2,20);
         friend.hp=friend.maxHp*0.5; const f0=friend.hp;
-        heal.moving=true; scan(heal,4);
-        check("v132.35 SANCTUARY: no zone while you are MOVING ("+f0.toFixed(1)+" → "+
+        // ⚠ v132.47: MOVE IT, do not set a flag. This gate was green from v132.35 while the zone
+        // healed people at a dead run, because it set heal.moving=true and drove auraBuffTick by
+        // hand — and in that arrangement the flag survives. In the real frame animateUnit consumes
+        // u.moving before statusTick ever reads it, so the live code always saw false. The harness
+        // proved the mechanism worked when driven by hand and said nothing about the game.
+        // John found it by walking. Position is what the fixed code reads and what a player
+        // changes by pressing W, and nothing in the frame can consume it.
+        // at a realistic PACE: 4 units/sec over 0.05s steps. The first version crept at 1.6 u/s
+        // and read as still against a per-frame threshold — which is how it caught that the
+        // fix had inherited the original bug's shape.
+        // ⚠ WALK IN A CIRCLE. Walking in a straight line carried the healer sixteen units away
+        // and out of the friend's radius — so "no healing" was guaranteed by the distance, not by
+        // the clock, and the gate stayed GREEN when the fix was reverted to the broken flag. A
+        // tight circle moves at a true walking pace and never leaves the zone it is testing.
+        const _hx=heal.root.position.x, _hz=heal.root.position.z;
+        for(let i=0;i<80;i++){
+          const a2=i*0.35;
+          heal.root.position.set(_hx+Math.cos(a2)*1.6,heal.root.position.y,_hz+Math.sin(a2)*1.6);
+          G.auraBuffTick(heal,0.05);
+        }
+        check("v132.35/47 SANCTUARY: no zone while you are actually MOVING — measured by position, "+
+          "because u.moving is consumed by animateUnit before this ever runs ("+f0.toFixed(1)+" → "+
           friend.hp.toFixed(1)+")",Math.abs(friend.hp-f0)<1e-9);
-        heal.moving=false; scan(heal,2);            // still under the 3s clock
+        // ⚠ AND AT A REAL FRAME RATE. This is the assertion that would have caught my own first
+        // fix, which compared raw displacement against a fixed 0.25: at 60fps a unit walking at
+        // 4 u/s moves 0.067 in a frame, so every walking player read as STILL and the zone would
+        // have gone on healing at a run — the same bug, one layer down. The loop above steps at
+        // 20fps with fat chords and cannot see it. This one walks the way the game does.
+        friend.hp=friend.maxHp*0.5; const f60=friend.hp;
+        heal._stillT=0; heal._stillX=undefined; heal._stillZ=undefined;
+        for(let i=0;i<400;i++){                       // ~6.7s at 60fps, well past the 3s clock
+          const a6=i*0.05;
+          heal.root.position.set(_hx+Math.cos(a6)*1.6,heal.root.position.y,_hz+Math.sin(a6)*1.6);
+          G.auraBuffTick(heal,1/60);
+        }
+        check("v132.35/47 SANCTUARY: …and at SIXTY frames a second, where a 4 u/s walk covers only "+
+          "0.067 of a unit per frame. A threshold measured per-FRAME instead of per-SECOND lets "+
+          "every walking player read as still ("+f60.toFixed(1)+" → "+friend.hp.toFixed(1)+")",
+          Math.abs(friend.hp-f60)<1e-9);
+        // ⚠ WALK IT BACK. The loop above carried the healer sixteen units away, which put the
+        // friend outside the radius and the far probe inside it — three assertions below measured
+        // a healer standing somewhere else entirely. Moving a unit in a test is not free.
+        heal.root.position.set(_hx,heal.root.position.y,_hz);
+        heal._stillX=_hx; heal._stillZ=_hz; heal._stillT=0;
+        scan(heal,2);                               // standing still now, still under the 3s clock
         check("v132.35 SANCTUARY: …and none before the "+G.AURA_STILL+"s of stillness are up ("+
           friend.hp.toFixed(1)+")",Math.abs(friend.hp-f0)<1e-9);
         scan(heal,3);                               // now past it
@@ -4652,7 +4738,65 @@ global.__G.setGameOver(false);
           PLAY([k,50,50,p,q]);
           if(X().live<=b)silent.push(nm+"(#"+k+")");
         }
-        // ---- v132.45: does it LOOK like a knife? ----
+        // ---- v132.46: THE DAMAGE NUMBER ----
+      {
+        const D=G.dnumStats;
+        const P=G.getPlayer(), b0=P.buffs;
+        try{
+          const foe=mkB(1,{}); foe.hp=foe.maxHp=4000; foe._dnumBank=0;
+          // THE FIGURE MUST BE THE WOUND. Driven through a real dealDamage with a real loadout,
+          // so every multiplier has had its say before the reading is taken.
+          P.buffs={dmg:5}; P.alive=true;                    // HONED EDGE x5 = +25%
+          const h0=foe.hp;
+          G.dealDamage(P,foe,40);
+          const applied=h0-foe.hp, shown=D().last;
+          check("v132.46 damage number: the figure on screen IS the wound — "+
+            applied.toFixed(2)+" HP left the victim and the number read "+(shown?shown.n:"none")+
+            ". A number that disagrees is worse than no number, because it sends you rebalancing "+
+            "the wrong thing",
+            !!shown&&shown.id===foe.id&&shown.n===Math.floor(applied));
+          check("v132.46 damage number: …and it is not the RAW figure — HONED EDGE x5 turned a "+
+            "40 into "+applied.toFixed(1)+", which is the whole reason for showing it",
+            applied>40.5);
+          // SUB-1 BANKS. Searing Presence deals 0.25, four times a second.
+          foe._dnumBank=0; foe.hp=foe.maxHp;
+          const made0=D().made;
+          let drew=0;
+          for(let i=0;i<3;i++)if(G.dmgNum(foe,0.25,false))drew++;
+          check("v132.46 damage number: three 0.25 burns draw NOTHING yet ("+drew+") — without "+
+            "banking, SEARING PRESENCE paints a '0' four times a second on every burning enemy",
+            drew===0);
+          const fourth=G.dmgNum(foe,0.25,false);
+          check("v132.46 damage number: …and the fourth emits ONE honest 1 ("+
+            (D().last?D().last.n:"none")+")",fourth===true&&D().last.n===1);
+          // A CRIT READS DIFFERENTLY
+          // ⚠ AN UNSEEN VALUE. The first assertion above drew a 50, so "n50" was already cached
+          // and re-drawing it adds nothing — the first version of this asserted a cache increment
+          // for a key that already existed, and failed for that reason rather than for a real one.
+          const c0=D().cached;
+          G.dmgNum(foe,733,false); const asPlain=D().cached;
+          G.dmgNum(foe,733,true);  const asCrit=D().cached;
+          check("v132.46 damage number: a CRIT is its own glyph, not the same one bigger — it "+
+            "doubles the damage, and a player who cannot tell a crit from a lucky roll learns "+
+            "nothing from the number (cache "+c0+" → "+asPlain+" → "+asCrit+", crit flag "+
+            D().last.crit+")",
+            asPlain===c0+1&&asCrit===asPlain+1&&D().last.crit===true);
+          // ONLY THE ATTACKER. This is the one display effect that must NOT be broadcast.
+          const bot=mkB(0,{}); bot.remote=null; bot.isPlayer=false;
+          // ⚠ COUNT EMITS, not `made`. `made` is a cache-MISS counter: draw a value already in the
+          // cache and it does not move, so the first version of this stayed GREEN with the
+          // attacker check deleted. Adjacent is not the claim — the recurring mistake of the
+          // session, and this is the third time it has been exactly this shape.
+          const before=D().emits;
+          G.dealDamage(bot,foe,30);
+          check("v132.46 damage number: a blow struck by somebody ELSE draws nothing on your "+
+            "screen — every other effect this session had to be broadcast; this one must not be, "+
+            "or a 485-unit battle puts everyone's damage on everyone's display ("+before+" → "+
+            D().emits+" numbers drawn)",D().emits===before);
+          foe.alive=false; bot.alive=false;
+        }finally{ P.buffs=b0; }
+      }
+      // ---- v132.45: does it LOOK like a knife? ----
         {
           const TX=G.fxTex();
           const alpha=(t2,u,v)=>{const im=t2.image,w=im.width,h=im.height;
@@ -4920,8 +5064,18 @@ global.__G.setGameOver(false);
           check("v132.37 SANCTUARY cue: ONE harp tone for the opening, not one per 4 Hz scan — "+
             "eight seconds of standing still produced "+(heard.sanctuary||0)+" (32 scans)",
             heard.sanctuary===1);
-          holy.moving=true; scan(holy,1);             // walking shuts the zone
-          holy.moving=false; scan(holy,6);            // and standing again re-opens it
+          // ⚠ v132.47: WALK it, do not flag it. u.moving is consumed by animateUnit before this
+          // code ever runs in a real frame, so the flag shuts nothing — the same reason the zone
+          // healed people at a run from v132.35 until John noticed.
+          const _gx=holy.root.position.x, _gz=holy.root.position.z;
+          for(let i=0;i<24;i++){            // a circle, for the same reason as the gate above
+            const a3=i*0.5;
+            holy.root.position.set(_gx+Math.cos(a3)*1.6,holy.root.position.y,_gz+Math.sin(a3)*1.6);
+            G.auraBuffTick(holy,0.05);
+          }
+          holy.root.position.set(_gx,holy.root.position.y,_gz);
+          holy._stillX=_gx; holy._stillT=0;
+          scan(holy,6);                               // standing again re-opens it
           check("v132.37 SANCTUARY cue: …and it speaks AGAIN when the zone re-opens, so the latch "+
             "is a latch and not a one-shot ("+(heard.sanctuary||0)+" total)",heard.sanctuary===2);
           holy.alive=false;

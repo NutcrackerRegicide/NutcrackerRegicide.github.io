@@ -740,6 +740,15 @@ BLD.castle.blockShapes=(function(){
 })(); BLD.fort_wall.age=4; BLD.fort_gate.age=4;
 
 // ---------- the seven ages ----------
+// v132.47: the last age, by INDEX rather than by name — AGES is the one definition of the ladder,
+// so the trickle gate reads its length instead of hard-coding a 5 that would silently point at the
+// wrong age the day a sixth is added.
+// v132.48 (John, playtesting): "Losing all levels and xp at death is too harsh." Death now takes
+// HALF the level and hands that half back as spendable XP — level 20 rises at 10 with 10 XP. The
+// buffs still go entirely, which is where the teeth are.
+const DEATH_KEEP=0.5;        // the fraction of your level you rise with
+const ENLIGHTENMENT_AGE=5;   // asserted against AGES.length-1 in the smoketest
+const ENLIGHTEN_TRICKLE=1;   // 1 food, 1 wood, 1 gold a second. No stone — John's list, verbatim.
 const AGES=[
   {name:"Stone Age"},
   {name:"Bronze Age",    cost:{food:600, gold:0}},
@@ -889,8 +898,15 @@ const AURA_MAX=320,        // mote slots for the WHOLE scene — one pooled Poin
       AURA_FAR=62,         // invisible beyond it — John: you should have to get close (v125)
       AURA_RATE_LO=2.6,    // motes/sec at level 1
       AURA_RATE_HI=34.0,   // motes/sec at the cap
-      AURA_LIFE=1.45,      // seconds a mote lives
-      AURA_RISE=1.55,      // units/sec it climbs
+      // v132.47 (John, playtesting): "the aura lingers too long… it needs to go away much much
+      // quicker". A mote is emitted at a POSITION and then rises on its own — it does not follow
+      // the unit. At 1.45s and 1.55u/s each one travelled 2.2 units, so a walking player dragged a
+      // two-unit smear behind them and a player who had walked away left it hanging over empty
+      // ground, which is what his screenshot shows above the houses.
+      // Life and climb only. The RATE is untouched: level 25 should be no less dense, it should
+      // simply not smear.
+      AURA_LIFE=0.55,      // seconds a mote lives (was 1.45)
+      AURA_RISE=0.90,      // units/sec it climbs (was 1.55) — half a unit travelled, not 2.2
       AURA_R=0.78,         // emission radius around the unit
       AURA_GOLD=0xFFC64A,  // the cap colour — warm, agrees with the §2 palette
       AURA_HOT=1.38,       // cap multiplier: just past the 0.86 bloom threshold (§4.6) and NO

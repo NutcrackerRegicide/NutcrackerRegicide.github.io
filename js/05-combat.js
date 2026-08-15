@@ -106,6 +106,14 @@ const AURA_BR=10;        // the radius they share — the Temple's heal reach, s
                          // idea of "near you" rather than six
 const AURA_SCAN=0.25;    // seconds between scans. A heal-over-time cannot tell; the budget can.
 const AURA_STILL=3;      // SANCTUARY's stillness clock
+// v132.47: a SPEED, not a per-frame distance. The first cut of this compared raw displacement
+// against a fixed 0.25 and was wrong in the same way the bug it replaced was wrong: at 60fps a
+// unit walking at 4 units/sec moves 0.067 in a frame, so every walking unit read as STILL and the
+// zone would have gone on healing at a run. The smoketest caught it by moving a unit at a
+// realistic pace, which is the only reason it is not in this build.
+// Class speeds run 2.6-7.0 u/s, so 0.6 is far below the slowest walk and far above the drift of
+// separation and terrain settling.
+const STILL_SPD=0.6;     // units/sec above which a unit counts as MOVING
 function auraBuffTick(u,dt){
   if(!u.alive||typeof isHuman!=="function"||!isHuman(u))return;
   const sanct=buffSt(u,"sanctuary"), brand=buffSt(u,"brand"), kin=buffSt(u,"kinship"),
@@ -117,7 +125,21 @@ function auraBuffTick(u,dt){
   }
   // SANCTUARY's clock. Deliberately not reset by taking damage — standing your ground under fire
   // is the whole fantasy.
-  u._stillT=u.moving?0:(u._stillT||0)+dt;
+  // ⚠ v132.47: MEASURED, not flagged. u.moving is CONSUMABLE — animateUnit clears it on its first
+  // line, and updateUnitCommon (which calls it) runs BEFORE statusTick, which drives this. So this
+  // clock read a flag that had already been wiped and was never once reset by walking: the zone
+  // healed you at a dead run, from v132.35 until John walked out of it and kept healing.
+  // Position cannot be consumed by anything, and does not care what order the frame runs in.
+  {
+    const _px=u.root.position.x, _pz=u.root.position.z;
+    const _lx=(u._stillX===undefined)?_px:u._stillX, _lz=(u._stillZ===undefined)?_pz:u._stillZ;
+    const _d2=(_px-_lx)*(_px-_lx)+(_pz-_lz)*(_pz-_lz);
+    u._stillX=_px; u._stillZ=_pz;
+    // not zero: separation and terrain settling nudge a standing unit, and a zero-tolerance test
+    // would mean the zone could never open at all
+    const _lim=STILL_SPD*Math.max(1e-4,dt);            // a distance budget for THIS frame
+    u._stillT=(_d2>_lim*_lim)?0:(u._stillT||0)+dt;
+  }
   u._auraW=(u._auraW||0)+dt;
   if(u._auraW<AURA_SCAN)return;
   const step=u._auraW; u._auraW=0;
@@ -262,6 +284,13 @@ function buffFxTick(dt){
               0,0.5,0,0,0.7,0.42);}
       }
     }
+    // v132.47 VENOMOUS — a slight green glow on the weapon. ⚠ NOT parented to the weapon mesh:
+    // that lives under u.body, which is emptied and geometry-disposed on every rebuild, so an
+    // attachment there works until the first restyle and then silently never again (invariant #9).
+    // Positioned at the hand each frame instead — forward and out to the right, at chest height,
+    // tracking the facing so it reads as being ON the blade while owning nothing.
+    if(buffSt(u,"venom"))
+      _lookAtOff(u,0.55,0.45,1.55,0x8fd45a,0.42,0.30+0.10*Math.sin(t*3.1));
     const rg=buffSt(u,"regen");                            // SECOND SKIN — one mote every two
     if(rg&&u.hp<u.maxHp&&typeof fxs==="function"){         // seconds. Near-subliminal on purpose:
       u._regT=(u._regT||0)+dt;                             // a permanent state drawn loudly is
@@ -326,6 +355,15 @@ function buffFxTick(dt){
 // as the rings above — a unit that died or dropped the buff leaves nothing behind, and no code
 // has to notice that it did.
 let _lookPool=null,_lookOn=0;
+// v132.47: a look at an OFFSET from the unit rather than straight above it — the venom glow sits
+// where the weapon hand is, which means tracking the facing.
+function _lookAtOff(u,fwd,side,yOff,col,size,op){
+  const f=u.facing||0;
+  const fx=Math.sin(f), fz=Math.cos(f);
+  _lookRaw(u.root.position.x+fx*fwd+fz*side,
+           u.root.position.y+yOff,
+           u.root.position.z+fz*fwd-fx*side,col,size,op);
+}
 function _lookAt(u,yOff,col,size,op){
   if(!_lookPool)_lookPool=[];
   let m=null;
@@ -335,6 +373,16 @@ function _lookAt(u,yOff,col,size,op){
   m.visible=true; m.material.color.setHex(col); m.material.opacity=op;
   m.scale.set(size,size,1);
   m.position.set(u.root.position.x,u.root.position.y+yOff,u.root.position.z);
+  _lookOn++;
+}
+function _lookRaw(x,y,z,col,size,op){
+  if(!_lookPool)_lookPool=[];
+  let m=null;
+  for(const q of _lookPool)if(!q.visible){m=q;break;}
+  if(!m){ m=new THREE.Sprite(new THREE.SpriteMaterial({color:0xffffff,transparent:true,
+    opacity:1,depthWrite:false})); scene.add(m); _lookPool.push(m); }
+  m.visible=true; m.material.color.setHex(col); m.material.opacity=op;
+  m.scale.set(size,size,1); m.position.set(x,y,z);
   _lookOn++;
 }
 // ⚠ rings/looks count what was DRAWN THIS FRAME; ringVis/lookVis count what is ON SCREEN. They
@@ -429,7 +477,8 @@ function fxs(x,y,z,col,size,life,vx,vy,vz,g,grow,fade0,opts){
   _fxBuild();
   const m=_fxsTake(); m.visible=true;
   const o=opts||{};
-  m.material.map=(o.tex==="blade")?_texBlade:(o.tex==="sliver")?_texSliver:_texSoft;
+  // o.map is an explicit texture (the damage numbers); o.tex names one of the three shapes
+  m.material.map=o.map?o.map:(o.tex==="blade")?_texBlade:(o.tex==="sliver")?_texSliver:_texSoft;
   m.material.rotation=o.rot||0;
   m.position.set(x,y,z);
   const ar=o.ar||1;                                    // a blade is longer than it is wide
@@ -596,6 +645,67 @@ function vfxPlay(v){
 }
 // The 'pos' view is where the live sprites actually are. A count can say something was drawn; only this
 // can say it MOVED — and "the knife flies" is a claim about displacement, not about population.
+// ---------- v132.46 DAMAGE NUMBERS ----------
+// A texture per DISTINCT VALUE, built once and cached. A match uses a narrow band of numbers, so
+// the cache stays small; the cap is there for the long game with strange ones, not for the normal
+// case. Same canvas path as _makeTagSprite, including its note that the headless stubs no-op it.
+const DNUM_CACHE=192;
+let _dnumTex=null,_dnumOrder=null,_dnumMade=0;
+function _dnumTexFor(n,crit){
+  if(!_dnumTex){_dnumTex={};_dnumOrder=[];}
+  const key=(crit?"c":"n")+n;
+  if(_dnumTex[key])return _dnumTex[key];
+  const c=document.createElement("canvas"); c.width=128; c.height=64;
+  const g=c.getContext("2d");
+  if(g.clearRect){                                  // headless stubs no-op all of this safely
+    g.clearRect(0,0,128,64);
+    g.font=(crit?"bold 46px":"bold 36px")+" Georgia, serif";
+    g.textAlign="center"; g.textBaseline="middle";
+    g.lineWidth=7; g.strokeStyle="rgba(18,10,4,0.92)";
+    g.strokeText(String(n),64,32);
+    g.fillStyle=crit?"#FFD24A":"#F4EEDC";           // a crit is GOLD and larger — it must not read
+    g.fillText(String(n),64,32);                    // as a normal blow with a bigger font alone
+  }
+  const t=new THREE.CanvasTexture(c);
+  t.magFilter=THREE.LinearFilter; t.minFilter=THREE.LinearFilter; t.generateMipmaps=false;
+  _dnumTex[key]=t; _dnumOrder.push(key); _dnumMade++;
+  if(_dnumOrder.length>DNUM_CACHE){                 // evict the oldest, and dispose it properly
+    const old=_dnumOrder.shift();
+    if(_dnumTex[old]&&_dnumTex[old].dispose)_dnumTex[old].dispose();
+    delete _dnumTex[old];
+  }
+  return t;
+}
+// ⚠ FRACTIONAL DAMAGE BANKS. SEARING PRESENCE deals 0.25 four times a second; rounded that is a
+// "0" four times a second per burning enemy. Banking turns it into one honest "1" a second.
+function dmgNum(victim,amount,crit){
+  if(!victim||!victim.root||typeof scene==="undefined"||typeof THREE==="undefined")return false;
+  victim._dnumBank=(victim._dnumBank||0)+amount;
+  if(victim._dnumBank<1)return false;
+  const n=Math.floor(victim._dnumBank);
+  victim._dnumBank-=n;
+  // …and they FAN OUT. Three volley blows at one point is one unreadable number.
+  const t=(typeof T!=="undefined")?T:0;
+  if(t-(victim._dnumT||-99)>0.45)victim._dnumI=0;
+  const i=(victim._dnumI=(victim._dnumI||0)+1)-1;
+  victim._dnumT=t;
+  const off=(i%3-1)*0.85;
+  _dnumLast={n:n,crit:!!crit,id:victim.id}; _dnumEmits++;
+  fxs(victim.root.position.x+off,victim.root.position.y+3.1+i*0.28,victim.root.position.z,
+      0xffffff,crit?1.15:0.85,crit?1.25:1.0,
+      off*0.5,2.3,0, -1.6, 1, 1, {map:_dnumTexFor(n,!!crit),ar:2.0});
+  return true;
+}
+// Test surface. `last` is the figure actually PUT ON SCREEN — which is the only thing worth
+// asserting, because the whole point of the feature is that it agrees with the damage the game
+// applied. A count of how many were drawn would not catch a number that is simply wrong.
+let _dnumLast=null,_dnumEmits=0;
+// ⚠ `emits` counts NUMBERS DRAWN. `made` counts textures CREATED, which is a cache-miss counter —
+// draw a value that was drawn before and it does not move. A gate that used `made` to ask "did a
+// number appear" stayed green with the attacker check deleted, because the value happened to be
+// cached already. Adjacent is not the claim.
+function dnumStats(){return {cached:_dnumTex?Object.keys(_dnumTex).length:0,made:_dnumMade,
+  emits:_dnumEmits,last:_dnumLast};}
 function fxTex(){return {soft:_texSoft,blade:_texBlade,sliver:_texSliver};}
 function fxStats(){return {maps:_fxLive.filter(e=>e.kind==="s").map(e=>({
     blade:e.m.material.map===_texBlade,sliver:e.m.material.map===_texSliver,
@@ -1097,6 +1207,7 @@ function bazaarDraw(){
   }
 }
 function dealDamage(att,victim,dmg){
+  let _wasCrit=false;   // v132.46: set by KEEN EYE below, read at the subtraction
   if(typeof NET!=="undefined"&&NET.mode==="guest")return; // host owns all damage
   if(!victim.alive||gameOver)return;
   if(victim.blocking){
@@ -1137,7 +1248,8 @@ function dealDamage(att,victim,dmg){
       m*=1+Math.min(0.20,0.05*buffSt(attU,"phalanx")*(attU._auraA||0)); // count, never a fresh scan
     const cs=buffSt(attU,"crit");                                  // KEEN EYE
     if(cs&&Math.random()<0.05*cs){
-      m*=2; puff(victim.root.position.x,2.4,victim.root.position.z,0xffd24a,1.1);
+      m*=2; _wasCrit=true;   // v132.46: a plain local — the roll and the subtraction share a scope
+      puff(victim.root.position.x,2.4,victim.root.position.z,0xffd24a,1.1);
       _vfx(VFX_CRIT,victim.root.position.x,victim.root.position.z,0,0);         // v132.41: sharp and quick — at 3 stacks this
       _sfxAt("critstrike",victim);                // rides ~15% of blows        // v132.38: it prints CRITICAL HIT in gold and sounded
       if(attU.isPlayer)msg("CRITICAL HIT!","gold");   // like every other blow
@@ -1209,6 +1321,19 @@ function dealDamage(att,victim,dmg){
   }
   victim._lastHurt=T; // Second Skin waits for quiet
   victim.hp-=dmg; hitFlash(victim);
+  // ---- v132.46 THE DAMAGE NUMBER. Read HERE and nowhere earlier: every multiplier, the dodge,
+  // both charge blocks and the shield have already had their say by this line, so this is the
+  // only place the figure is the one the game actually used. ----
+  if(attU&&dmg>0){
+    if(attU===player&&typeof dmgNum==="function")dmgNum(victim,dmg,_wasCrit);
+    else if(attU.remote&&typeof NET!=="undefined"&&NET.mode==="host"&&NET.remotes[attU.remote]){
+      // ⚠ TO THE ONE WHO SWUNG, not to everyone. Broadcasting would put every unit's damage on
+      // every screen, which is the blizzard this is meant to replace. Same targeted shape as
+      // syncBuffs and the garrison cue.
+      const _r=NET.remotes[attU.remote];
+      if(_r.conn){try{_r.conn.send({t:"dnum",i:victim.id,d:Math.round(dmg*100),c:_wasCrit?1:0});}catch(_){}}
+    }
+  }
   // CULLER: finish a wounded beast outright. Sets hp to 0 rather than calling killUnit, so the
   // ordinary kill path below runs once and unchanged — loot, quests, participation and score all
   // stay on their single road.
@@ -1480,15 +1605,24 @@ function killUnit(u,killer){
   // or a standing forge offer — died without losing them. The two lists must stay identical.
   if(isHuman(u)&&((u.lvl||0)>0||(u.xp||0)>0||u.quest||(u.buffs&&Object.keys(u.buffs).length)||
      u.questDraft||(u.qRerolls||0)>0||u.smithOffer||u._scoutOut)){
-    // ---- v87 DEATH TAKES ITS DUE: level, XP, quest and every blacksmith buff ----
-    u.lvl=0; u.xp=0; u.buffs={}; u.quest=null; u.questDraft=null; u.qRerolls=0; u._scoutOut=false; u.smithOffer=null; // v99: death also wipes the standing draft + banked rerolls
+    // ---- v132.48 DEATH TAKES HALF, AND HANDS IT BACK AS COIN ----
+    // Was: lvl=0, xp=0 — a total wipe, which John called too harsh after playing it. Now half the
+    // level survives AND becomes spendable XP, so you rise with a bare forge and the means to
+    // stock it. ⚠ The XP is SET, not added: a level 20 holding 6 unspent rises with exactly 10.
+    const _lv0=u.lvl||0;
+    const _lv1=Math.floor(_lv0*DEATH_KEEP);
+    u.lvl=_lv1; u.xp=_lv1;
+    u.buffs={}; u.quest=null; u.questDraft=null; u.qRerolls=0; u._scoutOut=false; u.smithOffer=null; // v99: death also wipes the standing draft + banked rerolls
     u.hpBonus=0;      // v132.30: TROPHY HUNTER is a buff's earnings — death takes it with the buffs
     u._tmods=null; u._lowLatch=false; // v132.32: and the timed modifiers die with the body
     if(typeof tmodSyncClear==="function")tmodSyncClear(u); // …on the owner's screen as well as here
     u._rrCycle=false; // v132.28.2: re-arm the reroll grant, or a player who died QUESTLESS would
                       // carry the spent cycle into the new life and never be granted one
     if(typeof questNotify==="function"){
-      questNotify(u,"💀 Death takes its due — your level, XP and blacksmith buffs are lost.","warn");
+      questNotify(u,_lv1>0
+        ? "💀 Death takes half — you rise at level "+_lv1+" with "+_lv1+
+          " XP to spend, and the forge is bare."
+        : "💀 Death takes its due — your level, XP and blacksmith buffs are lost.","warn");
       syncQuest(u); syncBuffs(u);
       if(u.isPlayer&&typeof updateQuestHud==="function")updateQuestHud();
     }

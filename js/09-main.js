@@ -591,8 +591,11 @@ function questTick(dt){ // host/solo: scout-quest geometry, Second Skin regen, c
     }
   }
 }
-// team economy trickle: each age grants +1/sec of EVERY resource (Stone=1 … Enlightenment=6),
-// plus 0.5 food/sec from every standing farm — worked farms add gathering on top
+// team economy trickle. v132.47 (John, playtesting): "the passive resources from age up combined
+// with the passive resources from the bazaars is too much. lets remove the passive resources from
+// aging up… Except if a team reaches enlightenment age they gain 1 food, wood, and gold per
+// second." So: nothing at all until the last age, then one each of three — and NOT stone, which
+// stays something you go and mine. Farms are a separate line and are untouched.
 const FARM_PASSIVE=2/3; // v113: 2 food every 3 seconds (John's call — v86's 0.5/sec cut too deep).
                         // Still under the pre-v86 1/sec; harvesting on top is untouched.
 let ecoAccum=0, cropAccum=0;
@@ -604,8 +607,13 @@ function economyTick(dt){
     (AI_DIFF[diffFor(BLUE)]||AI_DIFF.normal).eco,
     (AI_DIFF[diffFor(RED)]||AI_DIFF.normal).eco];
   for(const t of [BLUE,RED]){
-    const r=(teamAge[t]+1)*step*ecoMul[t];
-    stock[t].food+=r; stock[t].gold+=r; stock[t].stone+=r; stock[t].wood+=r;
+    // v132.47: ONLY at Enlightenment, and only three of the four. The old line paid
+    // (teamAge+1) of every resource at every age — twenty-four a second at the top, on top of the
+    // bazaars. ecoMul stays: it is the difficulty handicap, not part of what was too generous.
+    if(teamAge[t]>=ENLIGHTENMENT_AGE){
+      const r=ENLIGHTEN_TRICKLE*step*ecoMul[t];
+      stock[t].food+=r; stock[t].gold+=r; stock[t].wood+=r;   // …and no stone, deliberately
+    }
   }
   cropAccum+=step;
   const growNow=cropAccum>=5?cropAccum:0; if(growNow)cropAccum=0;

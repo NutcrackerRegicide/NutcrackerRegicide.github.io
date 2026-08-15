@@ -24,7 +24,8 @@ var NET={
   // v132.9 29 -> 30: the Viking road's bow was reversed. The spine moved, so its clearance corridor
   // moved, so the trees moved; and the two team bazaars are defined ON the spine, so they moved too
   // and took their own clearance with them. Every node index downstream is different.
-  PROTO:45,             // v132.44 the thrown-knife kind. Was:
+  PROTO:46,             // v132.46 the damage-number message (dnum). Was:
+                        // v132.44 the thrown-knife kind. Was:
                         // v132.43 public timed modifiers (s.tm) — the other half of "a client
                         // knows what other units are carrying". Was:
                         // v132.41 the batched set-piece channel (s.vfx). Was:
@@ -1749,6 +1750,11 @@ NET.guestData=function(d){
   if(d.t==="pong"){ // v95: our ping, measured on the wire we actually ride
     const rtt=NET.now()-(d.ts||0);
     if(rtt>=0&&rtt<10000)NET.ping=NET.ping?NET.ping*0.6+rtt*0.4:rtt;
+    return;
+  }
+  if(d.t==="dnum"){ // v132.46 YOUR damage, sent only to you — see patch-dmgnum-hook.js
+    const v=NET.unitById(d.i);
+    if(v&&typeof dmgNum==="function")dmgNum(v,(d.d||0)/100,!!d.c);
     return;
   }
   if(d.t==="note")return msg(d.m,d.tone||"");
