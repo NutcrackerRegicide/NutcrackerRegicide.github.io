@@ -923,7 +923,7 @@ const cloudField=new THREE.Group(); scene.add(cloudField);
     cloudField.add(g); clouds.push(g);
   }
 })();
-let dustPts=null;
+let dustPts=null, dustBase=null;
 (function buildDust(){
   // v130.2 …AND THEY WERE STILL CONFETTI, because quieting them was treating the symptom. A mote
   // is an ADDITIVE 1-pixel splat: gl_PointSize clamps to one pixel at the low end, so distance
@@ -945,23 +945,50 @@ let dustPts=null;
   //   opacity 0.22 -> 0.10
   // Kept: additive, which is the whole point of a catch-the-light layer, and the 48-unit box that
   // rides the camera. Named so the next pass can turn one dial instead of hunting three literals.
-  const DUST_N=110, DUST_BOX=48, DUST_LOW=0.5, DUST_HIGH=4.2;
-  const N=DUST_N, pos=new Float32Array(N*3);
+  // v132.52 THE NUMBERS THAT MATTER ARE THE LAST TWO. Count and box shrink together so the
+  // NEAR-FIELD DENSITY IS UNCHANGED — roughly two dozen motes within twenty units, which is what
+  // v131.11 settled on and what the layer is for. What is new is that a mote is faded to nothing
+  // before it can reach the horizon band at all.
+  const DUST_N=32, DUST_BOX=24, DUST_LOW=0.5, DUST_HIGH=4.2,
+        DUST_FULL=10,      // full strength within this radius of the eye
+        DUST_GONE=24;      // and worth exactly zero beyond it — not dim, ZERO
+  const N=DUST_N, pos=new Float32Array(N*3), col=new Float32Array(N*3);
+  const cr=1.0, cg=0.878, cb=0.627;             // 0xffe0a0, now carried per-vertex
   for(let i=0;i<N;i++){
     pos[i*3]=(Math.random()*2-1)*DUST_BOX;
     pos[i*3+1]=DUST_LOW+Math.random()*(DUST_HIGH-DUST_LOW);
     pos[i*3+2]=(Math.random()*2-1)*DUST_BOX;
+    // BAKED ONCE, and it is allowed to be baked because the field rides the camera: a mote's
+    // distance from the eye never changes, so this is not an approximation of a per-frame fade,
+    // it IS the per-frame fade with the loop lifted out. Squared, so the falloff is gentle where
+    // the motes do their job and steep where they would otherwise become specks in the fog.
+    const r=Math.hypot(pos[i*3],pos[i*3+2]);
+    let f=(DUST_GONE-r)/(DUST_GONE-DUST_FULL);
+    f=f<0?0:(f>1?1:f); f*=f;
+    col[i*3]=cr*f; col[i*3+1]=cg*f; col[i*3+2]=cb*f;
   }
   const g=new THREE.BufferGeometry();
   g.setAttribute("position",new THREE.BufferAttribute(pos,3));
+  g.setAttribute("color",new THREE.BufferAttribute(col,3));
+  // v132.52 THE BASE POSITIONS, KEPT. The swirl in 09-main.js used to add itself into the live
+  // array, so the motes integrated their own animation and wandered out of the box. Holding the
+  // originals turns that into an offset, which is what it always meant to be — and it is what
+  // lets the per-vertex fade above stay honest, since a mote's radius no longer drifts.
+  dustBase=pos.slice();
   // v130.1 THE MOTES BECAME LITTER THE MOMENT THE FOG STOPPED BEING WHITE. Additive blending means
   // these ADD to whatever is behind them, so against a bright far field a near-white mote at 0.4
   // opacity resolves to a hard white speck — and from an elevated vantage a couple of hundred of
   // them project straight into the fog band and read as confetti scattered across the distance
   // (plainly visible in 06-wide). Warmer and quieter: they still catch the light in a close shot,
   // which is the whole point of the layer, without punching holes in the horizon.
-  dustPts=new THREE.Points(g,new THREE.PointsMaterial({color:0xffe0a0,size:0.26,transparent:true,
-    opacity:0.10,blending:THREE.AdditiveBlending,depthWrite:false,sizeAttenuation:true}));
+  // fog:false IS THE OTHER HALF OF THE FIX AND THE HALF THAT WAS NEVER TRIED. r128 fogs a Points
+  // material by lerping its colour toward fog.color; under AdditiveBlending a fogged mote therefore
+  // ADDS the fog's own brightness to the fog, and the further away it is the more it adds. That is
+  // the mechanism behind every "confetti in the distance" report since v130.1, and no amount of
+  // opacity can beat it — the fog was supplying the light, not the mote.
+  dustPts=new THREE.Points(g,new THREE.PointsMaterial({color:0xffffff,size:0.26,transparent:true,
+    opacity:0.10,blending:THREE.AdditiveBlending,depthWrite:false,sizeAttenuation:true,
+    vertexColors:true,fog:false}));
   scene.add(dustPts);
 })();
 // THE ATMOSPHERE RIDES WITH THE CAMERA, AND IT HAS TO DO IT FROM IN HERE.

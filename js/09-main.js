@@ -930,11 +930,18 @@ function renderFrame(dt){
   // side of the sky on the first frame of play — in plain view, since the field is pinned to the
   // camera. 360 clears the ring.
   for(const c of clouds){c.position.x+=0.6*(1/60); if(c.position.x>CLOUD_WRAP)c.position.x=-CLOUD_WRAP;}
-  if(dustPts){
+  if(dustPts&&dustBase){
+    // v132.52 AN OFFSET FROM THE BASE, NOT AN ADDITION TO THE POSITION. See tools/patch-dust-drift.js:
+    // the old form integrated a cosine into the live array, so a mote drifted for a whole half
+    // period before turning round and left the camera box entirely. The amplitudes below are the
+    // TOTAL excursion now, where before they were a speed. Every mote moves, every frame: there
+    // are thirty-two of them, and the old "i+=3" moved the same third forever while claiming to
+    // rotate through them.
     const a=dustPts.geometry.attributes.position, tt=clock.elapsedTime;
-    for(let i=0;i<a.count;i+=3){ // update a third per frame — plenty at mote speed
-      a.array[i*3+1]+=Math.sin(tt*0.8+i)*0.004;
-      a.array[i*3]+=Math.cos(tt*0.5+i*1.7)*0.006;
+    for(let i=0;i<a.count;i++){
+      a.array[i*3]  =dustBase[i*3]  +Math.cos(tt*0.5+i*1.7)*0.35;
+      a.array[i*3+1]=dustBase[i*3+1]+Math.sin(tt*0.8+i)*0.22;
+      a.array[i*3+2]=dustBase[i*3+2];
     }
     a.needsUpdate=true;
   }

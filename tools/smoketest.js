@@ -66,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,AURA_LEASH,AURA_LEASH_Y,puff,fxEffects:()=>effects,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,AURA_LEASH,AURA_LEASH_Y,puff,fxEffects:()=>effects,dustPts:()=>dustPts,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -5566,6 +5566,41 @@ global.__G.setGameOver(false);
       "some later version widens them",worst>0&&worst<=G.AURA_LEASH+0.01);
     led.alive=false;
     for(let i=0;i<10;i++)G.auraTick(0.05);
+  }
+  // ---------- v132.52: THE AMBIENT DUST MUST NOT REACH THE HORIZON ----------
+  // John, four times: v130.1 "confetti scattered across the distance", v130.2 "STILL confetti",
+  // v131.11 "tone down the sparkly ambient floater things", and v132.51 a line of glowing dots
+  // hanging in the fog which he reasonably took for his own level aura. Three fixes moved COUNT
+  // and OPACITY; none could work, because the brightness of a far mote comes from the FOG —
+  // r128 lerps a Points colour toward fog.color, and under additive blending a fogged mote adds
+  // the fog's own light back on top of it. The field also rides the camera, so a far mote sits
+  // at a FIXED screen position in the horizon band and never drifts out of it.
+  {
+    const G=global.__G, dp=G.dustPts();
+    const P=dp.geometry.attributes.position.array;
+    const CA=dp.geometry.attributes.color?dp.geometry.attributes.color.array:null;
+    const n=dp.geometry.attributes.position.count;
+    let litFar=0, near=0, brightest=0;
+    for(let i=0;i<n;i++){
+      const r=Math.hypot(P[i*3],P[i*3+2]);
+      const lit=CA?Math.max(CA[i*3],CA[i*3+1],CA[i*3+2]):1;
+      if(lit>brightest)brightest=lit;
+      if(lit>0.004&&r>litFar)litFar=r;
+      if(r<=20&&lit>0.05)near++;
+    }
+    check("v132.52 dust: no mote is LIT further than "+litFar.toFixed(1)+"u from the eye — the "+
+      "field rides the camera, so that distance is fixed and this is the whole horizon band. "+
+      "Dimming could never empty it: r128 lerps a Points colour toward fog.color, and under "+
+      "additive blending the fog was supplying the light, not the mote",
+      CA!==null&&litFar<=24.01);
+    check("v132.52 dust: …and the layer still EXISTS — "+near+" motes lit inside twenty units "+
+      "(brightest "+brightest.toFixed(2)+"). It is a catch-the-light layer for the near field; "+
+      "a gate that passed by deleting it would be no fix at all",
+      near>=10&&near<=45&&brightest>0.5);
+    check("v132.52 dust: the material takes NO FOG and carries per-vertex colour (fog "+
+      dp.material.fog+", vertexColors "+dp.material.vertexColors+") — the two mechanisms behind "+
+      "every confetti report since v130.1",
+      dp.material.fog===false&&dp.material.vertexColors===true);
   }
   check("v116 touch: the mobile layer is a no-op outside a browser",
     G.getHideD()===150&&G.getMouseLocked()===false);
