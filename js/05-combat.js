@@ -649,22 +649,32 @@ function vfxPlay(v){
 // A texture per DISTINCT VALUE, built once and cached. A match uses a narrow band of numbers, so
 // the cache stays small; the cap is there for the long game with strange ones, not for the normal
 // case. Same canvas path as _makeTagSprite, including its note that the headless stubs no-op it.
-const DNUM_CACHE=192;
+// v132.49 (John): "make floating damage numbers 1.6x larger". The sprite scale is what the eye
+// sees, so that is what carries the 1.6 — and the canvas and font carry it too, or the same texels
+// stretch over 1.6x the screen and the numbers get bigger AND blurrier.
+const DNUM_SCALE=1.6;
+const DNUM_W=208, DNUM_H=104;      // 128x64 * 1.6, aspect held at 2:1 so DNUM_AR still matches
+const DNUM_FONT=58, DNUM_FONT_CRIT=74;
+const DNUM_AR=2.0;
+// ⚠ 192 -> 64. A 1.6x canvas is 2.6x the bytes, and at 192 that would be ~16 MB of textures for a
+// cosmetic change. 192 was always generous — a match reuses a narrow band of values — so at 64
+// the whole cache is ~5.4 MB against the old ~6 MB. Bigger, sharper, and slightly cheaper.
+const DNUM_CACHE=64;
 let _dnumTex=null,_dnumOrder=null,_dnumMade=0;
 function _dnumTexFor(n,crit){
   if(!_dnumTex){_dnumTex={};_dnumOrder=[];}
   const key=(crit?"c":"n")+n;
   if(_dnumTex[key])return _dnumTex[key];
-  const c=document.createElement("canvas"); c.width=128; c.height=64;
+  const c=document.createElement("canvas"); c.width=DNUM_W; c.height=DNUM_H;
   const g=c.getContext("2d");
   if(g.clearRect){                                  // headless stubs no-op all of this safely
-    g.clearRect(0,0,128,64);
-    g.font=(crit?"bold 46px":"bold 36px")+" Georgia, serif";
+    g.clearRect(0,0,DNUM_W,DNUM_H);
+    g.font="bold "+(crit?DNUM_FONT_CRIT:DNUM_FONT)+"px Georgia, serif";
     g.textAlign="center"; g.textBaseline="middle";
-    g.lineWidth=7; g.strokeStyle="rgba(18,10,4,0.92)";
-    g.strokeText(String(n),64,32);
+    g.lineWidth=11; g.strokeStyle="rgba(18,10,4,0.92)";   // the outline scales with the face, or
+    g.strokeText(String(n),DNUM_W/2,DNUM_H/2);            // it thins to nothing at this size
     g.fillStyle=crit?"#FFD24A":"#F4EEDC";           // a crit is GOLD and larger — it must not read
-    g.fillText(String(n),64,32);                    // as a normal blow with a bigger font alone
+    g.fillText(String(n),DNUM_W/2,DNUM_H/2);        // as a normal blow with a bigger font alone
   }
   const t=new THREE.CanvasTexture(c);
   t.magFilter=THREE.LinearFilter; t.minFilter=THREE.LinearFilter; t.generateMipmaps=false;
@@ -692,8 +702,8 @@ function dmgNum(victim,amount,crit){
   const off=(i%3-1)*0.85;
   _dnumLast={n:n,crit:!!crit,id:victim.id}; _dnumEmits++;
   fxs(victim.root.position.x+off,victim.root.position.y+3.1+i*0.28,victim.root.position.z,
-      0xffffff,crit?1.15:0.85,crit?1.25:1.0,
-      off*0.5,2.3,0, -1.6, 1, 1, {map:_dnumTexFor(n,!!crit),ar:2.0});
+      0xffffff,(crit?1.15:0.85)*DNUM_SCALE,crit?1.25:1.0,
+      off*0.5,2.3,0, -1.6, 1, 1, {map:_dnumTexFor(n,!!crit),ar:DNUM_AR});
   return true;
 }
 // Test surface. `last` is the figure actually PUT ON SCREEN — which is the only thing worth
@@ -705,7 +715,7 @@ let _dnumLast=null,_dnumEmits=0;
 // number appear" stayed green with the attacker check deleted, because the value happened to be
 // cached already. Adjacent is not the claim.
 function dnumStats(){return {cached:_dnumTex?Object.keys(_dnumTex).length:0,made:_dnumMade,
-  emits:_dnumEmits,last:_dnumLast};}
+  emits:_dnumEmits,last:_dnumLast,scale:DNUM_SCALE,cap:DNUM_CACHE,w:DNUM_W,h:DNUM_H};}
 function fxTex(){return {soft:_texSoft,blade:_texBlade,sliver:_texSliver};}
 function fxStats(){return {maps:_fxLive.filter(e=>e.kind==="s").map(e=>({
     blade:e.m.material.map===_texBlade,sliver:e.m.material.map===_texSliver,
@@ -791,6 +801,8 @@ function puff(x,y,z,color,scale,life){
 // inside the seeded world-gen window (invariant #2 — a uuid costs four randoms).
 let _auraPts=null,_auraGeo=null,_auraPos=null,_auraCol=null,_auraMat=null;
 let _auraLife=null,_auraVel=null,_auraNext=0,_auraLive=0,_auraBase=null;
+let _auraOff=null,_auraOwn=null,_auraL0=null;   // v132.50: offset-from-owner, owner, birth-life
+let _auraEmits=0;                               // lifetime emissions — the only observable RATE
 function _auraDot(){ // a soft radial dot, built as raw bytes — canvas is stubbed in the harness
   const N=16,data=new Uint8Array(N*N*4);
   for(let y=0;y<N;y++)for(let x=0;x<N;x++){
@@ -805,6 +817,10 @@ function _auraDot(){ // a soft radial dot, built as raw bytes — canvas is stub
 function auraInit(){
   if(_auraPts)return;
   _auraPos=new Float32Array(AURA_MAX*3);
+  _auraOff=new Float32Array(AURA_MAX*3);    // v132.50: position RELATIVE to the owner
+  _auraOwn=new Array(AURA_MAX).fill(null);  // ...and which unit that is
+  _auraL0 =new Float32Array(AURA_MAX);      // birth-life; the fade curve needs it now that life
+                                            // varies per mote with the owner's level
   _auraCol=new Float32Array(AURA_MAX*3);
   _auraBase=new Float32Array(AURA_MAX*3);   // the mote's OWN colour, never scaled — see auraTick
   _auraLife=new Float32Array(AURA_MAX);
@@ -819,28 +835,43 @@ function auraInit(){
   _auraPts.renderOrder=3;
   scene.add(_auraPts);
 }
-function auraEmit(x,y,z,r,g,b){
+function auraEmit(u,yOff,rad,rise,life,r,g,b){
   auraInit();
   // claim the next slot round-robin. A full pool overwrites the OLDEST mote, which is the one
   // closest to fading anyway — so the ceiling degrades gracefully instead of dropping new work.
   const i=_auraNext; _auraNext=(_auraNext+1)%AURA_MAX;
   if(_auraLife[i]<=0)_auraLive++;
-  const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*AURA_R;
-  _auraPos[i*3]=x+Math.cos(a)*rr; _auraPos[i*3+1]=y+Math.random()*0.5; _auraPos[i*3+2]=z+Math.sin(a)*rr;
+  const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*rad;
+  // v132.50: the mote is born as an OFFSET. It never learns a world position of its own; the
+  // world position below is a derived value, recomputed from the owner on every single frame.
+  _auraOwn[i]=u;
+  _auraOff[i*3]=Math.cos(a)*rr;
+  _auraOff[i*3+1]=yOff+Math.random()*0.5;
+  _auraOff[i*3+2]=Math.sin(a)*rr;
+  _auraPos[i*3]  =u.root.position.x+_auraOff[i*3];
+  _auraPos[i*3+1]=u.root.position.y+_auraOff[i*3+1];
+  _auraPos[i*3+2]=u.root.position.z+_auraOff[i*3+2];
   _auraVel[i*3]=(Math.random()-0.5)*0.35;
-  _auraVel[i*3+1]=AURA_RISE*(0.75+Math.random()*0.5);
+  _auraVel[i*3+1]=rise*(0.75+Math.random()*0.5);
   _auraVel[i*3+2]=(Math.random()-0.5)*0.35;
   _auraBase[i*3]=r; _auraBase[i*3+1]=g; _auraBase[i*3+2]=b;
   _auraCol[i*3]=r; _auraCol[i*3+1]=g; _auraCol[i*3+2]=b;
-  _auraLife[i]=AURA_LIFE;
+  _auraLife[i]=life; _auraL0[i]=life;
+  _auraEmits++;
 }
 function auraTint(u,out){ // team colour at level 1 → gold at the cap
   const t=Math.max(0,Math.min(1,(u.lvl||0)/XP_MAX_LVL));
   const ease=t*t;                         // hold the team read low, let gold arrive late
+  // v132.50: HUE and BRIGHTNESS are separate ramps. They used to share ease=t^2, and once the
+  // DENSITY curve went superlinear too the two back-loaded curves compounded: a level 16 player
+  // — two thirds of the way up a long ladder — photographed as three dim blue specks. Gold still
+  // arrives late (that is the team read, §2.5), but the light comes up early enough to be a
+  // reward you can see on the way.
+  const lit=Math.pow(t,0.8);
   const tc=(typeof TEAMCOL!=="undefined"&&TEAMCOL[u.team]!==undefined)?TEAMCOL[u.team]:0xffffff;
   const r0=((tc>>16)&255)/255, g0=((tc>>8)&255)/255, b0=(tc&255)/255;
   const r1=((AURA_GOLD>>16)&255)/255, g1=((AURA_GOLD>>8)&255)/255, b1=(AURA_GOLD&255)/255;
-  const k=0.55+ease*(AURA_HOT-0.55);      // dim at level 1, driven past 1.0 at the cap for bloom
+  const k=0.55+lit*(AURA_HOT-0.55);       // dim at level 1, driven past 1.0 at the cap for bloom
   out[0]=(r0+(r1-r0)*ease)*k; out[1]=(g0+(g1-g0)*ease)*k; out[2]=(b0+(b1-b0)*ease)*k;
   return t;
 }
@@ -851,16 +882,33 @@ function auraTick(dt){
     for(let i=0;i<AURA_MAX;i++){
       if(_auraLife[i]<=0)continue;
       _auraLife[i]-=dt;
-      if(_auraLife[i]<=0){ _auraCol[i*3]=0;_auraCol[i*3+1]=0;_auraCol[i*3+2]=0; _auraLive--; continue; }
-      _auraPos[i*3]+=_auraVel[i*3]*dt;
-      _auraPos[i*3+1]+=_auraVel[i*3+1]*dt;
-      _auraPos[i*3+2]+=_auraVel[i*3+2]*dt;
+      if(_auraLife[i]<=0){ _auraCol[i*3]=0;_auraCol[i*3+1]=0;_auraCol[i*3+2]=0;
+        _auraOwn[i]=null; _auraLive--; continue; }
+      // v132.50 THE DRIFT PLAYS OUT IN THE OFFSET and the world position is REBUILT from the
+      // owner every frame. This IS the no-trail fix: however fast the body moves the cloud
+      // arrives with it, because the cloud has no world position of its own to be left behind at.
+      _auraOff[i*3]+=_auraVel[i*3]*dt;
+      _auraOff[i*3+1]+=_auraVel[i*3+1]*dt;
+      _auraOff[i*3+2]+=_auraVel[i*3+2]*dt;
+      const own=_auraOwn[i];
+      if(own&&own.alive&&own.root){
+        _auraPos[i*3]  =own.root.position.x+_auraOff[i*3];
+        _auraPos[i*3+1]=own.root.position.y+_auraOff[i*3+1];
+        _auraPos[i*3+2]=own.root.position.z+_auraOff[i*3+2];
+      }else{
+        // the owner died mid-flight. Let the last motes finish where they are rather than snap
+        // to the origin — and a corpse does not walk, so nothing here can smear.
+        _auraOwn[i]=null;
+        _auraPos[i*3]+=_auraVel[i*3]*dt;
+        _auraPos[i*3+1]+=_auraVel[i*3+1]*dt;
+        _auraPos[i*3+2]+=_auraVel[i*3+2]*dt;
+      }
       // FADE FROM THE STORED BASE, never by compounding the live colour. Multiplying the
       // current colour each tick decays it geometrically: a mote was down to a third of its
       // brightness within half a second, so at any instant only the five or six youngest motes
       // read at all and a 34/sec emitter photographed as a handful of sparks. Powers below 1
       // HOLD the mote near full brightness for most of its life, then drop it quickly.
-      const f=Math.pow(_auraLife[i]/AURA_LIFE,0.55);
+      const f=Math.pow(_auraLife[i]/(_auraL0[i]||1),0.55);   // v132.50: life is per-mote now
       _auraCol[i*3]=_auraBase[i*3]*f;
       _auraCol[i*3+1]=_auraBase[i*3+1]*f;
       _auraCol[i*3+2]=_auraBase[i*3+2]*f;
@@ -878,17 +926,60 @@ function auraTick(dt){
     if(d>=AURA_FAR){u._auraAcc=0;continue;}
     const near=d<=AURA_NEAR?1:(AURA_FAR-d)/(AURA_FAR-AURA_NEAR);
     const t=auraTint(u,_auraRGB);
-    const rate=(AURA_RATE_LO+(AURA_RATE_HI-AURA_RATE_LO)*t)*near;
+    // v132.50: ONE superlinear curve drives rate, radius, climb and life together, so the cap is
+    // a different SHAPE and not merely a busier one. John: "the emphasis does not change much
+    // from lvl 1 to 25". Level 1 is a few sparks at the ankles; the cap is a waist-wide column
+    // standing two and a half units tall.
+    const tc2=Math.pow(t,AURA_CURVE);
+    const rate=(AURA_RATE_LO+(AURA_RATE_HI-AURA_RATE_LO)*tc2)*near;
+    const rad =AURA_R_LO   +(AURA_R_HI   -AURA_R_LO)   *tc2;
+    const rise=AURA_RISE_LO+(AURA_RISE_HI-AURA_RISE_LO)*tc2;
+    const life=AURA_LIFE_LO+(AURA_LIFE_HI-AURA_LIFE_LO)*tc2;
     u._auraAcc=(u._auraAcc||0)+rate*dt;
     let n=Math.floor(u._auraAcc); if(n<=0)continue;
     if(n>6)n=6;                            // one unit cannot monopolise the pool in a long frame
     u._auraAcc-=n;
     for(let k=0;k<n;k++)
-      auraEmit(u.root.position.x,u.root.position.y+0.35,u.root.position.z,_auraRGB[0],_auraRGB[1],_auraRGB[2]);
+      auraEmit(u,0.35,rad,rise,life,_auraRGB[0],_auraRGB[1],_auraRGB[2]);
   }
 }
+// v132.50 instruments. auraSpread is the trail measurement and it is deliberately HORIZONTAL:
+// the vertical column is the effect John wants, the horizontal smear is the bug he reported.
+function auraSpread(only){   // pass a unit to measure ONLY its motes — see patch-aura-emits.js
+  if(!_auraPts)return 0;
+  let worst=0;
+  for(let i=0;i<AURA_MAX;i++){
+    if(_auraLife[i]<=0)continue;
+    const own=_auraOwn[i]; if(!own||!own.alive||!own.root)continue;
+    if(only&&own!==only)continue;
+    const d=Math.hypot(_auraPos[i*3]-own.root.position.x,_auraPos[i*3+2]-own.root.position.z);
+    if(d>worst)worst=d;
+  }
+  return worst;
+}
+function auraShape(u){ // the cloud this one unit is wearing: how many motes, how wide, how tall
+  if(!_auraPts)return{n:0,rad:0,top:0};
+  let n=0,rad=0,top=0;
+  for(let i=0;i<AURA_MAX;i++){
+    if(_auraLife[i]<=0||_auraOwn[i]!==u)continue;
+    n++;
+    const d=Math.hypot(_auraPos[i*3]-u.root.position.x,_auraPos[i*3+2]-u.root.position.z);
+    if(d>rad)rad=d;
+    const h=_auraPos[i*3+1]-u.root.position.y; if(h>top)top=h;
+  }
+  return{n:n,rad:rad,top:top};
+}
+function auraLive(){ // ALLOCATES. Gates and tools only — never call this from a frame.
+  const out=[];
+  if(!_auraPts)return out;
+  for(let i=0;i<AURA_MAX;i++){
+    if(_auraLife[i]<=0)continue;   // a dead slot keeps its last coordinates; only colour is zeroed
+    out.push({x:_auraPos[i*3],y:_auraPos[i*3+1],z:_auraPos[i*3+2],owned:!!_auraOwn[i]});
+  }
+  return out;
+}
 function auraStats(){return{live:_auraLive,max:AURA_MAX,built:!!_auraPts,
-  geo:_auraGeo,mat:_auraMat,pts:_auraPts};}
+  geo:_auraGeo,mat:_auraMat,pts:_auraPts,spread:auraSpread(),emits:_auraEmits};}
 function cannonPlume(f,mx,my,mz){ // the gun speaks: a flash and a modest roll of smoke
   const dx=Math.sin(f),dz=Math.cos(f);
   puff(mx,my,mz,0xffe9a8,0.9,0.14); // the muzzle flash

@@ -66,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -4781,6 +4781,16 @@ global.__G.setGameOver(false);
             "nothing from the number (cache "+c0+" → "+asPlain+" → "+asCrit+", crit flag "+
             D().last.crit+")",
             asPlain===c0+1&&asCrit===asPlain+1&&D().last.crit===true);
+          // ---- v132.49: 1.6x larger, and NOT by stretching the same texels ----
+          check("v132.49 damage number: the sprite carries the 1.6x John asked for (scale "+
+            D().scale+")",Math.abs(D().scale-1.6)<1e-9);
+          check("v132.49 damage number: …and the CANVAS grew with it, so the glyph gains texels at "+
+            "the rate the quad gains pixels — scaling the sprite alone would have made them bigger "+
+            "AND blurrier, which is not what larger means ("+D().w+"x"+D().h+", was 128x64)",
+            D().w===208&&D().h===104&&Math.abs(D().w/D().h-2.0)<1e-9);
+          check("v132.49 damage number: …and the cache ceiling came down to pay for it — a 2.6x "+
+            "heavier texture at the old 192 would be ~16 MB for a cosmetic change; at "+D().cap+
+            " it is ~5.4 MB, under what it cost before",D().cap===64);
           // ONLY THE ATTACKER. This is the one display effect that must NOT be broadcast.
           const bot=mkB(0,{}); bot.remote=null; bot.isPlayer=false;
           // ⚠ COUNT EMITS, not `made`. `made` is a cache-MISS counter: draw a value already in the
@@ -5385,6 +5395,116 @@ global.__G.setGameOver(false);
     for(let i=0;i<10;i++)A(0.05);
     check("v132.29 aura: the dead stop emitting (acc "+(hero._auraAcc||0)+")",(hero._auraAcc||0)===0);
     zero.alive=false; bot.alive=false;
+  }
+  // ---------- v132.50: THE AURA FOLLOWS THE BODY, AND THE CAP IS A DIFFERENT SHAPE ----------
+  {
+    const G=global.__G, A=G.auraTick, ST=G.auraStats, SH=G.auraShape, SP=G.auraSpread;
+    const CX=-40,CZ=40;
+    G.camera.position.set(CX,30,CZ);       // the v132.29 clear patch, and the emitter RANGE-GATES
+                                           // on the camera: a subject parked away from it emits
+                                           // nothing and every gate below would read an empty pool
+    const put=(x,z,lvl,tag)=>{
+      const u=G.makeUnit(0,"clubman",x,z,{name:"Fol"+tag,bot:{role:"citizen"}});
+      u.bot=null; u.remote="fol-"+tag; u.lvl=lvl; u._auraAcc=0; return u;
+    };
+    const drain=()=>{for(let i=0;i<40;i++)A(0.05);};   // 2.0s, past the longest mote life (1.05s)
+    drain();
+
+    // ---- 1. THE TRAIL. John: "It leaves a glowing trail behind me long after I've left an area."
+    const run=put(CX-12,CZ,G.XP_MAX_LVL,"run");
+    for(let i=0;i<24;i++)A(0.05);                       // 1.2s standing still: fill the cloud
+    const held=SH(run);
+    let worst=0, walked=0;
+    for(let i=0;i<40;i++){                              // 2.0s sprint, 0.6u per frame = 12 u/s —
+      run.root.position.x+=0.6; walked+=0.6;            // deliberately faster than any real unit
+      A(0.05);
+      const s=SP(run); if(s>worst)worst=s;
+    }
+    const after=SH(run);
+    check("v132.50 aura: the cloud FOLLOWS the body — after sprinting "+walked.toFixed(0)+
+      " units the worst mote sits "+worst.toFixed(2)+"u behind it ("+after.n+" motes aloft, "+
+      held.n+" before the run). On the world-space emitter this number WAS the distance walked "+
+      "in one mote lifetime (~12u here), which is what a trail IS — shortening the life could "+
+      "only shorten the smear, never remove it",
+      held.n>=15&&after.n>=15&&worst<2.0);
+    check("v132.50 aura: …and the gate is not measuring an empty pool — the runner alone carries "+
+      after.n+" live motes and the horizontal spread is bounded by the EMISSION RADIUS ("+
+      G.AURA_R_HI+"u), not by the walk",after.n>=10&&worst<=G.AURA_R_HI+0.6);
+    run.alive=false; drain();
+
+    // ---- 2. THE EMPHASIS. John: "does not change much from lvl 1 to 25 and needs to be more
+    //         significant." Measure the cloud each subject is actually WEARING, alone, with the
+    //         pool drained between them, and run long enough that both saturate their radius.
+    const shapeOf=(lvl,tag)=>{
+      const u=put(CX,CZ,lvl,tag);
+      let rad=0,top=0,most=0; const e0=ST().emits;
+      for(let i=0;i<400;i++){A(0.05); const s=SH(u);    // 20s — level 1 emits ~40 motes, enough
+        if(s.rad>rad)rad=s.rad; if(s.top>top)top=s.top; if(s.n>most)most=s.n;}
+      const rate=(ST().emits-e0)/20;
+      u.alive=false; drain();
+      return {rad:rad,top:top,most:most,rate:rate};
+    };
+    const s1=shapeOf(1,"s1"), s13=shapeOf(13,"s13"), s25=shapeOf(G.XP_MAX_LVL,"s25");
+    check("v132.50 aura: level 25 is a different SHAPE, not a busier one — radius "+
+      s1.rad.toFixed(2)+"u → "+s25.rad.toFixed(2)+"u (x"+(s25.rad/(s1.rad||1)).toFixed(1)+
+      ") and the column stands "+s1.top.toFixed(2)+"u → "+s25.top.toFixed(2)+"u (x"+
+      (s25.top/(s1.top||1)).toFixed(1)+"). Before v132.50 both ratios were exactly 1.0: radius, "+
+      "climb and life were flat constants and ONLY density and hue moved",
+      s1.rad>0&&s1.top>0&&s25.rad/s1.rad>2.5&&s25.top/s1.top>2.5);
+    check("v132.50 aura: …and the difference is legible in absolute terms — the cap wears a "+
+      "column "+s25.top.toFixed(2)+"u tall, taller than the man; level 1 keeps its "+
+      s1.top.toFixed(2)+"u of sparks down at the ankles",s25.top>3.0&&s1.top<1.6);
+    check("v132.50 aura: the density climbs x"+(s25.rate/(s1.rate||1)).toFixed(0)+" ("+
+      s1.rate.toFixed(1)+"/s → "+s25.rate.toFixed(1)+"/s) on a SUPERLINEAR curve — level 13 emits "+
+      s13.rate.toFixed(1)+"/s, BELOW the "+((s1.rate+s25.rate)/2).toFixed(1)+
+      "/s a straight line would give it, so the low levels stay quiet and the last third earns it",
+      s1.rate>0&&s25.rate/s1.rate>12&&s13.rate<(s1.rate+s25.rate)/2*0.92);
+    check("v132.50 aura: the pool still HOLDS with the cap emitting at "+s25.rate.toFixed(0)+
+      "/s and living "+G.AURA_LIFE_HI+"s — most motes one unit ever wore at once: "+s25.most+
+      " of "+G.AURA_MAX+" slots",s25.most>0&&s25.most<=G.AURA_MAX);
+
+    // ---- 3. the owner dies mid-flight: the motes must not snap to the origin
+    const doomed=put(CX,CZ,G.XP_MAX_LVL,"doom");
+    for(let i=0;i<20;i++)A(0.05);
+    const beforeDeath=ST().live;
+    const px=doomed.root.position.x, pz=doomed.root.position.z;
+    doomed.alive=false;
+    A(0.05);
+    // read the LIFE array, not the position buffer: a dead slot keeps its last coordinates, so
+    // the raw buffer reported 320 of 320 "near the corpse" and could not have failed.
+    const orphans=G.auraLive().filter(m=>!m.owned);   // exactly the dead man's motes, detached
+    let stray=0;
+    for(const m of orphans)if(Math.hypot(m.x-px,m.z-pz)>4)stray++;
+    check("v132.50 aura: a mote whose owner dies mid-flight finishes where it is — it does NOT "+
+      "snap to the world origin ("+beforeDeath+" aloft at the moment of death, "+orphans.length+
+      " now ownerless, "+stray+" of them stray)",beforeDeath>0&&orphans.length>=10&&stray===0);
+    drain();
+
+    // ---- 4. the LIGHT comes up early; the GOLD still arrives late ----
+    // MEASURE TOTAL LIGHT, not the peak channel. The first version of this gate used the peak
+    // and read a FALL from level 1 to level 13: the hue lerp carries the colour from a blue
+    // whose strongest channel is 0.85 through a desaturated middle, so the peak channel drops
+    // while the light plainly rises. Peak channel is a hue artefact wearing a brightness costume.
+    const lit=lvl=>{const u={lvl:lvl,team:0},c=[0,0,0];G.auraTint(u,c);return c;};
+    const light=c=>c[0]+c[1]+c[2];
+    const L1=light(lit(1)), L8=light(lit(8)), L16=light(lit(16)), L25=light(lit(G.XP_MAX_LVL));
+    check("v132.50 aura: the light rises the whole way up the ladder — "+L1.toFixed(2)+" → "+
+      L8.toFixed(2)+" → "+L16.toFixed(2)+" → "+L25.toFixed(2)+", the cap x"+
+      (L25/L1).toFixed(1)+" level 1",L1<L8&&L8<L16&&L16<L25&&L25/L1>3);
+    check("v132.50 aura: level 16 carries "+((L16/L25)*100).toFixed(0)+
+      "% of the cap's light. When hue and brightness shared one ease=t^2 curve it carried 49%, "+
+      "and with the density curve now superlinear as well the two back-loaded ramps compounded "+
+      "into a mid-game you could not see at all",L16/L25>0.58);
+    // …and the HUE is untouched: gold still arrives late, so the team read survives (§2.5)
+    const norm=a=>{const m=Math.max(a[0],a[1],a[2])||1;return [a[0]/m,a[1]/m,a[2]/m];};
+    const dist=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);
+    const tc=G.TEAMCOL[0], team=norm([((tc>>16)&255)/255,((tc>>8)&255)/255,(tc&255)/255]);
+    const gd=G.AURA_GOLD, gold=norm([((gd>>16)&255)/255,((gd>>8)&255)/255,(gd&255)/255]);
+    const n8=norm(lit(8));
+    check("v132.50 aura: brighter is NOT yellower — at level 8 the hue is still unmistakably "+
+      "TEAM (distance "+dist(n8,team).toFixed(2)+" against "+dist(n8,gold).toFixed(2)+
+      " to gold), so the light was raised without spending the team read §2.5 protects",
+      dist(n8,team)<dist(n8,gold)*0.4);
   }
   check("v116 touch: the mobile layer is a no-op outside a browser",
     G.getHideD()===150&&G.getMouseLocked()===false);

@@ -17,19 +17,23 @@ try{ createCanvas=require("canvas").createCanvas; }
 catch(e){ console.error("needs the `canvas` package: npm i canvas"); process.exit(1); }
 
 const src=fs.readFileSync(path.join(ROOT,"js","05-combat.js"),"utf8");
-const a=src.indexOf("const DNUM_CACHE="), b=src.indexOf("\n}",src.indexOf("function _dnumTexFor("))+2;
+// ⚠ slice from the FIRST constant, not from DNUM_CACHE — v132.49 added DNUM_SCALE/W/H/FONT
+// above it, and starting lower leaves them undefined. Same trap tools/fxshapes.js hit.
+const a=src.indexOf("const DNUM_SCALE="), b=src.indexOf("\n}",src.indexOf("function _dnumTexFor("))+2;
 if(a<0||b<2){console.error("could not find _dnumTexFor");process.exit(1);}
 const body=src.slice(a,b);
 // stand in for the browser + three.js surfaces the shipped function touches
 const made=[];
 const THREE={CanvasTexture:function(c){this.image=c;made.push(c);},LinearFilter:1};
-const document={createElement:()=>createCanvas(128,64)};
+// the canvas size is READ from the shipped constants, so this tool cannot drift from the game
+const DW=+(src.match(/DNUM_W=(\d+)/)||[])[1]||128, DH=+(src.match(/DNUM_H=(\d+)/)||[])[1]||64;
+const document={createElement:()=>createCanvas(DW,DH)};
 const out={};
 new Function("THREE","document","out",body+"\nout.f=_dnumTexFor;")(THREE,document,out);
 
 const SAMPLES=[[7,false],[12,false],[23,false],[48,false],[136,false],
                [24,true],[96,true],[272,true]];
-const CW=128,CH=64,COLS=4,PAD=6;
+const CW=DW,CH=DH,COLS=4,PAD=6;
 const W=COLS*(CW+PAD)+PAD, H=Math.ceil(SAMPLES.length/COLS)*(CH+PAD)+PAD;
 const sheet=createCanvas(W,H), g=sheet.getContext("2d");
 g.fillStyle="#171922"; g.fillRect(0,0,W,H);

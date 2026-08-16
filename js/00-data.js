@@ -893,11 +893,34 @@ const XP_MAX_LVL=25, BUFF_MAX_STACK=3, BOARD_REACH=5, QUEST_REROLL_MAX=3;
 // ---------- v132.29 THE LEVEL AURA — every dial in one place ----------
 // Rising motes off a levelled player: team-tinted at low level, gold at the cap. Cosmetic only,
 // never on the wire, never simulation. See tools/patch-aura.js for the reasoning.
-const AURA_MAX=320,        // mote slots for the WHOLE scene — one pooled Points, one draw call
+const AURA_MAX=640,        // mote slots for the WHOLE scene — one pooled Points, one draw call.
+                           // 320 until v132.50; a capped player now wears ~110 of them alone.
       AURA_NEAR=34,        // full strength within this distance of the camera
       AURA_FAR=62,         // invisible beyond it — John: you should have to get close (v125)
-      AURA_RATE_LO=2.6,    // motes/sec at level 1
-      AURA_RATE_HI=34.0,   // motes/sec at the cap
+      // v132.50 (John, playtesting again): "It leaves a glowing trail behind me long after I've
+      // left an area... The emphasis on the aura also does not change much from lvl 1 to 25."
+      // THE TRAIL was structural, not a duration: a mote was emitted at a world POSITION, so a
+      // walking player painted a line BY CONSTRUCTION and v132.47's shorter life could only
+      // shorten the line. Motes now carry an offset from their owner and are re-anchored to it
+      // every frame (05-combat.js auraTick), so the cloud travels WITH the body. That is what
+      // frees the life to grow again below - a long-lived mote is only a smear if it is left.
+      // THE EMPHASIS was a shape problem: level 1 and the cap differed in DENSITY and HUE alone,
+      // same radius, same climb, same life, so the cap was a busier version of the same puff.
+      // All four dials now ride one superlinear curve.
+      AURA_RATE_LO=1.4,    // motes/sec at level 1 (was 2.6 - start sparser so the climb reads)
+      AURA_RATE_HI=105.0,  // motes/sec at the cap (was 34.0). 54 was the first attempt and it
+                           // photographed as a light sparkle, not an aura: 54/s x 1.05s of life
+                           // is 57 motes spread over a column two and a half units tall, and at
+                           // arm's length that is a dusting. 105/s holds ~110 and reads as a
+                           // swarm. The pool below carries it.
+      AURA_CURVE=1.35,     // superlinear: the low levels stay quiet and the last third earns the
+                           // spectacle. t^1.35 puts level 13 at 0.40 of the ramp, not 0.52.
+      AURA_R_LO=0.34,      // emission radius, level 1 -> cap   (was a flat 0.78)
+      AURA_R_HI=1.15,
+      AURA_RISE_LO=0.75,   // units/sec climbed, level 1 -> cap (was a flat 0.90)
+      AURA_RISE_HI=2.40,
+      AURA_LIFE_LO=0.40,   // seconds a mote lives, level 1 -> cap (was a flat 0.55). The cap is
+      AURA_LIFE_HI=1.05,   // safe ONLY because motes now follow the body - see above.
       // v132.47 (John, playtesting): "the aura lingers too long… it needs to go away much much
       // quicker". A mote is emitted at a POSITION and then rises on its own — it does not follow
       // the unit. At 1.45s and 1.55u/s each one travelled 2.2 units, so a walking player dragged a
@@ -905,13 +928,10 @@ const AURA_MAX=320,        // mote slots for the WHOLE scene — one pooled Poin
       // ground, which is what his screenshot shows above the houses.
       // Life and climb only. The RATE is untouched: level 25 should be no less dense, it should
       // simply not smear.
-      AURA_LIFE=0.55,      // seconds a mote lives (was 1.45)
-      AURA_RISE=0.90,      // units/sec it climbs (was 1.55) — half a unit travelled, not 2.2
-      AURA_R=0.78,         // emission radius around the unit
       AURA_GOLD=0xFFC64A,  // the cap colour — warm, agrees with the §2 palette
-      AURA_HOT=1.38,       // cap multiplier: just past the 0.86 bloom threshold (§4.6) and NO
+      AURA_HOT=1.70,       // cap multiplier: just past the 0.86 bloom threshold (§4.6) and NO
                            // further — 3.2 clipped every channel and rendered the gold as white
-      AURA_SIZE=11.0;      // SCREEN-space mote size, in pixels (sizeAttenuation is OFF).
+      AURA_SIZE=13.0;      // SCREEN-space mote size, in pixels (sizeAttenuation is OFF).
                            // The tuning history matters: 0.42 world-space was flatly
                            // invisible, 0.9 was thin, and 1.3 read ONLY in extreme close-up. Sizing
                            // for the FAR end (2.3) then blew the near end out: with the composer off
