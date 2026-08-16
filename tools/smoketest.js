@@ -66,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,AURA_LEASH,AURA_LEASH_Y,puff,fxEffects:()=>effects,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -2654,6 +2654,22 @@ global.__G.setGameOver(false);
       /fetch\(req,\s*\{\s*cache:\s*["']no-cache["']\s*\}\)/.test(netFirst));
     check("v128.7 deploy: the cache-first branch is NOT forced to revalidate (that is the half that must stay cheap)",
       /fetch\(req\)/.test(swSrc.slice(swSrc.indexOf("CACHE-FIRST for the rest"))));
+    // v132.51 THE GUARD THAT WAS MISSING, AND IT COST A PLAYTEST. Every deploy gate above
+    // watches the FETCH handler. Nothing watched INSTALL, where the cache is actually filled —
+    // and cache.add() revalidates against the browser's own HTTP cache, so a brand-new worker
+    // could fill a brand-new cache with YESTERDAY'S FILES. John played a build with v132.50's
+    // 05-combat.js and v132.49's 00-data.js: auraTick threw ReferenceError sixty times a second
+    // and every particle in the game froze in mid-air. Bumping VERSION did not save him, because
+    // VERSION only names the cache — it says nothing about what goes into it.
+    // STRIP THE COMMENTS FIRST. The first version of this gate matched the raw slice and passed
+    // happily against a build where the install had been reverted to c.add(u) — because the
+    // COMMENT above it says cache:"reload". A gate that reads prose is not reading code.
+    const inst=swSrc.slice(swSrc.indexOf('addEventListener("install"'),swSrc.indexOf('addEventListener("activate"'))
+      .replace(/^\s*\/\/.*$/gm,"");
+    check("v132.51 deploy: the INSTALL fills the cache from the NETWORK (cache:\"reload\"), not "+
+      "from the browser's HTTP cache — otherwise a version bump can ship a build that is new in "+
+      "some files and stale in others, which is not a slow update but a different program",
+      /cache\s*:\s*["']reload["']/.test(inst));
     check("v128.7 deploy: sw.js itself is registered with updateViaCache:none",
       /register\(\s*["']sw\.js["']\s*,\s*\{[^}]*updateViaCache\s*:\s*["']none["']/.test(htmlSrc));
     // the automatic second load, and the two guards that stop it looping or bouncing a first visit
@@ -5463,21 +5479,25 @@ global.__G.setGameOver(false);
       "/s and living "+G.AURA_LIFE_HI+"s — most motes one unit ever wore at once: "+s25.most+
       " of "+G.AURA_MAX+" slots",s25.most>0&&s25.most<=G.AURA_MAX);
 
-    // ---- 3. the owner dies mid-flight: the motes must not snap to the origin
+    // ---- 3. the owner dies mid-flight: every one of its motes goes out THAT FRAME ----
+    // v132.51 reverses v132.50's choice here. v132.50 let an orphan drift out the rest of its
+    // life "rather than snap to the origin"; John then said plainly that sparkles must "only be
+    // at the leveled unit", and a mote drifting where its owner is not is exactly that fault in
+    // miniature. Read the LIFE array, never the position buffer — a dead slot keeps its last
+    // coordinates, so an earlier version of this gate counted 320 of 320 "near the corpse" and
+    // could not have failed.
     const doomed=put(CX,CZ,G.XP_MAX_LVL,"doom");
     for(let i=0;i<20;i++)A(0.05);
-    const beforeDeath=ST().live;
-    const px=doomed.root.position.x, pz=doomed.root.position.z;
+    const beforeDeath=G.auraShape(doomed).n;
     doomed.alive=false;
     A(0.05);
-    // read the LIFE array, not the position buffer: a dead slot keeps its last coordinates, so
-    // the raw buffer reported 320 of 320 "near the corpse" and could not have failed.
-    const orphans=G.auraLive().filter(m=>!m.owned);   // exactly the dead man's motes, detached
-    let stray=0;
-    for(const m of orphans)if(Math.hypot(m.x-px,m.z-pz)>4)stray++;
-    check("v132.50 aura: a mote whose owner dies mid-flight finishes where it is — it does NOT "+
-      "snap to the world origin ("+beforeDeath+" aloft at the moment of death, "+orphans.length+
-      " now ownerless, "+stray+" of them stray)",beforeDeath>0&&orphans.length>=10&&stray===0);
+    const orphans=G.auraLive().filter(m=>!m.owned).length;
+    const stillHis=G.auraLive().length;
+    check("v132.51 aura: when the owner dies its whole cloud goes out THAT FRAME — "+beforeDeath+
+      " motes aloft at the moment of death, "+orphans+" ownerless survivors one frame later, "+
+      stillHis+" motes left alive in the entire scene. v132.50 let them drift out the rest of "+
+      "their life instead, which is a light sitting where its owner is not",
+      beforeDeath>=25&&orphans===0&&stillHis===0);
     drain();
 
     // ---- 4. the LIGHT comes up early; the GOLD still arrives late ----
@@ -5505,6 +5525,47 @@ global.__G.setGameOver(false);
       "TEAM (distance "+dist(n8,team).toFixed(2)+" against "+dist(n8,gold).toFixed(2)+
       " to gold), so the light was raised without spending the team read §2.5 protects",
       dist(n8,team)<dist(n8,gold)*0.4);
+  }
+  // ---------- v132.51: ONE EFFECT SYSTEM MUST NOT FREEZE THE OTHERS ----------
+  {
+    const G=global.__G;
+    const CX=-40,CZ=40;
+    G.camera.position.set(CX,30,CZ);
+    // Break auraTick the way a mixed cache broke it. A levelled human with no root throws on the
+    // emitter's very first line — the same shape of failure as a missing constant, reached
+    // through the REAL updateEffects rather than by swapping the function out.
+    const wreck=G.makeUnit(0,"clubman",CX,CZ,{name:"Wreck",bot:{role:"citizen"}});
+    wreck.bot=null; wreck.remote="wreck"; wreck.lvl=5; wreck._auraAcc=0; wreck.root=null;
+    let direct=false; try{G.auraTick(0.05);}catch(e){direct=true;}
+    check("v132.51 fx: the gate is not vacuous — auraTick really does throw on this unit ("+
+      (direct?"threw":"DID NOT THROW")+"), so the fence below is being asked a real question",
+      direct===true);
+    for(let i=0;i<6;i++)G.puff(CX,2,CZ,0xffffff,0.6,0.30);
+    const puffs0=G.fxEffects().length;
+    let escaped=false;
+    try{ for(let i=0;i<40;i++)G.updateEffects(0.05); }catch(e){ escaped=true; }
+    const puffs1=G.fxEffects().length;
+    check("v132.51 fx: a throwing effect system is FENCED — updateEffects survived it ("+
+      (escaped?"THREW":"held")+") and the puff sprites still faded ("+puffs0+" → "+puffs1+
+      "). Before the fence, auraTick threw on line one and the fade loop three systems below it "+
+      "never ran, so every puff a villager had ever made hung in the air lit forever — which is "+
+      "the band of lights John photographed over his town and reported as level sparkles",
+      !escaped&&puffs0>=6&&puffs1===0);
+    const wi=G.units.indexOf(wreck); if(wi>=0)G.units.splice(wi,1);   // it has no root: evict it
+
+    // ---- THE LEASH ----
+    const led=G.makeUnit(0,"clubman",CX,CZ,{name:"Leash",bot:{role:"citizen"}});
+    led.bot=null; led.remote="leash"; led.lvl=G.XP_MAX_LVL; led._auraAcc=0;
+    let worst=0;
+    for(let i=0;i<60;i++){G.auraTick(0.05); const s=G.auraSpread(led); if(s>worst)worst=s;}
+    for(let i=0;i<60;i++){led.root.position.x+=0.5; G.auraTick(0.05);
+      const s=G.auraSpread(led); if(s>worst)worst=s;}
+    check("v132.51 aura: no mote is EVER further than the leash from the body that owns it ("+
+      worst.toFixed(2)+"u against a leash of "+G.AURA_LEASH+"u), standing or sprinting. Today's "+
+      "radius and climb already keep it under; the clamp is what keeps John's rule true when "+
+      "some later version widens them",worst>0&&worst<=G.AURA_LEASH+0.01);
+    led.alive=false;
+    for(let i=0;i<10;i++)G.auraTick(0.05);
   }
   check("v116 touch: the mobile layer is a no-op outside a browser",
     G.getHideD()===150&&G.getMouseLocked()===false);

@@ -28,7 +28,7 @@
    If this ever misbehaves, unregistering it in devtools returns the site to plain HTTP loading —
    nothing in the game depends on it being there.                                              */
 
-const VERSION="v132.50";
+const VERSION="v132.51";
 const CACHE="regicide-"+VERSION;
 
 // The shell: enough to boot and show something. Deliberately NOT the whole 29 MB — a first visit
@@ -50,7 +50,14 @@ self.addEventListener("install",e=>{
     // one at a time and forgiving: addAll() rejects the WHOLE install if any single file 404s,
     // and a shell list that drifts out of step with the repo would then disable the worker
     // silently and permanently.
-    await Promise.all(SHELL.map(u=>c.add(u).catch(err=>console.warn("[sw] skip",u,err&&err.message))));
+    // v132.51 cache:"reload" — MANDATORY, not an optimisation. c.add(u) revalidates against
+    // the browser's HTTP cache, so a new worker could refill a brand-new cache with OLD FILES and
+    // produce a build that is new in some files and stale in others. That is not a slow update,
+    // it is a DIFFERENT PROGRAM: v132.50's 05-combat.js against v132.49's 00-data.js threw
+    // ReferenceError on every frame and froze every particle in the game in mid-air.
+    await Promise.all(SHELL.map(u=>
+      c.add(new Request(u,{cache:"reload"}))
+        .catch(err=>console.warn("[sw] skip",u,err&&err.message))));
     await self.skipWaiting();
   })());
 });

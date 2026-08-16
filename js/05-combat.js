@@ -841,12 +841,17 @@ function auraEmit(u,yOff,rad,rise,life,r,g,b){
   // closest to fading anyway — so the ceiling degrades gracefully instead of dropping new work.
   const i=_auraNext; _auraNext=(_auraNext+1)%AURA_MAX;
   if(_auraLife[i]<=0)_auraLive++;
-  const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*rad;
+  // v132.51 THE LEASH APPLIES AT BIRTH, not just on the next advance. The clamp lived only in
+  // the advance loop at first, and mutation testing caught it: the advance loop runs BEFORE the
+  // emit loop, so a mote born outside the leash was drawn out there for one whole frame before
+  // anything pulled it in. One frame at sixty hertz is still a light where its owner is not.
+  const a=Math.random()*Math.PI*2;
+  let rr=Math.sqrt(Math.random())*rad; if(rr>AURA_LEASH)rr=AURA_LEASH;
   // v132.50: the mote is born as an OFFSET. It never learns a world position of its own; the
   // world position below is a derived value, recomputed from the owner on every single frame.
   _auraOwn[i]=u;
   _auraOff[i*3]=Math.cos(a)*rr;
-  _auraOff[i*3+1]=yOff+Math.random()*0.5;
+  _auraOff[i*3+1]=Math.min(AURA_LEASH_Y,yOff+Math.random()*0.5);
   _auraOff[i*3+2]=Math.sin(a)*rr;
   _auraPos[i*3]  =u.root.position.x+_auraOff[i*3];
   _auraPos[i*3+1]=u.root.position.y+_auraOff[i*3+1];
@@ -891,18 +896,25 @@ function auraTick(dt){
       _auraOff[i*3+1]+=_auraVel[i*3+1]*dt;
       _auraOff[i*3+2]+=_auraVel[i*3+2]*dt;
       const own=_auraOwn[i];
-      if(own&&own.alive&&own.root){
-        _auraPos[i*3]  =own.root.position.x+_auraOff[i*3];
-        _auraPos[i*3+1]=own.root.position.y+_auraOff[i*3+1];
-        _auraPos[i*3+2]=own.root.position.z+_auraOff[i*3+2];
-      }else{
-        // the owner died mid-flight. Let the last motes finish where they are rather than snap
-        // to the origin — and a corpse does not walk, so nothing here can smear.
-        _auraOwn[i]=null;
-        _auraPos[i*3]+=_auraVel[i*3]*dt;
-        _auraPos[i*3+1]+=_auraVel[i*3+1]*dt;
-        _auraPos[i*3+2]+=_auraVel[i*3+2]*dt;
+      if(!own||!own.alive||!own.root){
+        // v132.51 (John): "level sparkles should not linger whatsoever and only be at the
+        // leveled unit." v132.50 let an orphan finish its life adrift in world space. That is a
+        // mote somewhere its owner is not, which is the whole thing he asked me to remove — so
+        // it dies on the frame it is orphaned, not a second later.
+        _auraCol[i*3]=0;_auraCol[i*3+1]=0;_auraCol[i*3+2]=0;
+        _auraLife[i]=0; _auraOwn[i]=null; _auraLive--; continue;
       }
+      // A HARD LEASH as well as a rebuild. The offset is bounded by radius + climb x life today,
+      // but that is three constants agreeing to be small; this is the invariant itself, and it
+      // is what makes "only at the levelled unit" true no matter what those constants become.
+      if(_auraOff[i*3]*_auraOff[i*3]+_auraOff[i*3+2]*_auraOff[i*3+2]>AURA_LEASH*AURA_LEASH){
+        const m=Math.hypot(_auraOff[i*3],_auraOff[i*3+2])||1, k=AURA_LEASH/m;
+        _auraOff[i*3]*=k; _auraOff[i*3+2]*=k;
+      }
+      if(_auraOff[i*3+1]>AURA_LEASH_Y)_auraOff[i*3+1]=AURA_LEASH_Y;
+      _auraPos[i*3]  =own.root.position.x+_auraOff[i*3];
+      _auraPos[i*3+1]=own.root.position.y+_auraOff[i*3+1];
+      _auraPos[i*3+2]=own.root.position.z+_auraOff[i*3+2];
       // FADE FROM THE STORED BASE, never by compounding the live colour. Multiplying the
       // current colour each tick decays it geometrically: a mote was down to a third of its
       // brightness within half a second, so at any instant only the five or six youngest motes
@@ -1160,14 +1172,33 @@ function updateProjectiles(dt){
     p.m.lookAt(tx,ty,tz); p.m.rotateX(Math.PI/2);
   }
 }
+// v132.51 ONE SYSTEM MUST NOT BE ABLE TO FREEZE THE OTHERS. Reported ONCE per system: a throw
+// here repeats sixty times a second, and a console that scrolls is a console nobody reads.
+const _fxFail={};
+function _fxFence(name,fn,dt){
+  try{ fn(dt); }
+  catch(e){
+    if(!_fxFail[name]){
+      _fxFail[name]=1;
+      console.error("[fx] "+name+" threw — the other effect systems keep running: "+(e&&e.message));
+      // The one failure mode that actually reached a player was a MIXED CACHE (see sw.js
+      // v132.51), and from the inside that looks exactly like a missing symbol. Say so.
+      if(typeof msg==="function")
+        msg("A visual effect failed. If lights are stuck in the air, hard-reload: Ctrl+Shift+R.","red");
+    }
+  }
+}
 function updateEffects(dt){
   // v132.29: the level aura rides here because BOTH frame paths provably call updateEffects —
   // tickBody (09-main.js) and NET.guestFrame (10-net.js:2133). Putting it in tickBody alone is
   // trap #12, the v128.8 ribbon a guest could never clear.
-  auraTick(dt);
-  if(typeof buffFxTick==="function")buffFxTick(dt); // v132.39 the Batch D rings — same reasoning
-                                                   // as the aura above: BOTH frame paths land here
-  if(typeof fxTick==="function")fxTick(dt);         // v132.41 the set-pieces, same reasoning again
+  _fxFence("aura",auraTick,dt);
+  if(typeof buffFxTick==="function")_fxFence("rings",buffFxTick,dt); // v132.39 the Batch D rings
+  if(typeof fxTick==="function")_fxFence("setpieces",fxTick,dt);     // v132.41 the set-pieces
+  // THE FADE LOOP IS THE CLEANUP PASS FOR EVERY puff() IN THE GAME, and until v132.51 it sat
+  // downstream of three systems that could throw. When auraTick did, sprites stopped fading and
+  // simply accumulated — John photographed a town holding hundreds of them. It runs last, and
+  // nothing above it can now stop it running.
   for(let i=effects.length-1;i>=0;i--){
     const e=effects[i]; e.t-=dt;
     e.s.scale.multiplyScalar(1+dt*4); e.s.material.opacity=Math.max(0,e.t*2.5);

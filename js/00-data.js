@@ -931,6 +931,12 @@ const AURA_MAX=640,        // mote slots for the WHOLE scene — one pooled Poin
       AURA_GOLD=0xFFC64A,  // the cap colour — warm, agrees with the §2 palette
       AURA_HOT=1.70,       // cap multiplier: just past the 0.86 bloom threshold (§4.6) and NO
                            // further — 3.2 clipped every channel and rendered the gold as white
+      // v132.51 THE LEASH. John: "level sparkles ... should only be at the leveled unit."
+      // Nothing may render further than this from the body that owns it. The horizontal figure
+      // is a little over the cap's emission radius (1.15); the vertical one clears the cap's
+      // column (0.85 birth + 2.40 x 1.05 climb = 3.37) with room and no more.
+      AURA_LEASH=1.8,      // metres, horizontal — a smear cannot exceed this by construction
+      AURA_LEASH_Y=4.2,    // metres, vertical — the column is the effect, so this is generous
       AURA_SIZE=13.0;      // SCREEN-space mote size, in pixels (sizeAttenuation is OFF).
                            // The tuning history matters: 0.42 world-space was flatly
                            // invisible, 0.9 was thin, and 1.3 read ONLY in extreme close-up. Sizing
