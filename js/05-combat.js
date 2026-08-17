@@ -981,6 +981,44 @@ function auraShape(u){ // the cloud this one unit is wearing: how many motes, ho
   }
   return{n:n,rad:rad,top:top};
 }
+// v132.53 THE SWEEP — the invariant, enforced where every frame path passes. Cheap: a lit point
+// costs six compares and a hypot, and the overwhelming majority of the pool is already black, so
+// the common case is one compare per slot. Returns how many it had to put out, which is a number
+// worth watching: in a healthy build it is zero for the whole match.
+let _auraSwept=0;
+function auraSweep(){
+  if(!_auraPts)return 0;
+  let killed=0;
+  for(let i=0;i<AURA_MAX;i++){
+    if(_auraCol[i*3]===0&&_auraCol[i*3+1]===0&&_auraCol[i*3+2]===0)continue;  // already dark
+    const own=_auraOwn[i];
+    const ok = _auraLife[i]>0 && own && own.alive && own.root &&
+               (typeof isHuman!=="function"||isHuman(own)) && own.lvl>0 &&
+               Math.hypot(_auraPos[i*3]-own.root.position.x,
+                          _auraPos[i*3+2]-own.root.position.z)<=AURA_LEASH+0.5;
+    if(ok)continue;
+    _auraCol[i*3]=0;_auraCol[i*3+1]=0;_auraCol[i*3+2]=0;
+    if(_auraLife[i]>0){_auraLife[i]=0;_auraLive--;}
+    _auraOwn[i]=null; killed++;
+  }
+  if(killed){ _auraSwept+=killed; if(_auraGeo)_auraGeo.attributes.color.needsUpdate=true; }
+  return killed;
+}
+function auraLit(){ // what is ACTUALLY on screen, as opposed to what the counter believes
+  if(!_auraPts)return{lit:0,deadLit:0,worst:0};
+  let lit=0,deadLit=0,worst=0;
+  for(let i=0;i<AURA_MAX;i++){
+    if(_auraCol[i*3]===0&&_auraCol[i*3+1]===0&&_auraCol[i*3+2]===0)continue;
+    lit++;
+    if(_auraLife[i]<=0)deadLit++;
+    const own=_auraOwn[i];
+    if(own&&own.root){
+      const d=Math.hypot(_auraPos[i*3]-own.root.position.x,_auraPos[i*3+2]-own.root.position.z);
+      if(d>worst)worst=d;
+    }else worst=Infinity;   // lit with no owner at all is the worst case there is
+  }
+  return{lit:lit,deadLit:deadLit,worst:worst};
+}
 function auraLive(){ // ALLOCATES. Gates and tools only — never call this from a frame.
   const out=[];
   if(!_auraPts)return out;
@@ -990,8 +1028,13 @@ function auraLive(){ // ALLOCATES. Gates and tools only — never call this from
   }
   return out;
 }
-function auraStats(){return{live:_auraLive,max:AURA_MAX,built:!!_auraPts,
-  geo:_auraGeo,mat:_auraMat,pts:_auraPts,spread:auraSpread(),emits:_auraEmits};}
+function auraStats(){
+  // v132.53: `live` is a COUNTER and it lied to me twice while John looked at thirty dots.
+  // Everything from `lit` down is measured off the colour buffer that the GPU actually draws.
+  const L=auraLit();
+  return{live:_auraLive,max:AURA_MAX,built:!!_auraPts,
+    geo:_auraGeo,mat:_auraMat,pts:_auraPts,spread:auraSpread(),emits:_auraEmits,
+    lit:L.lit,deadLit:L.deadLit,worst:L.worst,swept:_auraSwept};}
 function cannonPlume(f,mx,my,mz){ // the gun speaks: a flash and a modest roll of smoke
   const dx=Math.sin(f),dz=Math.cos(f);
   puff(mx,my,mz,0xffe9a8,0.9,0.14); // the muzzle flash

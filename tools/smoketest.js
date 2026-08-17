@@ -66,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,AURA_LEASH,AURA_LEASH_Y,puff,fxEffects:()=>effects,dustPts:()=>dustPts,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,auraSweep,auraLit,renderFrame,AURA_LEASH,AURA_LEASH_Y,puff,fxEffects:()=>effects,dustPts:()=>dustPts,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -5525,6 +5525,66 @@ global.__G.setGameOver(false);
       "TEAM (distance "+dist(n8,team).toFixed(2)+" against "+dist(n8,gold).toFixed(2)+
       " to gold), so the light was raised without spending the team read §2.5 protects",
       dist(n8,team)<dist(n8,gold)*0.4);
+  }
+  // ---------- v132.53: A LIGHT WITH NO LIVING OWNER DIES ON THE RENDER PATH ----------
+  // The scenario is the one John photographed and I could not reproduce: the simulation stops
+  // touching the aura while the screen keeps drawing. Here that is forced honestly — a full
+  // cloud is raised, then auraTick is simply never called again, which is what a throw, a menu,
+  // a gameOver or any starved frame path amounts to from the pool's point of view.
+  {
+    const G=global.__G, CX=-40, CZ=40;
+    G.camera.position.set(CX,30,CZ);
+    for(let i=0;i<40;i++)G.auraTick(0.05);          // drain whatever earlier blocks left aloft
+    const hero=G.makeUnit(0,"clubman",CX,CZ,{name:"Sweep",bot:{role:"citizen"}});
+    hero.bot=null; hero.remote="sweep"; hero.lvl=G.XP_MAX_LVL; hero._auraAcc=0;
+    for(let i=0;i<30;i++)G.auraTick(0.05);
+    const full=G.auraLit();
+    check("v132.53 aura: the cloud is up before the simulation is cut — "+full.lit+
+      " points actually lit on the colour buffer the GPU draws, not a counter's opinion of them",
+      full.lit>=25);
+    // CUT THE SIMULATION. auraTick is never called again from here.
+    hero.root.position.x+=40;                        // …and the body walks away, as John did
+    const stranded=G.auraLit();
+    check("v132.53 aura: …and with the sim cut, those "+stranded.lit+" points are STILL lit and "+
+      "now "+(stranded.worst===Infinity?"unowned":stranded.worst.toFixed(0)+"u")+" from the body "+
+      "— this is the photograph, reproduced: a light where its owner is not",
+      stranded.lit>=25&&stranded.worst>10);
+    const killed=G.auraSweep();                      // exactly what renderFrame does every frame
+    const after=G.auraLit();
+    // Assert the INVARIANT, not a zero. Another block's still-living subject may legitimately be
+    // wearing motes at this moment, and "after.lit===0" quietly demanded that it not exist — a
+    // gate that is right for the wrong reason today and red for an unrelated reason tomorrow.
+    check("v132.53 aura: ONE render-path sweep puts out all "+killed+" of the stranded points ("+
+      stranded.lit+" lit → "+after.lit+", worst distance from an owner now "+
+      (after.lit?after.worst.toFixed(2)+"u":"n/a")+" against a leash of "+G.AURA_LEASH+
+      "u). renderFrame is the one function every frame path calls; auraTick is reached only "+
+      "through tickBody, which returns early on the menu and skips the whole block on gameOver "+
+      "— trap #12, which this file names twice already",
+      killed>=25&&after.deadLit===0&&after.worst<=G.AURA_LEASH+0.5);
+    // and it must NOT put out a healthy cloud
+    hero.root.position.x-=40; hero._auraAcc=0;
+    for(let i=0;i<30;i++)G.auraTick(0.05);
+    const healthy=G.auraLit().lit, culled=G.auraSweep(), left=G.auraLit().lit;
+    check("v132.53 aura: …and it is not a mote-killer — a HEALTHY cloud of "+healthy+
+      " survives the same sweep untouched ("+culled+" culled, "+left+" left). A guard that "+
+      "cleared the pool every frame would pass the check above and delete the feature",
+      healthy>=25&&culled===0&&left===healthy);
+    // THE WIRING. Everything above calls auraSweep() by hand, which proves the function works and
+    // proves nothing about whether the game ever runs it. Strand a cloud again and hand the frame
+    // to renderFrame itself — if the call is not wired in, these lights stay on.
+    hero.root.position.x+=40;
+    const beforeRF=G.auraLit();
+    G.renderFrame(0.05);
+    const afterRF=G.auraLit();
+    check("v132.53 aura: RENDERFRAME does the sweeping, not just the test — "+beforeRF.lit+
+      " stranded points lit, one renderFrame later "+afterRF.lit+
+      ". A sweep nothing calls is a comment",
+      beforeRF.lit>=25&&afterRF.deadLit===0&&afterRF.worst<=G.AURA_LEASH+0.5);
+    hero.root.position.x-=40; hero.alive=false;
+    G.auraSweep();
+    check("v132.53 aura: a dead owner's cloud is out on the very next sweep, with no frame of "+
+      "simulation in between ("+G.auraLit().lit+" lit)",G.auraLit().lit===0);
+    for(let i=0;i<20;i++)G.auraTick(0.05);
   }
   // ---------- v132.51: ONE EFFECT SYSTEM MUST NOT FREEZE THE OTHERS ----------
   {

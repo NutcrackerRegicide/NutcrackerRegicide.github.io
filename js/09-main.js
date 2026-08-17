@@ -822,6 +822,13 @@ function tickVignette(dt){
   }else if(el.style.opacity!=="0")el.style.opacity="0";
 }
 function renderFrame(dt){
+  // v132.53 THE AURA SWEEP RIDES HERE, and the reason is the comment three lines below: this is
+  // the one function every frame path calls. auraTick lives in updateEffects, which sits inside
+  // tickBody's !gameOver block and behind its inMenu return — so anything that stops tickBody
+  // freezes the motes lit and in place, and John has been photographing exactly that for four
+  // versions. A mote that has no living, levelled, human owner within the leash goes dark on the
+  // frame it is drawn, whatever the simulation did or failed to do.
+  if(typeof auraSweep==="function"){try{auraSweep();}catch(e){}}
   tickObjectiveFade();
   tickVignette(dt);   // ⚠ HERE, not in tickBody: renderFrame is the one function all three frame
                       // paths call, so a guest sees it too. tickBody is trap #12.
