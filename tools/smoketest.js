@@ -66,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,auraSweep,auraLit,renderFrame,AURA_LEASH,AURA_LEASH_Y,puff,fxEffects:()=>effects,dustPts:()=>dustPts,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,auraSweep,auraLit,renderFrame,AURA_LEASH,AURA_LEASH_Y,puff,fxEffects:()=>effects,dustPts:()=>dustPts,scene:()=>scene,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -5661,6 +5661,30 @@ global.__G.setGameOver(false);
       dp.material.fog+", vertexColors "+dp.material.vertexColors+") — the two mechanisms behind "+
       "every confetti report since v130.1",
       dp.material.fog===false&&dp.material.vertexColors===true);
+  }
+  // ---------- v132.54: NO ADDITIVE MATERIAL MAY TAKE FOG ----------
+  {
+    const G=global.__G, sc=G.scene();
+    const adds=[];
+    sc.traverse(o=>{
+      const ms=o.material?(Array.isArray(o.material)?o.material:[o.material]):[];
+      for(const m of ms)if(m&&m.blending===THREE.AdditiveBlending)
+        adds.push({what:o.type+(o.name?":"+o.name:""),fog:m.fog!==false});
+    });
+    const fogged=adds.filter(a=>a.fog);
+    check("v132.54 fog: the scene HAS additive layers to police ("+adds.length+
+      " of them: "+adds.map(a=>a.what).join(", ")+") — a rule nobody is subject to is not a rule",
+      adds.length>=2);
+    check("v132.54 fog: and NOT ONE of them takes three.js fog"+
+      (fogged.length?" — offenders: "+fogged.map(a=>a.what).join(", "):"")+
+      ". Under AdditiveBlending r128 computes mix(rgb, fogColor, fogFactor), so a distant "+
+      "fragment ADDS the fog's own colour to the frame. A BLACK point — an expired aura mote, "+
+      "deliberately blanked — therefore renders as a bright white splat out in the fog and stays "+
+      "invisible up close, which is precisely the constellation John photographed marking "+
+      "everywhere he had walked. Every instrument read that pool as clean, and every one was "+
+      "right: the fog was doing the drawing, not the game. Shipped twice from this same root "+
+      "(dust v130.1-v132.52, aura v132.29-v132.54) before anything tested for it",
+      fogged.length===0);
   }
   check("v116 touch: the mobile layer is a no-op outside a browser",
     G.getHideD()===150&&G.getMouseLocked()===false);

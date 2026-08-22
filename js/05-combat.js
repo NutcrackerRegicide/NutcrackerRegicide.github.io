@@ -828,10 +828,19 @@ function auraInit(){
   _auraGeo=new THREE.BufferGeometry();
   _auraGeo.setAttribute("position",new THREE.BufferAttribute(_auraPos,3));
   _auraGeo.setAttribute("color",new THREE.BufferAttribute(_auraCol,3));
+  // v132.54 fog:false IS LOad-BEARING. With fog on, r128 mixes every point's colour toward
+  // fog.color by distance — and an EXPIRED mote is black, so out in the fog it resolves to the
+  // fog colour and additive blending paints it as a bright white dot. The pool's dead slots keep
+  // their last world position, so the result is a permanent constellation marking everywhere the
+  // player has ever been: his spawn, the roads he walked. Invisible up close (fogFactor 0),
+  // blazing at distance (fogFactor 1). Reported by John across five versions; invisible to every
+  // instrument I had, because by the colour buffer those points ARE off. 01-engine.js has carried
+  // this same analysis for the ambient dust since v130.2.
   _auraMat=new THREE.PointsMaterial({size:AURA_SIZE,sizeAttenuation:false,vertexColors:true,
-    transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,map:_auraDot()});
+    transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,map:_auraDot(),fog:false});
   _auraPts=new THREE.Points(_auraGeo,_auraMat);
   _auraPts.frustumCulled=false;   // the pool spans the map; culling it as one blob would pop
+  _auraPts.name="level-aura";    // v132.54: named for the same reason
   _auraPts.renderOrder=3;
   scene.add(_auraPts);
 }

@@ -989,6 +989,7 @@ let dustPts=null, dustBase=null;
   dustPts=new THREE.Points(g,new THREE.PointsMaterial({color:0xffffff,size:0.26,transparent:true,
     opacity:0.10,blending:THREE.AdditiveBlending,depthWrite:false,sizeAttenuation:true,
     vertexColors:true,fog:false}));
+  dustPts.name="ambient-dust";   // v132.54: named so a scene census and the fog gate say WHICH
   scene.add(dustPts);
 })();
 // THE ATMOSPHERE RIDES WITH THE CAMERA, AND IT HAS TO DO IT FROM IN HERE.
