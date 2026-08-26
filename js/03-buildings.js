@@ -4042,7 +4042,7 @@ function damageBuilding(b,dmg,att){
   if(typeof NET!=="undefined"&&NET.mode==="guest")return; // host owns all damage
   if(!b.alive)return;
   if(att&&!att.def&&isHuman(att)&&att.team!==b.team)
-    dmg*=1+0.10*buffSt(att,"wreck"); // WRECKER: human demolition specialists
+    dmg*=1+0.15*buffSt(att,"wreck"); // WRECKER: human demolition specialists
   b.lastHit=T; // patrol bands answer struck buildings
   b.hp-=dmg; b.bar.bg.visible=b.bar.fg.visible=true; setBar(b.bar,b.hp/b.maxHp);
   if(typeof Sound!=="undefined")Sound.play((b.type&&b.type.indexOf("wood")>=0)?"bldhitwood":"bldhit",{x:b.x,z:b.z}); // v102: structural crunch

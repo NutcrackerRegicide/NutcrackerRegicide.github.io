@@ -109,7 +109,7 @@ function updatePlayer(dt){
     if(n.amount<=0){player.gathering=null;}
     else{
       player.gatherT+=dt; player.swing=Math.max(player.swing||0,0.12);
-      if(player.gatherT>(0.6-0.1*buffSt(player,"gather"))*(n.slow||1)){ // PRACTICED HANDS swing faster
+      if(player.gatherT>gatherSwing(player,n)){ // PRACTICED HANDS · TIMBERWRIGHT — see 00-data.js
         player.gatherT=0;
         const cap=carryCap(player); // DEEP SATCHEL carries more (and stone/wood count now too)
         const total=player.carry.food+player.carry.gold+player.carry.stone+player.carry.wood;
@@ -151,7 +151,7 @@ function updatePlayer(dt){
     const mk=nearestBuilt(MYTEAM,"market",player.root.position.x,player.root.position.z,bSurf(BLD.market)+2.6);
     if(mk){
       const d=Math.hypot(mk.x-player.tradeLoaded.x,mk.z-player.tradeLoaded.z);
-      const g=Math.round(2.5*tradeGold(d)*(1+0.10*buffSt(player,"trade"))); // DEEP POCKETS
+      const g=Math.round(2.5*tradeGold(d)*(1+0.15*buffSt(player,"trade"))); // DEEP POCKETS
       stock[BLUE].gold+=g;updateResHud();
       awardPts(player,g);
       questTradeSale(player,player.tradeLoaded); // the route quests count the sale
@@ -341,7 +341,7 @@ function updateUnitCommon(u,dt){
   {
     const fv=buffSt(u,"fervor");
     let _sw=dt;
-    if(fv&&u.maxHp>0&&u.hp<u.maxHp)_sw=dt*(1+0.5*fv*(1-u.hp/u.maxHp));
+    if(fv&&u.maxHp>0&&u.hp<u.maxHp)_sw=dt*(1+1.0*fv*(1-u.hp/u.maxHp));
     u.atkT=Math.max(0,u.atkT-_sw);
   }
   if(u.cls==="dragoon"){ // powder trickles back: one round per five seconds
@@ -575,7 +575,7 @@ function questTick(dt){ // host/solo: scout-quest geometry, Second Skin regen, c
     if(buffSt(u,"captain"))_captains.push(u);
     const rst=buffSt(u,"regen"); // SECOND SKIN: knit closed after 5 quiet seconds
     if(rst&&u.hp<u.maxHp&&T-(u._lastHurt||-99)>5){
-      u.hp=Math.min(u.maxHp,u.hp+0.5*rst*dt);
+      u.hp=Math.min(u.maxHp,u.hp+2*rst*dt);
       setBar(u.bar,u.hp/u.maxHp);
       if(u.isPlayer)updatePlayerHud();
     }

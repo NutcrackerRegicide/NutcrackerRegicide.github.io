@@ -82,7 +82,7 @@ function knifeTick(u,dt){
   u._knifeT=(u._knifeT||0)+dt;
   if(u._knifeT<KNIFE_EVERY)return;
   u._knifeT=0;
-  if(Math.random()>=0.10*st)return;
+  if(Math.random()>=0.15*st)return;
   const px=u.root.position.x, pz=u.root.position.z, R2=KNIFE_R*KNIFE_R;
   let best=null,bd=R2;
   for(const o of units){
@@ -97,7 +97,9 @@ function knifeTick(u,dt){
   // the wire: knifeTick runs in the host unit loop, so the old dots drew on the host alone.
   _vfx(VFX_KNIFE,px,pz,Math.round(best.root.position.x*10),Math.round(best.root.position.z*10));
   _sfxAt("knifethrow",u);
-  dealDamage(u,best,(u.dmg||5)*0.6*st);
+  // v133.0 A FLAT HALF, whatever the stack. Stacks buy throw CHANCE (0.15*st above); letting them
+  // buy knife power too meant a two-stack knife hit harder than the hand that threw it.
+  dealDamage(u,best,(u.dmg||5)*0.5);
 }
 // ---------- v132.35 RADIUS AURAS ----------
 // The one buff shape that can wreck the tick budget. Three rules keep it cheap: only HOLDERS
@@ -153,7 +155,7 @@ function auraBuffTick(u,dt){
   // clock, two ids — see patch-buff-rings-net.js for how they reach a guest.
   u._fxMask=(sanct?1:0)|(brand?2:0)|(kin?4:0)|(stew?8:0)|(res?16:0)|(pha?32:0);
   u._fxStill=Math.min(1,(u._stillT||0)/AURA_STILL);
-  let allies=0, enemies=0, kinNear=false, kinId=0;
+  let allies=0, enemies=0, kinNear=0, kinId=0;   // v133.0 kinNear COUNTS now — see KINSHIP below
   // ONE pass. Six effects.
   for(const o of units){
     if(!o.alive||o===u)continue;
@@ -161,7 +163,7 @@ function auraBuffTick(u,dt){
     if(dx*dx+dz*dz>R2)continue;
     if(o.team===u.team){
       allies++;
-      if(kin&&!kinNear&&o.cls===u.cls&&!o.isKing){kinNear=true;kinId=o.id;} // v132.39: WHICH one,
+      if(kin&&o.cls===u.cls&&!o.isKing){kinNear++;if(!kinId)kinId=o.id;}    // v132.39: WHICH one,
                                                                             // for the thread
       if(zoneOpen&&o.hp<o.maxHp){                       // SANCTUARY mends the whole warband
         o.hp=Math.min(o.maxHp,o.hp+u.maxHp*0.03*sanct*step);
@@ -170,7 +172,7 @@ function auraBuffTick(u,dt){
     }else{
       enemies++;                                         // the wilds count: surrounded is surrounded
       if(brand&&typeof dealDamage==="function"){
-        dealDamage(u,o,1*brand*step);                    // SEARING PRESENCE
+        dealDamage(u,o,2*brand*step);                    // SEARING PRESENCE — 2 HP/s a stack
         // continuous damage, so the cue is THROTTLED — a sizzle every ~2.5s, not a buzz
         if(typeof T!=="undefined"&&T-(u._searT||-999)>2.5){u._searT=T;_sfxAt("sear",u);}
       }
@@ -183,7 +185,10 @@ function auraBuffTick(u,dt){
     if(u.isPlayer&&typeof updatePlayerHud==="function")updatePlayerHud();
   }
   if(kin&&kinNear&&u.hp<u.maxHp){                        // KINSHIP
-    u.hp=Math.min(u.maxHp,u.hp+1.0*kin*step);
+    // v133.0 IT SCALES WITH THE SHIELD WALL. A flat 1 HP/s paid the same whether one kinsman stood
+    // with you or ten, which is the opposite of what the buff is about. 0.5% of max HP a second
+    // each, ceilinged at 5% — ten of your own kind, and no more to be had for the eleventh.
+    u.hp=Math.min(u.maxHp,u.hp+u.maxHp*Math.min(0.05,0.005*kinNear)*kin*step);
     if(u.bar&&typeof setBar==="function")setBar(u.bar,u.hp/u.maxHp);
   }
   let _stw=0;
@@ -192,7 +197,7 @@ function auraBuffTick(u,dt){
       if(!b.alive||b.team!==u.team||!b.built||b.hp>=b.def.hp)continue;
       const bx=b.x-px, bz=b.z-pz;
       if(bx*bx+bz*bz>R2)continue;
-      b.hp=Math.min(b.def.hp,b.hp+0.5*stew*step);
+      b.hp=Math.min(b.def.hp,b.hp+10*stew*step);   // v133.0: 0.5 HP/s mended nothing in a siege
       if(!_stw)_stw=b.id;                                // v132.39: the first one mended gets the ring
     }
   }
@@ -272,7 +277,7 @@ function buffFxTick(dt){
     // window were both invisible; this shows the first directly and the second by winking out.
     if(typeof tmodSum==="function"&&u._tmods){
       const fl=tmodSum(u,"dmgflat");
-      if(fl>0){const nch=Math.min(5,Math.round(fl/2));
+      if(fl>0){const nch=Math.min(5,Math.round(fl/3));   // v133.0: +3 a kill, so a chevron is 3
         for(let i=0;i<nch;i++)_lookAt(u,3.6+i*0.34,0xE05A3A,0.42,0.9);}
       // …and a trail while the unit is moving faster than it should be. This reads the MODIFIER,
       // not BLOODRUSH: HUNTER'S STEP and SURVIVAL INSTINCT push the same value, and drawing a
@@ -1406,9 +1411,9 @@ function dealDamage(att,victim,dmg){
     if(attU._tmods)dmg+=tmodSum(attU,"dmgflat");                   // KILLING FRENZY — flat, and
                                                                    // added before the multipliers
                                                                    // so a crit doubles it too
-    let m=1+0.05*buffSt(attU,"dmg");                               // HONED EDGE
+    let m=1+0.07*buffSt(attU,"dmg");                               // HONED EDGE
     if(victim.team===NEUTRAL)m*=1+0.15*buffSt(attU,"slayer");      // WILD SLAYER
-    if(isSiege(attU.cls))m*=1+0.10*buffSt(attU,"siege");           // SIEGEWRIGHT
+    if(isSiege(attU.cls))m*=1+0.15*buffSt(attU,"siege");           // SIEGEWRIGHT
     if(victim.hp>=victim.maxHp)m*=1+0.50*buffSt(attU,"ambush");    // FIRST BLOOD — read BEFORE the hp subtraction below
     if(CLS[attU.cls]&&CLS[attU.cls].ranged&&victim.cls&&isSiege(victim.cls))
       m*=1+0.50*buffSt(attU,"enginebane");                         // ENGINEBANE
@@ -1416,12 +1421,12 @@ function dealDamage(att,victim,dmg){
     if(buffSt(attU,"fervor")){                                     // DESPERATION is attack SPEED,
       // …handled in updateUnitCommon; nothing to do to damage here.
     }
-    if(buffSt(attU,"woods")&&inTheWoods(attU))m*=1+0.10*buffSt(attU,"woods"); // WOODSMAN
+    if(buffSt(attU,"woods")&&inTheWoods(attU))m*=1+0.30*buffSt(attU,"woods"); // WOODSMAN
     if(buffSt(attU,"kguard")&&nearOwnKing(attU))m*=1+0.10*buffSt(attU,"kguard"); // KING'S GUARD — damage half
     if(buffSt(attU,"phalanx"))                                     // PHALANX — reads the CACHED
       m*=1+Math.min(0.20,0.05*buffSt(attU,"phalanx")*(attU._auraA||0)); // count, never a fresh scan
     const cs=buffSt(attU,"crit");                                  // KEEN EYE
-    if(cs&&Math.random()<0.05*cs){
+    if(cs&&Math.random()<0.07*cs){
       m*=2; _wasCrit=true;   // v132.46: a plain local — the roll and the subtraction share a scope
       puff(victim.root.position.x,2.4,victim.root.position.z,0xffd24a,1.1);
       _vfx(VFX_CRIT,victim.root.position.x,victim.root.position.z,0,0);         // v132.41: sharp and quick — at 3 stacks this
@@ -1438,7 +1443,7 @@ function dealDamage(att,victim,dmg){
       if(dist2(attU.root.position.x,attU.root.position.z,h.root.position.x,h.root.position.z)<12*12)
         cap=Math.max(cap,buffSt(h,"captain"));
     }
-    if(cap)dmg*=1+0.01*cap;
+    if(cap)dmg*=1+0.05*cap;
   }
   // ---- victim-side (humans only): dodge, then the tempered shield ----
   if(isHuman(victim)){
@@ -1459,8 +1464,11 @@ function dealDamage(att,victim,dmg){
     // is cancelled, not reduced.
     {
       const rangedBlow=!!(att&&(att.def||(att.cls&&CLS[att.cls]&&CLS[att.cls].ranged)));
+      // v133.0 EXPLICIT CADENCE TABLES, John's numbers. 30/stacks was a curve nobody chose: it
+      // gave 30/15/10 and could not express "and the last stack is the big one". Both now stack
+      // to five and read straight off his sheet.
       const wd=buffSt(victim,"ward"), gd=buffSt(victim,"guardup");
-      if(rangedBlow&&wd&&T-(victim._wardT||-999)>=30/wd){
+      if(rangedBlow&&wd&&T-(victim._wardT||-999)>=WARD_CD[Math.min(wd,WARD_CD.length)-1]){
         victim._wardT=T; victim._lastHurt=T;
         puff(victim.root.position.x,2.2,victim.root.position.z,0x9fd8ff,1.0);
         _vfx(VFX_WARD,victim.root.position.x,victim.root.position.z,Math.round(_fxAng(att,victim)*100),0);
@@ -1471,7 +1479,7 @@ function dealDamage(att,victim,dmg){
         if(victim.isPlayer&&typeof msg==="function")msg("Arrow warded!","blue");
         return;
       }
-      if(!rangedBlow&&gd&&att&&att.cls&&T-(victim._guardT||-999)>=30/gd){
+      if(!rangedBlow&&gd&&att&&att.cls&&T-(victim._guardT||-999)>=GUARD_CD[Math.min(gd,GUARD_CD.length)-1]){
         victim._guardT=T; victim._lastHurt=T;
         puff(victim.root.position.x,2.2,victim.root.position.z,0xd8dde2,1.0);
         _vfx(VFX_GUARD,victim.root.position.x,victim.root.position.z,Math.round(_fxAng(att,victim)*100),0);
@@ -1480,7 +1488,7 @@ function dealDamage(att,victim,dmg){
         return;
       }
     }
-    dmg*=1-0.05*buffSt(victim,"shield");                           // RAISED SHIELD (the buff)
+    dmg*=1-0.07*buffSt(victim,"shield");                           // RAISED SHIELD (the buff)
     if(att&&att.team===NEUTRAL)dmg*=1-0.10*buffSt(victim,"warden"); // BEAST WARDEN
     if(victim.cls==="villager")dmg*=Math.pow(0.5,buffSt(victim,"yeoman")); // YEOMAN — the health half,
       // as a reduction rather than a maxHp change: applyBuffStats preserves the hp FRACTION across a
@@ -1538,7 +1546,7 @@ function dealDamage(att,victim,dmg){
   if(attU&&isHuman(attU)&&attU.team!==victim.team&&!_volleyIn){
     const meleeE=CLS[attU.cls]&&!CLS[attU.cls].ranged;
     const qk=buffSt(attU,"quake");
-    if(qk&&meleeE&&Math.random()<0.05*qk){                 // EARTHSHAKER — borrows AURA_BR rather
+    if(qk&&meleeE&&Math.random()<0.15*qk){                 // EARTHSHAKER — borrows AURA_BR rather
       const R=(typeof AURA_BR!=="undefined"?AURA_BR:10);   // than inventing a third idea of "near"
       const R2=R*R, px=attU.root.position.x, pz=attU.root.position.z;
       puff(px,0.6,pz,0xc9a06a,2.2);
@@ -1567,14 +1575,17 @@ function dealDamage(att,victim,dmg){
   if(attU&&isHuman(attU)&&attU.team!==victim.team&&victim.alive){
     const melee=CLS[attU.cls]&&!CLS[attU.cls].ranged;
     const bl=buffSt(attU,"bleed");
-    if(bl&&Math.random()<0.05*bl){                      // SERRATED EDGE — 1 HP/s for 20s = 20 HP
-      tmodAdd(victim,"bleed",1,20,false); victim._dotBy=attU;
+    if(bl&&Math.random()<0.15*bl){                      // SERRATED EDGE — 1 HP/s for 20s = 20 HP
+      // v133.0 THE BLEEDS LAYER, to three. The cap is on the MODIFIER, not on a counter: tmodAdd's
+      // sixth argument ceilings the summed value, so a fourth proc refreshes the clock without
+      // deepening the wound. Three layers over twenty seconds is the 60 HP on John's sheet.
+      tmodAdd(victim,"bleed",1,20,false,3); victim._dotBy=attU;
       puff(victim.root.position.x,2.0,victim.root.position.z,0xb3262a,0.7);
       _vfx(VFX_BLEED,victim.root.position.x,victim.root.position.z,6,0);  // drips while it bleeds — you can see who is dying
       _sfxAt("bleedhit",victim);
     }
     const vn=buffSt(attU,"venom");
-    if(vn&&Math.random()<0.05*vn){                      // VENOMOUS — 10 HP over 10s, and half speed
+    if(vn&&Math.random()<0.15*vn){                      // VENOMOUS — 10 HP over 10s, and half speed
       tmodAdd(victim,"poison",1,10,false); victim._dotBy=attU;
       tmodAdd(victim,"spdmul",-0.5,10,false);           // a NEGATIVE spdmul is the whole slow
       puff(victim.root.position.x,2.0,victim.root.position.z,0x8fd45a,0.8);
@@ -1582,7 +1593,7 @@ function dealDamage(att,victim,dmg){
       _sfxAt("venomhit",victim);
     }
     const cc=buffSt(attU,"concuss");
-    if(cc&&melee&&T-(attU._stunCd||-999)>=30&&Math.random()<0.05*cc){
+    if(cc&&melee&&T-(attU._stunCd||-999)>=10&&Math.random()<0.15*cc){
       attU._stunCd=T;                                   // the 30s belongs to the WIELDER, or one
       tmodAdd(victim,"stun",1,1.5,false);               // player stun-locks a crowd by rotating
       puff(victim.root.position.x,2.8,victim.root.position.z,0xffe9a8,1.1);
@@ -1594,12 +1605,12 @@ function dealDamage(att,victim,dmg){
       // …but the cue only when it lands FRESH. It rides every blow you throw, so a sound per hit
       // would simply thicken the impact that already plays.
       if(!(victim._tmods&&tmodSum(victim,"healblock")>0))_sfxAt("gashcut",victim);
-      tmodAdd(victim,"healblock",1,3,false);
+      tmodAdd(victim,"healblock",1,5,false);
     }
   }
   // SHRUG IT OFF: struck, and everything the enemy put on you falls away.
   if(isHuman(victim)&&victim._tmods&&buffSt(victim,"shrug")&&
-     Math.random()<0.10*buffSt(victim,"shrug")){
+     Math.random()<0.20*buffSt(victim,"shrug")){
     if(shedDebuffs(victim)){
       _vfx(VFX_SHRUG,victim.root.position.x,victim.root.position.z,0,0);
       _sfxAt("shrugoff",victim);
@@ -1651,9 +1662,13 @@ function dealDamage(att,victim,dmg){
       Sound.vox(dmg<12?"painm":dmg<25?"pain":"painh",victim,{x:victim.root.position.x,z:victim.root.position.z});
   }
   if(attU&&isHuman(attU)&&attU.alive&&attU.team!==victim.team){    // BLOODTHIRST drinks
+    // v133.0 BLOODTHIRST DRINKS A SHARE OF THE BLOW, not a flat point. 1 HP a hit was noise on a
+    // 40-damage swing and a lifeline on a 3-damage one; 7% a stack scales with what you actually
+    // hit for, and reads 35% at full. `dmg` here is the figure AFTER every multiplier and both
+    // charge blocks, which is the number that landed.
     const ls=buffSt(attU,"leech");
     if(ls&&attU.hp<attU.maxHp){
-      attU.hp=Math.min(attU.maxHp,attU.hp+1*ls);
+      attU.hp=Math.min(attU.maxHp,attU.hp+Math.max(0,dmg)*0.07*ls);
       setBar(attU.bar,attU.hp/attU.maxHp);
       if(attU.isPlayer)updatePlayerHud();
     }
@@ -1681,12 +1696,12 @@ function dealDamage(att,victim,dmg){
       if(fe){attU.hp=Math.min(attU.maxHp,attU.hp+attU.maxHp*0.10*fe);
         _vfx(VFX_FEAST,attU.root.position.x,attU.root.position.z,0,0);} // relief, not a spell
       const fr=buffSt(attU,"frenzy");                                 // KILLING FRENZY
-      if(fr)tmodAdd(attU,"dmgflat",2*fr,7,false,10*fr);                // +2 a kill, capped at +10
+      if(fr)tmodAdd(attU,"dmgflat",3*fr,10,false,15*fr);               // +3 a kill, capped at +15, for 10s
       const su=buffSt(attU,"surge");                                   // BLOODRUSH
       if(su)tmodAdd(attU,"spdmul",0.50*su,2,true);                     // …and it FADES over the 2s
       const tr=buffSt(attU,"trophy");                                 // TROPHY HUNTER — permanent,
       if(tr){                                                         // and it must survive a recompute
-        attU.hpBonus=Math.min(100,(attU.hpBonus||0)+1*tr);
+        attU.hpBonus=Math.min(100,(attU.hpBonus||0)+5*tr);   // v133.0: +5 a kill — 20 kills to the cap
         if(typeof applyBuffStats==="function")applyBuffStats(attU);
       }
       if(typeof stock!=="undefined"&&stock[attU.team]){
@@ -1864,7 +1879,7 @@ function respawnUnit(u){
 // ---------- THE PRIEST'S MIRACLE — resurrection ----------
 const RES_CHARGE=2.0;   // seconds of channeling (holding LMB) before the rite is ready
 const RES_CD=10;        // seconds of cooldown after a resurrection ("faith")
-function resCdFor(u){return Math.max(3,RES_CD-1.5*buffSt(u,"zeal"));} // v87 ZEALOTRY
+function resCdFor(u){return Math.max(3,RES_CD-2*buffSt(u,"zeal"));} // v87 ZEALOTRY
 const RES_REACH=3.6;    // how close the priest must stand over a fallen ally
 const RES_PTS=25;       // score reward for raising the dead
 // restore a fallen ally to life right where they lie, keeping the class they died as

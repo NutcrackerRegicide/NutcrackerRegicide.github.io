@@ -5521,10 +5521,13 @@ function setClassStats(u){
 function applyBuffStats(u){
   const d=CLS[u.cls]; if(!d)return;
   const frac=u.maxHp>0?Math.max(0,Math.min(1,u.hp/u.maxHp)):1;
-  u.maxHp=Math.round(d.hp*ageBuff(u.team)*(1+0.05*buffSt(u,"hp")))+(u.hpBonus||0); // +TROPHY HUNTER
+  u.maxHp=Math.round(d.hp*ageBuff(u.team)*(1+0.10*buffSt(u,"hp")))+(u.hpBonus||0); // +TROPHY HUNTER
   u.hp=Math.max(1,Math.round(u.maxHp*frac));
-  u.spd=d.spd+0.5*buffSt(u,"spd");
-  u.cd=Math.max(0.2,d.cd-0.1*buffSt(u,"atkspd"));
+  u.spd=d.spd+1.0*buffSt(u,"spd");
+  // v133.0 QUICK HANDS IS A PERCENTAGE NOW. −0.1s flat was a different buff depending on who
+  // bought it: worth 10% to a 1.0s clubman and 40% to a 0.25s skirmisher. 10% a stack is the
+  // same buff for everyone, and lands in the same place it used to for a 1.0s attacker.
+  u.cd=Math.max(0.2,d.cd*(1-0.10*buffSt(u,"atkspd")));
   if(u.bar)setBar(u.bar,u.hp/u.maxHp);
 }
 function setClass(u,cls){

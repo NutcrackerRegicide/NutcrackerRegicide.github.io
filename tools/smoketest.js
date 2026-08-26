@@ -66,7 +66,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // v128.6: the atlas and the merge, so the draw budget can be asserted
   // v131 the hour rig and the field that dresses the ground — see the world-lane checks below
   "setSunHour,meadowPatch,sun,_SUN_OFF,PROP_FEET,"+
-  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,auraSweep,auraLit,renderFrame,AURA_LEASH,AURA_LEASH_Y,puff,fxEffects:()=>effects,dustPts:()=>dustPts,scene:()=>scene,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
+  "UATLAS,mergeUnitBody,texturedMat,isSharedMat,bSurf,bStand,auraTick,auraStats,auraTint,auraSpread,auraShape,auraLive,auraSweep,auraLit,renderFrame,AURA_LEASH,AURA_LEASH_Y,puff,fxEffects:()=>effects,dustPts:()=>dustPts,scene:()=>scene,gatherSwing,WARD_CD,GUARD_CD,awardPts,BUFF_BY_ID,AURA_MAX,AURA_NEAR,AURA_FAR,AURA_CURVE,AURA_RATE_LO,AURA_RATE_HI,AURA_R_LO,AURA_R_HI,AURA_RISE_LO,AURA_RISE_HI,AURA_LIFE_LO,AURA_LIFE_HI,AURA_GOLD,TEAMCOL,inTheWoods,nearOwnKing,setClassStats,stock,TREE_STANDS,updateUnitCommon,bldCost,bldCostD,isDefensiveDef,canAfford,pay,BLD,tmodAdd,tmodSum,tmodMul,tmodTick,TMOD_OOC,TMOD_LOW,moveUnit,tmodSync,tmodSyncClear,statusTick,isStunned,healBlocked,shedDebuffs,healTick,auraBuffTick,AURA_BR,AURA_SCAN,AURA_STILL,buildings,makeBuilding,knifeTick,KNIFE_R,getT:()=>T,sfxAt:_sfxAt,SFX_NET,sfxLast:()=>_sfxLast,buffFxTick,buffFxStats,updateEffects,FX_SANCT,FX_BRAND,FX_KIN,FX_STEW,FX_RESOLVE,FX_PHALANX,RING_MIN,RING_TIGHTEN,getPlayer:()=>player,fxTick,fxStats,fxTex,vfxPlay,isHuman,dmgNum,dnumStats,tickVignette,KGUARD_R,nearOwnKing};";
 // ---- v127: A HANDLE ON THE PER-FRAME DRIVERS, so the wiring itself can be asserted ----
 // `__G` exports the drivers, but exporting a function is exporting a COPY OF THE REFERENCE —
 // reassigning __G.campTick does not change what tickBody calls, so you cannot use it to find out
@@ -1029,9 +1029,11 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
   // derived from the table, not from literals: Stout Heart and Quick Hands stack to 5 now.
   {
     const bm=global.__G.buffMax;
-    const wantHp=Math.round(cb.hp*ageBuff(0)*(1+0.05*bm("hp")));
-    const wantSpd=cb.spd+0.5*bm("spd");
-    const wantCd=Math.max(0.2,cb.cd-0.1*bm("atkspd"));
+    const wantHp=Math.round(cb.hp*ageBuff(0)*(1+0.10*bm("hp")));
+    const wantSpd=cb.spd+1.0*bm("spd");
+    // v133.0 Quick Hands is a PERCENTAGE now — a flat −0.1s was worth 10% to a 1.0s clubman and
+    // 40% to a 0.25s skirmisher, i.e. a different buff depending on who bought it.
+    const wantCd=Math.max(0.2,cb.cd*(1-0.10*bm("atkspd")));
     check("Stout Heart ×"+bm("hp")+" / Fleet Foot ×"+bm("spd")+" / Quick Hands ×"+bm("atkspd")+
       " land on the stat sheet (hp "+qh.maxHp+"/"+wantHp+", spd "+qh.spd.toFixed(2)+"/"+wantSpd.toFixed(2)+
       ", cd "+qh.cd.toFixed(2)+"/"+wantCd.toFixed(2)+")",
@@ -1041,29 +1043,32 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
   const dh=makeUnit(0,"clubman",-60,90,{name:"Edge",bot:null}); dh.remote="qtest2"; dh.buffs={dmg:3};
   const tgt=makeUnit(1,"clubman",-58,90,{name:"Tgt",bot:null}); tgt.bot=null; tgt.hp=tgt.maxHp=1000;
   let h0=tgt.hp; dealDamage(dh,tgt,100);
-  check("Honed Edge ×3 = +15% damage (dealt "+(h0-tgt.hp)+")",Math.abs((h0-tgt.hp)-115)<1e-6);
+  check("Honed Edge ×3 = +21% damage (dealt "+(h0-tgt.hp)+")",Math.abs((h0-tgt.hp)-121)<1e-6);
   const vh=makeUnit(0,"clubman",-64,90,{name:"Tank",bot:null}); vh.remote="qtest3"; vh.hp=vh.maxHp=1000;
   vh.buffs={shield:3};
   h0=vh.hp; dealDamage(tgt,vh,100);
-  check("Raised Shield ×3 takes 15% off (took "+(h0-vh.hp)+")",Math.abs((h0-vh.hp)-85)<1e-6);
+  check("Raised Shield ×3 takes 21% off (took "+(h0-vh.hp)+")",Math.abs((h0-vh.hp)-79)<1e-6);
   vh.buffs={dodge:1};
   {const MR=Math.random; Math.random=()=>0; h0=vh.hp; dealDamage(tgt,vh,100); Math.random=MR;}
   check("Sixth Sense dodges the blow clean",vh.hp===h0);
   vh.buffs={leech:0}; // (clear)
   dh.buffs={leech:2}; dh.hp=dh.maxHp-10;
   h0=dh.hp; dealDamage(dh,tgt,50);
-  check("Bloodthirst drinks 2 HP on the hit",Math.abs(dh.hp-(h0+2))<1e-6);
+  // v133.0 a SHARE of the blow: 50 damage × 7% × 2 stacks = 7 HP. The old flat 1-a-stack was
+  // noise on a heavy swing and a lifeline on a light one.
+  check("Bloodthirst ×2 drinks 7 HP from a 50-damage blow (got "+(dh.hp-h0).toFixed(2)+")",
+    Math.abs(dh.hp-(h0+7))<1e-6);
   // captain's banner: refresh the cache, then an ordinary BOT ally near qh hits harder
   qh.buffs={captain:3}; applyBuffStats(qh); questTick(0.01);
   const ally=makeUnit(0,"clubman",-60,62,{name:"Ally",bot:null});
   const foe=makeUnit(1,"clubman",-58,62,{name:"Foe",bot:null}); foe.bot=null; foe.hp=foe.maxHp=1000;
   h0=foe.hp; dealDamage(ally,foe,100);
-  check("Captain's Banner ×3: the nearby ally hits +3% (dealt "+(h0-foe.hp)+")",Math.abs((h0-foe.hp)-103)<1e-6);
+  check("Captain's Banner ×3: the nearby ally hits +15% (dealt "+(h0-foe.hp)+")",Math.abs((h0-foe.hp)-115)<1e-6);
   // second skin: 5 quiet seconds, then the knitting
   vh.buffs={regen:3}; vh.hp=500; vh._lastHurt=global.__G.getT()-10;
   questTick(1.0);
-  check("Second Skin knits +1.5 HP/s after the quiet",Math.abs(vh.hp-501.5)<1e-6);
-  check("Deep Satchel: 20 → 50 carry",(dh.buffs={carry:3},carryCap(dh)===50)&&carryCap(ally)===20);
+  check("Second Skin ×3 knits +6 HP/s after the quiet",Math.abs(vh.hp-506)<1e-6);
+  check("Deep Satchel ×3: 20 → 80 carry",(dh.buffs={carry:3},carryCap(dh)===80)&&carryCap(ally)===20);
   // master builder: the first swing banks bonus progress, once per site
   const site=makeBuilding(0,"house",-84,86,false);
   dh.buffs={builder:2};
@@ -3941,12 +3946,12 @@ global.__G.setGameOver(false);
         (G.stock[0].gold-g0)+"g +"+(G.stock[0].food-f0)+"f)",
         G.stock[0].gold===g0+10&&G.stock[0].food===f0+10);
       check("v132.30 TROPHY HUNTER: a kill adds permanent max HP ("+maxBefore+" → "+killer.maxHp+
-        ", bonus "+(killer.hpBonus||0)+")",killer.hpBonus===1&&killer.maxHp===maxBefore+1);
+        ", bonus "+(killer.hpBonus||0)+")",killer.hpBonus===5&&killer.maxHp===maxBefore+5);
       // …and it must survive the recompute that arming up performs
       G.setClassStats(killer);
       check("v132.30 TROPHY HUNTER: …and it SURVIVES setClassStats — arming up must not erase it "+
         "(maxHp "+killer.maxHp+", bonus "+killer.hpBonus+")",
-        killer.hpBonus===1&&killer.maxHp===maxBefore+1&&killer.dmg>0&&killer.spd>0&&killer.cd>0);
+        killer.hpBonus===5&&killer.maxHp===maxBefore+5&&killer.dmg>0&&killer.spd>0&&killer.cd>0);
     }
     {
       // CULLER — a wounded beast dies to a scratch; an unbuffed attacker leaves it standing
@@ -4088,18 +4093,18 @@ global.__G.setGameOver(false);
     {
       const k1=mkB(0,{frenzy:1});
       const p1=mkB(1,{}); dmgOf(k1,p1,99999);
-      check("v132.32 KILLING FRENZY: a kill grants +2 flat damage (+"+G.tmodSum(k1,"dmgflat")+")",
-        G.tmodSum(k1,"dmgflat")===2);
+      check("v133.0 KILLING FRENZY: a kill grants +3 flat damage (+"+G.tmodSum(k1,"dmgflat")+")",
+        G.tmodSum(k1,"dmgflat")===3);
       for(let k=0;k<8;k++){const p=mkB(1,{});dmgOf(k1,p,99999);}
-      check("v132.32 KILLING FRENZY: …accumulating to a ceiling of +10 (+"+G.tmodSum(k1,"dmgflat")+")",
-        G.tmodSum(k1,"dmgflat")===10);
+      check("v133.0 KILLING FRENZY: …accumulating to a ceiling of +15 (+"+G.tmodSum(k1,"dmgflat")+")",
+        G.tmodSum(k1,"dmgflat")===15);
       const plain=mkB(0,{}), v1=mkB(1,{}), v2=mkB(1,{});
       const hA=v1.hp; dmgOf(plain,v1,20); const dA=hA-v1.hp;
       const hB=v2.hp; dmgOf(k1,v2,20);    const dB=hB-v2.hp;
       check("v132.32 KILLING FRENZY: and the flat bonus reaches the blow ("+dA.toFixed(1)+" → "+
         dB.toFixed(1)+")",dB>dA);
-      G.tmodTick(k1,8);
-      check("v132.32 KILLING FRENZY: …and it is gone after its 7 seconds (+"+
+      G.tmodTick(k1,11);   // v133.0: the window is TEN seconds now — ticking 8 would leave it up
+      check("v133.0 KILLING FRENZY: …and it is gone after its 10 seconds (+"+
         G.tmodSum(k1,"dmgflat")+")",G.tmodSum(k1,"dmgflat")===0);
     }
     // ---- BLOODRUSH ----
@@ -4224,17 +4229,22 @@ global.__G.setGameOver(false);
         }
         // ---- RAPID VOLLEY: three BLOWS, measured by a per-hit effect ----
         {
-          // Bloodthirst heals 1 HP per landed hit — so the heal COUNTS the blows. A "triple
-          // damage" implementation would pass a damage-total test and fail this one.
-          const archer=put(0,{volley:1,leech:1},"archer",0,45);
-          const tgt=put(1,{},"clubman",2,45);
-          archer.hp=Math.max(1,archer.maxHp-10);
+          // v133.0 COUNT THE BLOWS, NOT THE HEALING. This used Bloodthirst's flat 1 HP a hit as a
+          // blow counter — but Bloodthirst is a PERCENTAGE of damage now, so one blow of triple
+          // damage heals precisely what three blows heal and the gate could no longer tell them
+          // apart. It would have passed on the exact implementation it exists to reject.
+          // BLOOD TAX pays a flat 1 gold per blow TAKEN, whatever the blow was worth, so the
+          // stockpile delta is a count and not a magnitude. (Damage numbers were the first
+          // replacement and were wrong too: dealDamage only emits one when the attacker is the
+          // local player, so the gate read a flat zero.)
+          const archer=put(0,{volley:1},"archer",0,45);
+          const tgt=put(1,{tribute:1},"clubman",2,45);
           archer._volleyT=-999;
-          const a0=archer.hp;
+          const g0=G.stock[1].gold;
           forceE(()=>dmgOf(archer,tgt,5));
-          const healed=archer.hp-a0;
-          check("v132.36 RAPID VOLLEY: THREE separate blows land, not one tripled — Bloodthirst "+
-            "healed "+healed.toFixed(0)+" (one per hit)",healed>=3);
+          const blows=G.stock[1].gold-g0;
+          check("v132.36 RAPID VOLLEY: THREE separate blows land, not one tripled — Blood Tax was "+
+            "paid "+blows+" times, and it pays per BLOW rather than per point of damage",blows===3);
           archer.alive=false; tgt.alive=false;
         }
         // ---- KNIFE FIGHTER ----
@@ -4624,9 +4634,9 @@ global.__G.setGameOver(false);
           const K=mkB(0,{}); K.buffs={}; K._tmods=null;
           FX(0.016);
           const base=S().lookVis;
-          K._tmods=[{k:"dmgflat",mag:4,t:5,dur:7,fade:false}];   // +4 = two kills
+          K._tmods=[{k:"dmgflat",mag:6,t:5,dur:10,fade:false}];  // v133.0: +6 = two kills at +3
           FX(0.016); const two=S().lookVis-base;
-          K._tmods=[{k:"dmgflat",mag:10,t:5,dur:7,fade:false}];  // +10 = the cap
+          K._tmods=[{k:"dmgflat",mag:15,t:5,dur:10,fade:false}]; // +15 = the cap
           FX(0.016); const five=S().lookVis-base;
           check("v132.43 KILLING FRENZY: the chevrons COUNT the stack — +4 draws "+two+", +10 "+
             "draws "+five+". Neither the stack nor its seven-second window has ever been visible; "+
@@ -5685,6 +5695,126 @@ global.__G.setGameOver(false);
       "right: the fog was doing the drawing, not the game. Shipped twice from this same root "+
       "(dust v130.1-v132.52, aura v132.29-v132.54) before anything tested for it",
       fogged.length===0);
+  }
+  // ---------- v133.0: THE BALANCE PASS — the mechanics that are new, not renumbered ----------
+  {
+    const G=global.__G;
+    // ---- TIMBERWRIGHT, and the swing clock both frame paths now share ----
+    const wood={type:"wood",amount:999}, stone={type:"stone",amount:999};
+    const vil=G.makeUnit(0,"villager",-70,70,{name:"Chop",bot:{role:"citizen"}});
+    vil.bot=null; vil.remote="chop"; vil.buffs={};
+    const ox=G.makeUnit(0,"oxcart",-72,70,{name:"Ox",bot:{role:"citizen"}});
+    ox.bot=null; ox.remote="ox"; ox.buffs={};
+    const clb=G.makeUnit(0,"clubman",-74,70,{name:"Club",bot:{role:"citizen"}});
+    clb.bot=null; clb.remote="club"; clb.buffs={};
+    const base=G.gatherSwing(vil,wood);
+    check("v133.0 gather: the base swing is 0.6s and PRACTICED HANDS compounds 20% a stack — "+
+      [0,1,2,3,4,5].map(k=>(vil.buffs={gather:k},G.gatherSwing(vil,wood).toFixed(2))).join(" / ")+
+      "s. It was −0.1s flat, which bottomed out at 0.10s and a SIX-fold rate",
+      (vil.buffs={gather:0},Math.abs(G.gatherSwing(vil,wood)-0.6)<1e-9)&&
+      (vil.buffs={gather:5},Math.abs(G.gatherSwing(vil,wood)-0.6*Math.pow(0.8,5))<1e-9));
+    vil.buffs={};
+    check("v133.0 TIMBERWRIGHT halves the swing on TIMBER for a villager ("+base.toFixed(2)+
+      "s → "+(vil.buffs={timber:1},G.gatherSwing(vil,wood).toFixed(2))+"s) and for an ox cart ("+
+      (ox.buffs={timber:1},G.gatherSwing(ox,wood).toFixed(2))+"s)",
+      Math.abs(G.gatherSwing(vil,wood)-0.3)<1e-9&&Math.abs(G.gatherSwing(ox,wood)-0.3)<1e-9);
+    check("v133.0 TIMBERWRIGHT: …and it is TIMBER only — the same villager mines stone at "+
+      G.gatherSwing(vil,stone).toFixed(2)+"s, unchanged",Math.abs(G.gatherSwing(vil,stone)-0.6)<1e-9);
+    check("v133.0 TIMBERWRIGHT: …and no other class gets it — a clubman holding it still swings "+
+      (clb.buffs={timber:1},G.gatherSwing(clb,wood).toFixed(2))+"s",
+      Math.abs(G.gatherSwing(clb,wood)-0.6)<1e-9);
+    // the two frame paths must agree, which is the reason the function exists at all
+    const hostSrc=fs.readFileSync(path.join(ROOT,"js/09-main.js"),"utf8");
+    const netSrc =fs.readFileSync(path.join(ROOT,"js/10-net.js"),"utf8");
+    check("v133.0 gather: BOTH frame paths call gatherSwing — the host loop and the guest mirror "+
+      "each computed 0.6−0.1×stacks by hand, which is two copies of a balance number waiting to "+
+      "drift apart",
+      /gatherT>gatherSwing\(/.test(hostSrc)&&/gatherT>gatherSwing\(/.test(netSrc)&&
+      !/0\.6-0\.1\*buffSt/.test(hostSrc)&&!/0\.6-0\.1\*buffSt/.test(netSrc));
+    vil.alive=false; ox.alive=false; clb.alive=false;
+
+    // ---- BOUNTY HUNTER retired ----
+    check("v133.0 BOUNTY HUNTER is out of the deck ("+(G.BUFF_BY_ID.bounty?"STILL THERE":"gone")+
+      ") — and TIMBERWRIGHT is in ("+(G.BUFF_BY_ID.timber?"present":"MISSING")+")",
+      !G.BUFF_BY_ID.bounty&&!!G.BUFF_BY_ID.timber);
+    {
+      // …and a player who still holds it mid-match must neither crash nor be paid for it.
+      // Scored through a REAL KILL: the harness deliberately unsets G.awardPts with the note
+      // "call through gameplay paths instead", and it is right to — a direct call would not prove
+      // the retired buff is out of the path that actually pays.
+      const holder=G.makeUnit(0,"clubman",-76,70,{name:"Old",bot:{role:"citizen"}});
+      holder.bot=null; holder.remote="old"; holder.buffs={bounty:3}; holder.score=0;
+      const prey=G.makeUnit(1,"villager",-77,70,{name:"Purse",bot:{role:"citizen"}});
+      const _m=NET.mode; NET.mode="host";
+      G.dealDamage(holder,prey,99999);
+      NET.mode=_m;
+      check("v133.0 BOUNTY HUNTER: a save still carrying it scores FLAT — a villager kill paid "+
+        (holder.score||0)+", not the 13 a ×3 premium would have added. The id is tolerated "+
+        "everywhere (u.buffs, the wire, BUFF_BY_ID) and simply stops being dealt and stops paying",
+        (holder.score||0)===10);
+      holder.alive=false;
+    }
+
+    // ---- THE CHARGE CADENCES ----
+    check("v133.0 ARROW WARD / IRON GUARD read John's cadence tables, not 30÷stacks — ward "+
+      G.WARD_CD.join("/")+"s, guard "+G.GUARD_CD.join("/")+"s across five stacks",
+      G.WARD_CD.length===5&&G.GUARD_CD.length===5&&
+      G.WARD_CD[0]===24&&G.WARD_CD[4]===3&&G.GUARD_CD[0]===25&&G.GUARD_CD[4]===5&&
+      G.buffMax("ward")===5&&G.buffMax("guardup")===5);
+
+    // ---- KINSHIP scales with the shield wall ----
+    {
+      // MEASURE THE GAME, NOT MY ARITHMETIC. The first version of this gate defined the formula
+      // inside the test and checked it against itself — it passed happily against a build where
+      // Kinship had been reverted to a flat 1 HP/s. Drive the real aura pass and read real HP.
+      const heal=(nKin)=>{
+        const me=G.makeUnit(0,"clubman",120,120,{name:"Kin",bot:{role:"citizen"}});
+        me.bot=null; me.remote="kin"; me.buffs={kinship:1};
+        me.maxHp=200; me.hp=100; me._auraW=0; me._stillT=0;
+        const mates=[];
+        for(let i=0;i<nKin;i++){
+          const o=G.makeUnit(0,"clubman",120+((i%6)-3)*0.7,120+((i/6|0)-1)*0.7,
+            {name:"M"+i,bot:{role:"citizen"}});
+          o.bot=null; mates.push(o);
+        }
+        const h0=me.hp;
+        G.auraBuffTick(me,G.AURA_SCAN);
+        const got=(me.hp-h0)/G.AURA_SCAN;      // HP per second
+        me.alive=false; for(const o of mates)o.alive=false;
+        return got;
+      };
+      const h1=heal(1), h4=heal(4), h20=heal(20);
+      check("v133.0 KINSHIP pays per kinsman and ceilings at 5% — driven through the real aura "+
+        "pass on a 200 HP body: 1 near = "+h1.toFixed(2)+" HP/s, 4 near = "+h4.toFixed(2)+
+        ", 20 near = "+h20.toFixed(2)+" (the cap). A flat 1 HP/s paid the same whether one stood "+
+        "with you or ten",
+        Math.abs(h1-1)<0.05&&Math.abs(h4-4)<0.2&&Math.abs(h20-10)<0.3);
+      const combatSrc=fs.readFileSync(path.join(ROOT,"js/05-combat.js"),"utf8");
+      check("v133.0 KINSHIP: …and the aura pass COUNTS kinsmen rather than latching a boolean — "+
+        "the old loop stopped at the first one it found",
+        /kinNear\+\+/.test(combatSrc)&&/Math\.min\(0\.05,0\.005\*kinNear\)/.test(combatSrc)&&
+        !/kinNear=true/.test(combatSrc));
+    }
+
+    // ---- SERRATED EDGE layers to three ----
+    {
+      // THROUGH dealDamage, NOT tmodAdd. The first version called tmodAdd with the cap by hand,
+      // which tests tmodAdd and says nothing about whether the game's own proc passes a cap —
+      // it passed against a build with the cap stripped out of the call site.
+      const a=G.makeUnit(0,"clubman",-78,70,{name:"Serr",bot:{role:"citizen"}});
+      a.bot=null; a.remote="serr"; a.buffs={bleed:1};
+      const v=G.makeUnit(1,"clubman",-79,70,{name:"Bled",bot:{role:"citizen"}});
+      v.bot=null; v.remote="bled"; v._tmods=null; v.maxHp=9999; v.hp=9999;
+      const _mr=Math.random, _mode=NET.mode;
+      Math.random=()=>0; NET.mode="host";        // every roll procs
+      for(let i=0;i<6;i++)G.dealDamage(a,v,1);
+      Math.random=_mr; NET.mode=_mode;
+      const mag=G.tmodSum(v,"bleed");
+      check("v133.0 SERRATED EDGE: six procs THROUGH dealDamage layer on one enemy to "+mag+
+        " HP/s and no further — 3 over twenty seconds is the 60 HP on the sheet, and a seventh "+
+        "proc refreshes the clock without deepening the wound",mag===3);
+      a.alive=false; v.alive=false;
+    }
   }
   check("v116 touch: the mobile layer is a no-op outside a browser",
     G.getHideD()===150&&G.getMouseLocked()===false);

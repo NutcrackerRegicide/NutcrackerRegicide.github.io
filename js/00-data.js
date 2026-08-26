@@ -877,7 +877,10 @@ let T=0, gameOver=false;
 function setGameOver(v){gameOver=v;} // the test harness needs to reopen a finished war
 function costPts(c){return c?((c.food||0)+(c.gold||0)+(c.stone||0)+(c.wood||0)):0;}
 function awardPts(u,n){ // humans only: the host player and possessed guests
-  if(u&&(u.isPlayer||u.remote)&&n>0)u.score=(u.score||0)+n*(1+0.10*buffSt(u,"bounty")); // Bounty Hunter pays a premium
+  // v133.0 BOUNTY HUNTER RETIRED. Score is now flat. The id is deliberately still tolerated
+  // everywhere else: a player mid-match holds it in u.buffs, syncBuffs puts it on the wire, and
+  // BUFF_BY_ID lookups must not throw on it — it simply stops being dealt and stops paying.
+  if(u&&(u.isPlayer||u.remote)&&n>0)u.score=(u.score||0)+n;
 }
 function isHuman(u){return !!(u&&(u.isPlayer||u.remote));}
 
@@ -890,6 +893,9 @@ function isHuman(u){return !!(u&&(u.isPlayer||u.remote));}
 // The board deals only from what your team's age has unlocked, so the Stone Age never offers
 // "Build a Castle". Ages: 0 Stone · 1 Bronze · 2 Iron · 3 Classical · 4 Medieval · 5 Enlightenment.
 const XP_MAX_LVL=25, BUFF_MAX_STACK=3, BOARD_REACH=5, QUEST_REROLL_MAX=3;
+// v133.0 the charge cooldowns, one entry per stack — John's sheet, not a formula
+const WARD_CD =[24,18,12,6,3];   // ARROW WARD  — seconds between blocked ranged attacks
+const GUARD_CD=[25,20,15,10,5];  // IRON GUARD  — seconds between blocked melee attacks
 // ---------- v132.29 THE LEVEL AURA — every dial in one place ----------
 // Rising motes off a levelled player: team-tinted at low level, gold at the cap. Cosmetic only,
 // never on the wire, never simulation. See tools/patch-aura.js for the reasoning.
@@ -986,36 +992,35 @@ const QUESTS=[ // {id,name,desc,ev,n,xp,age} — ev is the progress event; xp do
   {id:"tower2",  name:"Watchwarden",         desc:"Build 2 Guard Towers",                   ev:"build_tower",n:2, xp:1,age:3}
 ];
 const BUFFS=[ // random at the Blacksmith, 1 XP each. `max` is the per-buff stack ceiling
-  // ---- the original twenty-one; `max` values are John's CSV column ----
-  {id:"dmg",    name:"Honed Edge",       desc:"+5% damage",                                  max:5},
-  {id:"atkspd", name:"Quick Hands",      desc:"−0.1s attack cooldown",                       max:5},
-  {id:"crit",   name:"Keen Eye",         desc:"+5% chance of a CRITICAL (2× damage)",        max:3},
-  {id:"shield", name:"Raised Shield",    desc:"−5% damage taken",                            max:5},
-  {id:"hp",     name:"Stout Heart",      desc:"+5% max HP",                                  max:5},
+  // ---- the original twenty-one, rebalanced in v133.0. BOUNTY HUNTER retired here ----
+  {id:"dmg",    name:"Honed Edge",       desc:"+7% damage",                                  max:5},
+  {id:"atkspd", name:"Quick Hands",      desc:"−10% attack cooldown",                        max:5},
+  {id:"crit",   name:"Keen Eye",         desc:"+7% chance of a CRITICAL (2× damage)",        max:3},
+  {id:"shield", name:"Raised Shield",    desc:"−7% damage taken",                            max:5},
+  {id:"hp",     name:"Stout Heart",      desc:"+10% max HP",                                 max:5},
   {id:"dodge",  name:"Sixth Sense",      desc:"5% chance to dodge any blow",                 max:3},
-  {id:"spd",    name:"Fleet Foot",       desc:"+0.5 move speed",                             max:3},
-  {id:"carry",  name:"Deep Satchel",     desc:"+10 carry capacity",                          max:5},
-  {id:"gather", name:"Practiced Hands",  desc:"−0.1s per gather swing",                      max:5},
-  {id:"builder",name:"Master Builder",   desc:"buildings need fewer hits from you",          max:3},
+  {id:"spd",    name:"Fleet Foot",       desc:"+1 move speed",                               max:3},
+  {id:"carry",  name:"Deep Satchel",     desc:"+20 carry capacity",                          max:5},
+  {id:"gather", name:"Practiced Hands",  desc:"gather 20% faster",                           max:5},
+  {id:"builder",name:"Master Builder",   desc:"buildings need fewer hits from you",          max:4},
   {id:"slayer", name:"Wild Slayer",      desc:"+15% damage vs the wilds' creatures",         max:5},
-  {id:"captain",name:"Captain's Banner", desc:"+1% damage to allies fighting near you",       max:3},
-  {id:"leech",  name:"Bloodthirst",      desc:"heal 1 HP with every hit you land",           max:5},
-  {id:"regen",  name:"Second Skin",      desc:"+0.5 HP/s after 5s out of combat",            max:5},
-  {id:"bounty", name:"Bounty Hunter",    desc:"+10% score points earned",                    max:3}, // CSV left blank — held at the old global
-  {id:"zeal",   name:"Zealotry",         desc:"−1.5s priest resurrect cooldown",             max:3},
-  {id:"trade",  name:"Deep Pockets",     desc:"+10% trade-sell payout",                      max:3},
+  {id:"captain",name:"Captain's Banner", desc:"+5% damage to allies fighting near you",      max:3},
+  {id:"leech",  name:"Bloodthirst",      desc:"heal 7% of the damage you deal",              max:5},
+  {id:"regen",  name:"Second Skin",      desc:"+2 HP/s after 5s out of combat",              max:5},
+  {id:"zeal",   name:"Zealotry",         desc:"−2s priest resurrect cooldown",               max:3},
+  {id:"trade",  name:"Deep Pockets",     desc:"+15% trade-sell payout",                      max:3},
   {id:"parry",  name:"Duelist",          desc:"+0.07s parry window",                         max:3},
-  {id:"siege",  name:"Siegewright",      desc:"+10% damage crewing siege engines",           max:3},
-  {id:"wreck",  name:"Wrecker",          desc:"+10% damage vs buildings",                    max:3},
+  {id:"siege",  name:"Siegewright",      desc:"+15% damage crewing siege engines",           max:3},
+  {id:"wreck",  name:"Wrecker",          desc:"+15% damage vs buildings",                    max:3},
   {id:"rally",  name:"Bannerman",        desc:"rally one additional troop",                  max:3},
   // ---- v132.30 BATCH A: eighteen that hook existing code and need no new system ----
   {id:"ambush", name:"First Blood",      desc:"+50% damage to enemies at FULL health",       max:1},
-  {id:"trophy", name:"Trophy Hunter",    desc:"+1 max HP with every kill, up to +100",       max:1},
+  {id:"trophy", name:"Trophy Hunter",    desc:"+5 max HP with every kill, up to +100",       max:1},
   {id:"cull",   name:"Culler",           desc:"instantly slay wild creatures below 15% HP",  max:1},
   {id:"feast",  name:"Second Wind",      desc:"restore 10% of your HP on a kill",            max:3},
-  {id:"fervor", name:"Desperation",      desc:"+0.5% attack speed per 1% of health missing", max:1},
-  {id:"purse",  name:"Cutpurse",         desc:"pocket 10 gold on a kill",                    max:1},
-  {id:"forage", name:"Scavenger",        desc:"pocket 10 food on a kill",                    max:1},
+  {id:"fervor", name:"Desperation",      desc:"+1% attack speed per 1% of health missing",   max:1},
+  {id:"purse",  name:"Cutpurse",         desc:"pocket 10 gold on a kill",                    max:3},
+  {id:"forage", name:"Scavenger",        desc:"pocket 10 food on a kill",                    max:3},
   {id:"mule",   name:"Pack Mule",        desc:"(villager) a fuller load moves faster, to +10%",max:1},
   {id:"thorns", name:"Bramble Mail",     desc:"deal 1 damage back to a melee attacker",      max:3},
   {id:"tribute",name:"Blood Tax",        desc:"gain 1 gold whenever you take damage",        max:1},
@@ -1023,35 +1028,37 @@ const BUFFS=[ // random at the Blacksmith, 1 XP each. `max` is the per-buff stac
   {id:"reaping",name:"Rich Soil",        desc:"+20 extra food when you harvest a farm",      max:1},
   {id:"bulwark",name:"Bulwark",          desc:"defensive structures cost you half",          max:1},
   {id:"enginebane",name:"Enginebane",    desc:"(ranged) +50% damage to siege engines",       max:1},
-  {id:"woods",  name:"Woodsman",         desc:"+10% damage while fighting in the woods",     max:1},
+  {id:"woods",  name:"Woodsman",         desc:"+30% damage while fighting in the woods",     max:1},
   {id:"warden", name:"Beast Warden",     desc:"take 10% less damage from the wilds",         max:3},
   {id:"yeoman", name:"Yeoman",           desc:"(villager) double health and double damage",  max:1},
   {id:"kguard", name:"King's Guard",     desc:"+10% damage and −10% damage taken near your King",max:1},
   // ---- v132.32 BATCH B: five that need the timed-modifier system ----
-  {id:"frenzy", name:"Killing Frenzy",   desc:"+2 damage per kill, to +10, for 7s",          max:1},
+  {id:"frenzy", name:"Killing Frenzy",   desc:"+3 damage per kill, to +15, for 10s",         max:1},
   {id:"surge",  name:"Bloodrush",        desc:"+50% move speed on a kill, fading over 2s",   max:1},
   {id:"flight", name:"Survival Instinct",desc:"+40% move speed for 5s when you drop below 25% HP",max:1},
   {id:"stride", name:"Long Strider",     desc:"+30% move speed while out of combat",         max:1},
   {id:"hunt",   name:"Hunter's Step",    desc:"(melee) +10% move speed for 2s when you land a blow",max:1},
   // ---- v132.34 BATCH C: five that put state on the ENEMY ----
-  {id:"bleed",  name:"Serrated Edge",   desc:"5% chance on hit to bleed an enemy for 20 HP over 20s",max:1},
-  {id:"venom",  name:"Venomous",        desc:"5% chance on hit to poison — 10 HP and half speed over 10s",max:1},
-  {id:"concuss",name:"Concussive Blow", desc:"(melee) 5% chance on hit to STUN, once every 30s",max:1},
-  {id:"gash",   name:"Deep Gash",       desc:"your damage stops an enemy healing for 3s",     max:1},
-  {id:"shrug",  name:"Shrug It Off",    desc:"10% chance when struck to shed every debuff",   max:1},
+  {id:"bleed",  name:"Serrated Edge",   desc:"15% chance on hit to bleed an enemy — bleeds layer to 60 HP over 20s",max:3},
+  {id:"venom",  name:"Venomous",        desc:"15% chance on hit to poison — 10 HP and half speed over 10s",max:1},
+  {id:"concuss",name:"Concussive Blow", desc:"(melee) 15% chance on hit to STUN, once every 10s",max:1},
+  {id:"gash",   name:"Deep Gash",       desc:"your damage stops an enemy healing for 5s",     max:1},
+  {id:"shrug",  name:"Shrug It Off",    desc:"20% chance when struck to shed every debuff",   max:1},
   // ---- v132.35 BATCH D: six that work on everything standing near you ----
   {id:"sanctuary",name:"Sanctuary",     desc:"stand still 3s to open a healing zone — 3% HP a second",max:1},
-  {id:"brand",  name:"Searing Presence",desc:"nearby enemies burn for 1 HP a second",         max:1},
+  {id:"brand",  name:"Searing Presence",desc:"nearby enemies burn for 2 HP a second",         max:3},
   {id:"resolve",name:"Unbowed",         desc:"−5% damage taken for every enemy near you, to −25%",max:1},
   {id:"phalanx",name:"Phalanx",         desc:"+5% damage for every ally beside you, to +20%",  max:1},
-  {id:"kinship",name:"Kinship",         desc:"mend while a soldier of your own kind stands near",max:1},
-  {id:"steward",name:"Steward",         desc:"(villager) mend nearby friendly buildings, 0.5 HP a second",max:1},
+  {id:"kinship",name:"Kinship",         desc:"mend 0.5% of max HP a second per soldier of your own kind nearby, to 5%",max:1},
+  {id:"steward",name:"Steward",         desc:"(villager) mend nearby friendly buildings, 10 HP a second",max:1},
   // ---- v132.36 BATCH E: procs and charges — the last of John's CSV ----
-  {id:"quake",  name:"Earthshaker",     desc:"(melee) 5% chance on hit to slam the ground for area damage",max:1},
-  {id:"knives", name:"Knife Fighter",   desc:"10% chance every 2s to hurl a knife at a nearby enemy",max:2},
+  {id:"quake",  name:"Earthshaker",     desc:"(melee) 15% chance on hit to slam the ground for area damage",max:1},
+  {id:"knives", name:"Knife Fighter",   desc:"15% chance every 2s to hurl a knife for half your damage",max:2},
   {id:"volley", name:"Rapid Volley",    desc:"(ranged) 5% chance to loose THREE shots, once every 10s",max:1},
-  {id:"ward",   name:"Arrow Ward",      desc:"block one ranged attack every 30s (faster per stack)",max:3},
-  {id:"guardup",name:"Iron Guard",      desc:"block one melee attack every 30s (faster per stack)",  max:3}
+  {id:"ward",   name:"Arrow Ward",      desc:"block one ranged attack every 24s — 18/12/6/3s as it stacks",max:5},
+  {id:"guardup",name:"Iron Guard",      desc:"block one melee attack every 25s — 20/15/10/5s as it stacks",max:5},
+  // ---- v133.0 BATCH F ----
+  {id:"timber", name:"Timberwright",    desc:"(villager · ox cart) chop timber twice as fast", max:1}
 ];
 // one lookup, built once. BUFFS.find() per call was fine at 21 entries and is the wrong shape
 // at 39 and heading for 63.
@@ -1078,7 +1085,17 @@ function bldCostD(u,dd){
           stone:Math.ceil((c.stone||0)*f),wood:Math.ceil((c.wood||0)*f)};
 }
 function bldCost(u,type){return bldCostD(u,BLD[type]);}
-function carryCap(u){return u&&u.cls==="oxcart"?300:20+10*buffSt(u,"carry");} // Deep Satchel · v99: the ox bed takes 300
+function carryCap(u){return u&&u.cls==="oxcart"?300:20+20*buffSt(u,"carry");} // Deep Satchel · v99: the ox bed takes 300
+// v133.0 THE SWING CLOCK, in one place, because two frame paths compute it — 09-main for the host
+// and 10-net for a guest — and they drifted apart the last time a buff touched gathering.
+// PRACTICED HANDS compounds at 20% a stack (John's call): 0.6 → 0.48 / 0.38 / 0.31 / 0.25 / 0.20s,
+// a 3x rate at full stack. It was −0.1s flat, which reached 0.1s and a SIX-fold rate.
+// TIMBERWRIGHT halves it again, for wood, for the two classes that haul it.
+function gatherSwing(u,node){
+  let t=0.6*Math.pow(0.8,buffSt(u,"gather"));
+  if(node&&node.type==="wood"&&u&&(u.cls==="villager"||u.cls==="oxcart")&&buffSt(u,"timber"))t*=0.5;
+  return t*((node&&node.slow)||1);
+}
 const townBoards=[]; // {team,x,z,mesh} — stood up beside each Town Center by world gen
 const MIL_LINES=["melee","anticav","ranged","cavalry","scoutline","meleesiege","rangedsiege"];
 

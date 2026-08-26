@@ -1133,7 +1133,7 @@ NET.driveRemote=function(r,dt){
     if(mk){
       const d=Math.hypot(mk.x-u.tradeLoaded.x,mk.z-u.tradeLoaded.z);
       // v87: 2.5× — the same premium the host player gets (was 4×, a v84 leftover)
-      const g=Math.round(2.5*tradeGold(d)*(1+0.10*buffSt(u,"trade"))); // DEEP POCKETS
+      const g=Math.round(2.5*tradeGold(d)*(1+0.15*buffSt(u,"trade"))); // DEEP POCKETS
       awardPts(u,g);
       questTradeSale(u,u.tradeLoaded); // the route quests count the sale
       stock[u.team].gold+=g; updateResHud();
@@ -1231,7 +1231,7 @@ NET.driveRemote=function(r,dt){
       if(n){
         u.gatherT+=dt; u.swing=Math.max(u.swing||0,0.12);
         u.facing=Math.atan2(n.x-px,n.z-pz);
-        if(u.gatherT>(0.6-0.1*buffSt(u,"gather"))*(n.slow||1)){ // PRACTICED HANDS
+        if(u.gatherT>gatherSwing(u,n)){ // PRACTICED HANDS · TIMBERWRIGHT — the SAME function the
           u.gatherT=0;
           const cap=carryCap(u); // DEEP SATCHEL (the ox bed holds 300)
           const total=u.carry.food+u.carry.gold+u.carry.stone+u.carry.wood;
