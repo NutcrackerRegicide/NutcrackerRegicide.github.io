@@ -2149,35 +2149,22 @@ function _gatePassHX(b){
   if(a>=2&&b.type==="wood_gate")return GATE_PASS/2-0.7;
   return null;
 }
-function moveUnit(u,dx,dz,dt){
-  if(u&&u._tmods&&typeof isStunned==="function"&&isStunned(u))return false; // v132.34 CONCUSSIVE BLOW
-  const len=Math.hypot(dx,dz);
-  if(len<0.001)return false;
-  dx/=len; dz/=len;
-  // PACK MULE (v132.30): a laden villager moves FASTER, to +10% at a full pack. Scaled here and
-  // not on u.spd, because u.spd is a stat applyBuffStats rewrites from the class table every time
-  // a buff lands — a load-dependent value written there is erased at the next visit to the forge.
-  // moveUnit is also the one door all three movers pass through (local player, host-driven remote,
-  // and the guest's own prediction), so this reads the same on every screen.
-  let _spd=u.spd;
-  // v132.32: the timed speed modifiers (BLOODRUSH, SURVIVAL INSTINCT, HUNTER'S STEP) compound
-  // here, and LONG STRIDER rides the same line as a STATE rather than a timer.
-  if(u._tmods)_spd*=tmodMul(u,"spdmul");
-  if(typeof buffSt==="function"&&buffSt(u,"stride")&&
-     typeof T!=="undefined"&&T-(u._lastHurt||-99)>TMOD_OOC)
-    _spd*=1+0.30*buffSt(u,"stride");
-  const _mu=(typeof buffSt==="function")?buffSt(u,"mule"):0;
-  if(_mu&&u.cls==="villager"&&u.carry){
-    const cap=(typeof carryCap==="function")?carryCap(u):20;
-    const load=(u.carry.food||0)+(u.carry.gold||0)+(u.carry.stone||0)+(u.carry.wood||0);
-    if(cap>0)_spd*=1+0.10*_mu*Math.max(0,Math.min(1,load/cap));
-  }
-  let nx=u.root.position.x+dx*_spd*dt;
-  let nz=u.root.position.z+dz*_spd*dt;
-  if(!walkable(nx,nz)){ // the wall stands at the MOUNTAINS: fringe apron + camp pockets are open ground
-    nx=Math.max(-(MAP.x+BORDER_FRINGE),Math.min(MAP.x+BORDER_FRINGE,nx));
-    nz=Math.max(-(MAP.z+BORDER_FRINGE),Math.min(MAP.z+BORDER_FRINGE,nz));
-  }
+// ---- v134.0 THE PUSH-OUT, LIFTED OUT OF moveUnit ----
+// It was inline in moveUnit and three callers now need it: moveUnit itself, separate() (which used
+// to shove bodies straight into buildings with nothing to catch them), and the detour validator.
+// MOVED here, not copied — 00-data.js's own note that "two derivations of the same number is how a
+// wall ends up standing somewhere the building isn't" is the whole argument.
+//
+// (dx,dz) is the desired heading and is read ONLY by the wall branch, whose response is not a
+// push but an endward slide scaled by u.spd*dt. Pass dx=dz=0, dt=0 to mean "resolve this point in
+// place": every collider still ejects — the wall included, perpendicular to its face — and only
+// the slide contributes nothing, which is exactly right for a body that is not walking anywhere.
+//
+// ONE PASS, deliberately. Two overlapping colliders cannot both be satisfied, and iterating to a
+// fixpoint on a town that legally leaves 0.8 of corridor (06-input.js _gapFor) would spend the
+// budget without converging. A body left touching one collider is a body moveToward can walk out
+// of; the failure this replaces was a body teleported INSIDE one every frame.
+function pushOutOfBuildings(u,nx,nz,dx,dz,dt){
   // push out of buildings (farm FIELDS are walkable; the barn standing on one is not)
   for(const b of buildings){
     if(!b.alive)continue;
@@ -2328,6 +2315,65 @@ function moveUnit(u,dx,dz,dt){
       nx=b.x+(nx-b.x)/d*r; nz=b.z+(nz-b.z)/d*r;
     }
   }
+  return [nx,nz];
+}
+function moveUnit(u,dx,dz,dt){
+  if(u&&u._tmods&&typeof isStunned==="function"&&isStunned(u))return false; // v132.34 CONCUSSIVE BLOW
+  const len=Math.hypot(dx,dz);
+  if(len<0.001)return false;
+  dx/=len; dz/=len;
+  // PACK MULE (v132.30): a laden villager moves FASTER, to +10% at a full pack. Scaled here and
+  // not on u.spd, because u.spd is a stat applyBuffStats rewrites from the class table every time
+  // a buff lands — a load-dependent value written there is erased at the next visit to the forge.
+  // moveUnit is also the one door all three movers pass through (local player, host-driven remote,
+  // and the guest's own prediction), so this reads the same on every screen.
+  let _spd=u.spd;
+  // v132.32: the timed speed modifiers (BLOODRUSH, SURVIVAL INSTINCT, HUNTER'S STEP) compound
+  // here, and LONG STRIDER rides the same line as a STATE rather than a timer.
+  if(u._tmods)_spd*=tmodMul(u,"spdmul");
+  if(typeof buffSt==="function"&&buffSt(u,"stride")&&
+     typeof T!=="undefined"&&T-(u._lastHurt||-99)>TMOD_OOC)
+    _spd*=1+0.30*buffSt(u,"stride");
+  const _mu=(typeof buffSt==="function")?buffSt(u,"mule"):0;
+  if(_mu&&u.cls==="villager"&&u.carry){
+    const cap=(typeof carryCap==="function")?carryCap(u):20;
+    const load=(u.carry.food||0)+(u.carry.gold||0)+(u.carry.stone||0)+(u.carry.wood||0);
+    if(cap>0)_spd*=1+0.10*_mu*Math.max(0,Math.min(1,load/cap));
+  }
+  let nx=u.root.position.x+dx*_spd*dt;
+  let nz=u.root.position.z+dz*_spd*dt;
+  if(!walkable(nx,nz)){ // the wall stands at the MOUNTAINS: fringe apron + camp pockets are open ground
+    // v134.0 SLIDE ALONG THE LINE, DO NOT SNAP TO THE RECTANGLE. This clamp was unconditional, and
+    // walkable() is deliberately NOT the rectangle — the camp pockets sit outside it and a body is
+    // explicitly allowed to stand in one (smoketest: "a unit may stand OUTSIDE the border inside a
+    // camp pocket"). So a creep-fighter at z 185 who stepped one pace to illegal ground was flung
+    // to z 161: a 24-unit teleport out of legal ground, produced by the code meant to keep him on
+    // it. Try each axis alone first — pressing north at the mountain line now WALKS along it, which
+    // is what the clamp did for the rectangle and did to nobody standing in a pocket.
+    const _ox=u.root.position.x,_oz=u.root.position.z;
+    if(walkable(nx,_oz))nz=_oz;
+    else if(walkable(_ox,nz))nx=_ox;
+    else{nx=_ox;nz=_oz;}
+  }
+  // v134.0: the collider lives in pushOutOfBuildings now — separate() and the detour validator
+  // have to agree with it exactly, and the only way to guarantee that is one copy.
+  {let _po=pushOutOfBuildings(u,nx,nz,dx,dz,dt);
+   // v134.0 A SECOND PASS, and only when the first one moved us. The loop is ONE pass over the
+   // buildings in array order, so a shove out of building A can land inside building B and B's
+   // shove is the one that stands. A second pass with dt=0 (eject only — the wall's endward slide
+   // must not be paid twice) catches that. It is NOT iterated to a fixpoint: where two colliders
+   // genuinely overlap — a farm's barn disc reaches 9.5 from a Town Center's centre, inside a box
+   // that is 12.58 — there is no legal point to converge on, and spending frames looking for one
+   // would not find it. That overlap is a PLACEMENT bug and belongs to the town-plan work.
+   if(_po[0]!==nx||_po[1]!==nz)_po=pushOutOfBuildings(u,_po[0],_po[1],0,0,0);
+   nx=_po[0]; nz=_po[1];}
+  // …and nothing may push a body onto ground it is not allowed to stand on. The push-out is a
+  // shove out of a footprint with no notion of the border, so a building near the fringe could
+  // park a body permanently outside the world. If the shove lands somewhere illegal and the body
+  // was standing somewhere legal, it keeps what it had.
+  if(!walkable(nx,nz)&&walkable(u.root.position.x,u.root.position.z)){
+    nx=u.root.position.x; nz=u.root.position.z;
+  }
   const ox=u.root.position.x, oz=u.root.position.z;
   u.root.position.x=nx; u.root.position.z=nz;
   // face the REALIZED motion: sliding along a wall or a building's edge no longer
@@ -2438,55 +2484,132 @@ function wallCrossPoint(u,hit,tx,tz){ // where to walk instead: our gate, or the
   }
   return bestP;
 }
+// ---- v134.0 THE GOAL-PROGRESS WATCHDOG, and the validated detour ----
+// MOVE_GOAL_JUMP: how far the caller's target may move before it counts as a NEW errand and the
+//   watchdog starts over. Bands re-aim at a running enemy every frame, and a watchdog that reset on
+//   every re-aim would never fire; one that never reset would fire on every chase. 9 is comfortably
+//   past a frame's worth of a fleeing body and well short of a change of mission.
+// MOVE_GOAL_EPS: ground gained that counts as gained. Below this is noise off the collider.
+// MOVE_STALL_T: seconds of no ground gained before we call it stuck. Long enough to walk the far
+//   side of a castle (the widest legal detour is ~36 units at 7 spd ≈ 5s of arc, but the watchdog
+//   is suspended while a detour runs, so this measures only unassisted circling).
+const MOVE_GOAL_JUMP=9, MOVE_GOAL_EPS=0.35, MOVE_STALL_T=2.2;
+// Where a sidestep is allowed to aim, in degrees off the heading to the goal. Tried in order, on
+// the chosen hand first and the other hand second: square across, then progressively backwards.
+// Fixed and ordered — NOT rolled — because a random draw here would consume the seeded window
+// (invariant #2) and move every tree.
+const DETOUR_ARC=[90,65,115,45,135,25,155,10,170];
+function detourFree(u,x,z){ // is this a spot a body could actually stand?
+  if(!walkable(x,z))return false;
+  const p=pushOutOfBuildings(u,x,z,0,0,0); // the SAME collider the push uses — see its note
+  // EXACT equality, not a tolerance. This read `dist2(...)<0.01`, which is a tenth of a unit of
+  // slack, and a point sitting 0.05 inside a box is pushed 0.05 and passed the test — so a
+  // "validated" sidestep could still aim inside a building. SMOKE_SEED=777 found one. When nothing
+  // pushes, pushOutOfBuildings returns the very numbers it was handed, so === is the honest test
+  // and there is no tolerance to get wrong.
+  return p[0]===x&&p[1]===z;
+}
+// DETOUR_RANGE: the wide swing first, then closer in. A body wedged between two buildings often
+// has three units of daylight where it has no eight, and the escalated radius (up to 36) is the
+// one LEAST likely to be free in a dense town — which is exactly when it is asked for.
+const DETOUR_RANGE=[1,0.6,0.32], DETOUR_MIN=3;
+function pickDetour(u,dx,dz,distT){
+  const px=u.root.position.x, pz=u.root.position.z;
+  const L=distT||1, fx=dx/L, fz=dz/L;      // heading to the goal…
+  const rx=-fz, rz=fx;                     // …and its right hand
+  const base=8+7*(u._stkN||0);             // wider every failed attempt, as before
+  const until=T+1.1+0.45*(u._stkN||0);
+  const side=u._detSide||1;
+  for(const scale of DETOUR_RANGE){
+    const D=Math.max(DETOUR_MIN,base*scale);
+    for(const hand of [side,-side]){
+      for(const deg of DETOUR_ARC){
+        const th=deg*Math.PI/180, c=Math.cos(th), sn=Math.sin(th)*hand;
+        const cx=px+(fx*c+rx*sn)*D, cz=pz+(fz*c+rz*sn)*D;
+        if(detourFree(u,cx,cz))return {x:cx,z:cz,until};
+      }
+    }
+  }
+  // Walled in on every hand at every range. The first cut fell back to v133's BLIND lateral offset
+  // here, on the reasoning that it could then never be worse than what shipped — and that was wrong
+  // twice. It made the "every sidestep aims at legal ground" gate a coincidence rather than an
+  // invariant (SMOKE_SEED=42 put 2 of 10 sidesteps inside a building), and it was not even
+  // equivalent to v133, because v133 walked its blind offset with avoidance OFF and bounced,
+  // whereas this version STEERS toward a detour for up to 2.9s and commits to it.
+  // Null means: issue no sidestep, keep steering at the goal, keep the escalation, try again in
+  // MOVE_STALL_T. A body with nowhere to go is not helped by being sent somewhere anyway.
+  return null;
+}
 function moveToward(u,x,z,dt,stopDist){
   const dx=x-u.root.position.x, dz=z-u.root.position.z;
   const distT=Math.hypot(dx,dz);
-  if(distT<=(stopDist||0.5)){u._stk=0;u._det=null;u._stkN=0;u._wwp=null;return true;}
+  if(distT<=(stopDist||0.5)){u._stk=0;u._det=null;u._stkN=0;u._wwp=null;u._pgBest=undefined;return true;}
+  // --- the watchdog: DISTANCE TO THE GOAL, not ground covered ---
+  // v134.0. This tested `moved`, the realized displacement, and the engine produces four separate
+  // zero-progress motions at full speed: the pure tangent out of steerAroundBuildings (no goal
+  // blend — a unit orbits a barracks forever at full stride), the endward wall slide (which by
+  // construction always registers as moving), the least-penetration box push flipping between two
+  // faces at a corner, and — the big one — separate() shoving a body into a footprint that the next
+  // frame's push-out shoves it back out of. All four reset u._stk to 0 every frame, so the unstick
+  // logic below was unreachable in exactly the situations it exists for.
+  if(u._pgBest===undefined||dist2(x,z,u._pgx,u._pgz)>MOVE_GOAL_JUMP*MOVE_GOAL_JUMP){
+    u._pgBest=distT; u._pgT=T; u._stkN=0;   // a new errand: fresh slate, and drop the escalation
+  }else if(distT<u._pgBest-MOVE_GOAL_EPS){
+    u._pgBest=distT; u._pgT=T;              // real ground gained toward the goal
+  }
+  u._pgx=x; u._pgz=z;
+  const px=u.root.position.x, pz=u.root.position.z;
+  let sx,sz,onDetour=false;
   // a detour in progress takes priority — walk it out
   if(u._det&&T<u._det.until){
-    moveUnit(u,u._det.x-u.root.position.x,u._det.z-u.root.position.z,dt);
-    return false;
-  }
-  // an active wall waypoint (a gate, or the wall line's end) comes next
-  if(u._wwp&&T<u._wwp.until){
-    if(dist2(u.root.position.x,u.root.position.z,u._wwp.x,u._wwp.z)<2.5*2.5)u._wwp=null;
-    else{
-      moveUnit(u,u._wwp.x-u.root.position.x,u._wwp.z-u.root.position.z,dt);
-      return false;
-    }
-  }
-  // would the straight line strike a wall? route through a gate or around the end instead
-  const wHit=wallInPath(u,dx/(distT||1),dz/(distT||1),Math.min(distT,14));
-  if(wHit){
-    const wp=wallCrossPoint(u,wHit,x,z);
-    if(wp){
-      u._wwp={x:wp.x,z:wp.z,until:T+3};
-      moveUnit(u,wp.x-u.root.position.x,wp.z-u.root.position.z,dt);
-      return false;
-    }
-  }
-  const px=u.root.position.x, pz=u.root.position.z;
-  const [sx,sz]=steerAroundBuildings(u,dx/(distT||1),dz/(distT||1),distT,x,z);
-  moveUnit(u,sx,sz,dt);
-  const moved=Math.hypot(u.root.position.x-px,u.root.position.z-pz);
-  if(moved<u.spd*dt*0.25){ // pressing forward, going nowhere: something's in the way
-    u._stk=(u._stk||0)+dt;
-    if(u._stk>0.9){
-      u._stk=0;
-      const eb=nearestEnemyBuilding(u,Math.max(3.5,u.rng+1.5));
-      if(eb&&u.dmg>0){ // an enemy wall bars the road? tear it down
-        u.facing=Math.atan2(eb.x-px,eb.z-pz);
-        tryAttack(u);
-      }else{ // friendly obstruction: sidestep — wider every failed attempt
-        u._detSide=-(u._detSide||1);
-        u._stkN=Math.min(4,(u._stkN||0)+1);
-        const L=Math.hypot(dx,dz)||1, D=8+7*u._stkN;
-        u._det={x:px+dx/L*4-dz/L*D*u._detSide,
-                z:pz+dz/L*4+dx/L*D*u._detSide,
-                until:T+1.1+0.45*u._stkN};
+    onDetour=true;
+    // v134.0 …WITH AVOIDANCE ON. This called moveUnit directly, so for up to 2.9s a unit walking
+    // its way out of trouble had no obstacle avoidance at all — and the detour it was walking had
+    // never been tested against a building either. Two blindnesses that compounded.
+    const ddx=u._det.x-px, ddz=u._det.z-pz, dl=Math.hypot(ddx,ddz)||1;
+    const st=steerAroundBuildings(u,ddx/dl,ddz/dl,dl,u._det.x,u._det.z);
+    sx=st[0]; sz=st[1];
+  }else{
+    // the detour is spent. Give the goal a fresh clock: it may well be reachable now, and firing
+    // another sidestep on the strength of the stall the detour was ANSWERING would never converge.
+    if(u._det){u._det=null; u._pgT=T; u._pgBest=distT;}
+    if(u._wwp&&T>=u._wwp.until)u._wwp=null;
+    if(u._wwp&&dist2(px,pz,u._wwp.x,u._wwp.z)<2.5*2.5){u._wwp=null;u._pgT=T;u._pgBest=distT;}
+    if(!u._wwp){ // would the straight line strike a wall? route through a gate or around the end
+      const wHit=wallInPath(u,dx/(distT||1),dz/(distT||1),Math.min(distT,14));
+      if(wHit){
+        const wp=wallCrossPoint(u,wHit,x,z);
+        if(wp)u._wwp={x:wp.x,z:wp.z,until:T+3};
       }
     }
-  }else u._stk=0;
+    if(u._wwp){ // v134.0 the walk to a gate steers too — a gate behind a barracks used to mean
+      const wdx=u._wwp.x-px, wdz=u._wwp.z-pz, wl=Math.hypot(wdx,wdz)||1; // walking into the
+      const st=steerAroundBuildings(u,wdx/wl,wdz/wl,wl,u._wwp.x,u._wwp.z); // barracks for 3s and
+      sx=st[0]; sz=st[1];                                                  // re-issuing the same
+    }else{                                                                 // waypoint, forever
+      const st=steerAroundBuildings(u,dx/(distT||1),dz/(distT||1),distT,x,z);
+      sx=st[0]; sz=st[1];
+    }
+  }
+  moveUnit(u,sx,sz,dt);
+  const moved=Math.hypot(u.root.position.x-px,u.root.position.z-pz);
+  if(moved<u.spd*dt*0.25)u._stk=(u._stk||0)+dt; else u._stk=0; // still the fast pin detector
+  // A detour is BY DEFINITION not progress toward the goal, so the stale test is suspended while
+  // one runs — the pin test is not, because a body can absolutely wedge on its own sidestep.
+  const stale=!onDetour&&(T-(u._pgT||T))>MOVE_STALL_T;
+  if(u._stk>0.9||stale){
+    u._stk=0; u._pgT=T; u._pgBest=distT;
+    const eb=nearestEnemyBuilding(u,Math.max(3.5,u.rng+1.5));
+    if(eb&&u.dmg>0){ // an enemy wall bars the road? tear it down
+      u.facing=Math.atan2(eb.x-px,eb.z-pz);
+      tryAttack(u);
+    }else{ // friendly obstruction: sidestep — wider every failed attempt, and AIMED SOMEWHERE REAL
+      u._detSide=-(u._detSide||1);
+      u._stkN=Math.min(4,(u._stkN||0)+1);
+      u._det=pickDetour(u,dx,dz,distT);   // …which is null when there is nowhere legal to go
+      if(u._det)u._stkT=(u._stkT||0)+1;   // the instrument: sidesteps ISSUED, not attempts
+    }
+  }
   return false;
 }
 

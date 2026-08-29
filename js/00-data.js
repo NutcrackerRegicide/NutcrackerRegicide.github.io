@@ -893,6 +893,24 @@ function isHuman(u){return !!(u&&(u.isPlayer||u.remote));}
 // The board deals only from what your team's age has unlocked, so the Stone Age never offers
 // "Build a Castle". Ages: 0 Stone · 1 Bronze · 2 Iron · 3 Classical · 4 Medieval · 5 Enlightenment.
 const XP_MAX_LVL=25, BUFF_MAX_STACK=3, BOARD_REACH=5, QUEST_REROLL_MAX=3;
+// ---- v134.1 THE FARM RING (John) ----
+// "The only buildings to be built around the town center, directly adjacent to it, should be
+// farms." So the ground within TC_RING of a Town Center is its own team's FIELDS and nothing else —
+// no house, no forge, no tower, and no wall either: a curtain drawn between a Town Center and its
+// own corn cuts the villagers off from both.
+//
+// TC_FARM_MIN is the INNER edge, and it is not decoration. A farm's plot is walkable (`flat`) but
+// its barn is two blocking discs at model-local (-4.75,-7.4) r 3.30 x BSCALE.farm 0.6375, at a
+// fixed world offset because a farm is never rotated. A field due north puts the barn's near edge
+// at D-4.72-3.73 from the TC's centre, against a box half-extent of 11.90 — so anything closer than
+// 20.35 leaves a sliver of ground that is inside the barn AND inside the Town Center, legal in
+// neither, which no push-out can resolve. That sliver is what v134.0's collider work had to leave
+// standing. 21 clears it with margin.
+//
+// Both are measured from the team's OWN Town Center. Building near the ENEMY's is unchanged —
+// forward towers are an offensive choice and not this rule's business.
+const TC_RING=30;      // no non-farm building of yours may stand within this of your Town Center
+const TC_FARM_MIN=21;  // …and a farm may not crowd it either, or its barn stands in the walls
 // v133.0 the charge cooldowns, one entry per stack — John's sheet, not a formula
 const WARD_CD =[24,18,12,6,3];   // ARROW WARD  — seconds between blocked ranged attacks
 const GUARD_CD=[25,20,15,10,5];  // IRON GUARD  — seconds between blocked melee attacks

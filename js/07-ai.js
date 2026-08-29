@@ -304,13 +304,19 @@ function findSpot(team,type){
   const tc=TCPOS[team];
   for(let i=0;i<50;i++){
     let x,z;
-    if(type==="tower"){ // towers screen the approach to the base
-      x=tc[0]+(team===BLUE?1:-1)*(16+Math.random()*26); z=(Math.random()-0.5)*66;
-    }else if(type==="farm"){ // big fields ring the Town Center
-      const a=Math.random()*Math.PI*2,r=12+Math.random()*12;
+    // v134.1 EVERY RING MOVES OUT WITH THE FARM RING. These sampled 16-42 (towers), 12-24 (farms)
+    // and 11-37 (everything else) from the throne, and validFor now refuses the inside of all
+    // three. Fifty attempts against a ring that is mostly illegal is an AI that quietly stops
+    // building — the 00-data.js note at BLD.castle records that exact failure costing a release —
+    // so the samplers are moved rather than left to fail. Areas are kept comparable: the old
+    // general annulus spanned 1248 units of r-squared, the new one 1360.
+    if(type==="tower"){ // towers screen the approach to the base, from outside the fields
+      x=tc[0]+(team===BLUE?1:-1)*(TC_RING+2+Math.random()*24); z=(Math.random()-0.5)*66;
+    }else if(type==="farm"){ // the fields ARE the ring
+      const a=Math.random()*Math.PI*2,r=TC_FARM_MIN+0.5+Math.random()*(TC_RING-TC_FARM_MIN-1.5);
       x=tc[0]+Math.cos(a)*r; z=tc[1]+Math.sin(a)*r;
     }else{
-      const a=Math.random()*Math.PI*2,r=11+Math.random()*26;
+      const a=Math.random()*Math.PI*2,r=TC_RING+1+Math.random()*17;
       x=tc[0]+Math.cos(a)*r; z=tc[1]+Math.sin(a)*r*0.85;
     }
     const eg=BLD[type].r+2.6; // every side of the plot stays hammer-reachable
@@ -339,7 +345,9 @@ function farmAnchors(team){ // everywhere farmAdjacent will bless a field
   const list=[];
   for(const b of buildings){
     if(!b.alive||b.team!==team)continue;
-    if(b.type==="towncenter")list.push({x:b.x,z:b.z,rMin:13,rMax:24});
+    // v134.1 the TC's annulus IS the farm ring now — 13-24 sampled ground the rule refuses, and
+    // findFarmSpot only gets 60 tries before it gives up and plants a storage pit instead.
+    if(b.type==="towncenter")list.push({x:b.x,z:b.z,rMin:TC_FARM_MIN+0.5,rMax:TC_RING-1});
     else if(b.built&&b.type==="storage_pit")list.push({x:b.x,z:b.z,rMin:13,rMax:19});
     else if(b.built&&b.type==="castle")list.push({x:b.x,z:b.z,rMin:15,rMax:21});
   }
@@ -446,7 +454,10 @@ function directorThink(D){
     const wt=ag>=4?"fort_wall":ag>=3?"stone_wall":"wood_wall";
     const gt=ag>=4?"fort_gate":ag>=3?"stone_gate":"wood_gate";
     if(!D.wallPlan){ // one straight curtain facing the enemy (30 paces out; farther if the town swallowed it)
-      const tc=TCPOS[team], front=tc[0]+(team===BLUE?1:-1)*(D.wallFront||30);
+      // v134.1: 30 -> 34. The curtain's middle segment sat at exactly TC_RING from the throne, and
+      // a wall plan one floating-point rounding away from being refused is a wall plan that will be
+      // refused on some machine and not others.
+      const tc=TCPOS[team], front=tc[0]+(team===BLUE?1:-1)*(D.wallFront||34);
       D.wallPlan=wallLineSegments(wt,front,tc[1]-48,front,tc[1]+48).slice(0,P.walls);
       D.wallPlaced=0;
     }
@@ -1230,6 +1241,22 @@ function updateBot(u,dt){
 
 // ---------- crowd separation ----------
 function separate(){
+  // v134.0 …AND WHAT IT SHOVES, IT SETTLES. This wrote root.position directly — no walkable test,
+  // no building push-out, no clamp — and it is the LAST thing in the frame, after every bot has
+  // moved (09-main.js). So the closing act of every frame was to teleport NPC bodies INTO building
+  // footprints; moveUnit squirted them out on the next; separate() put them back. A ten-deep queue
+  // of villagers at a Town Center can carry a body several units in one pass, far past the 0.7 the
+  // collider allows, and the pair ran forever. This is John's "AI gets severely stuck around all
+  // buildings", and it is why the stall detector never fired: net progress was zero while realized
+  // displacement was large, which is precisely the case the old detector could not see.
+  //
+  // The shoves themselves are untouched — the crowd still parts, players are still anchors. What
+  // changes is that every body the pass MOVED is then resolved against the same collider moveUnit
+  // uses, and a body that cannot be resolved onto legal ground is put back where it stood. The map
+  // is built lazily: on a quiet frame nothing overlaps and nothing is allocated.
+  let pre=null;
+  const mark=(v)=>{if(!pre)pre=new Map();
+    if(!pre.has(v))pre.set(v,{x:v.root.position.x,z:v.root.position.z});};
   for(let i=0;i<units.length;i++){
     const a=units[i];if(!a.alive)continue;
     const aAnchor=a.isPlayer||a.remote; // player bodies are anchors: crowds part around THEM
@@ -1244,12 +1271,47 @@ function separate(){
         const d=Math.sqrt(d2),push=(1.3-d)*0.4,px=dx/d*push,pz=dz/d*push;
         // an unpredictable host-side shove on a player's body IS the rubber band —
         // so the full push lands on the NPC instead
-        if(aAnchor){cp.x+=px*1.5;cp.z+=pz*1.5;}
-        else if(cAnchor){ap.x-=px*1.5;ap.z-=pz*1.5;}
-        else{ap.x-=px;ap.z-=pz;cp.x+=px;cp.z+=pz;}
+        if(aAnchor){mark(c);cp.x+=px*1.5;cp.z+=pz*1.5;}
+        else if(cAnchor){mark(a);ap.x-=px*1.5;ap.z-=pz*1.5;}
+        else{mark(a);mark(c);ap.x-=px;ap.z-=pz;cp.x+=px;cp.z+=pz;}
       }
     }
   }
+  if(pre)for(const [v,p0] of pre){
+    const p=v.root.position;
+    const q=pushOutOfBuildings(v,p.x,p.z,0,0,0); // dt 0: eject, do not slide — nobody is walking
+    if(walkable(q[0],q[1])){p.x=q[0];p.z=q[1];}
+    else{p.x=p0.x;p.z=p0.z;} // the crowd shoved this body off the world: it keeps its ground
+  }
+  settleIdle();
+}
+// v134.0 THE IDLE ARE SETTLED TOO. moveUnit resolves a body that is TRYING TO MOVE and the pass
+// above resolves a body a crowd has just SHOVED. Nothing touched a body standing inside geometry
+// and staying there — and bodies get there without walking: spawnTeam scatters the opening fifty on
+// a radius of 13-25 while a Town Center's box half-diagonal is 16.56, a building's box GROWS under
+// its neighbours as the town ages (a Classical->Medieval barracks: 6.70 -> 10.00), and a villager
+// whose resource runs dry returns from updateBot without moving at all. Any of those and the body
+// is indoors for the rest of the match.
+//
+// A tenth of the army a frame, round-robin: the full collider loop is O(buildings), and paying it
+// for every idle body every frame would cost more than the problem. Nothing here is random, so the
+// order is the same on every machine and in every replay.
+let _settleAt=0;
+const SETTLE_SLICE=10;      // frames to walk the whole roster in — 1/3 of a second at 30fps
+const SETTLE_QUIET=0.3;     // moved this recently? moveUnit owns it, leave it alone
+function settleIdle(){
+  const N=units.length; if(!N)return;
+  const slice=Math.max(1,Math.ceil(N/SETTLE_SLICE));
+  for(let k=0;k<slice;k++){
+    const v=units[(_settleAt+k)%N];
+    if(!v||!v.alive||v.isPlayer||v.remote||v.garrison)continue; // a player's body is never ours to
+    if(T-(v._mv||-1e4)<SETTLE_QUIET)continue;                   // shove; a garrison CLIMBED in
+    const p=v.root.position;
+    const q=pushOutOfBuildings(v,p.x,p.z,0,0,0);
+    if(q[0]===p.x&&q[1]===p.z)continue;                         // already standing somewhere legal
+    if(walkable(q[0],q[1])){p.x=q[0];p.z=q[1];}
+  }
+  _settleAt=(_settleAt+slice)%N;
 }
 function updateRoster(){
   let bv=0,bm=0,rv=0,rm=0;

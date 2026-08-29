@@ -598,6 +598,8 @@ function pickBuild(type){
   if((BLD[type].age||0)>teamAge[MYTEAM]){msg(BLD[type].name+" requires the "+AGES[BLD[type].age].name+". (T at your Town Center to advance)");return;}
   if(!canAfford(MYTEAM,bldCost(player,type))){msg("Not enough resources for a "+BLD[type].name+".");return;}
   if(type==="farm")msg("Farms must border your Town Center or a Storage Pit.");
+  // v134.1: and the inverse, for everything else — the ring is invisible, so it has to be spoken.
+  else if(!BLD[type].wall)msg("Keep it clear of the Town Center — that ground is for farms.");
   cancelPlacing(); // never stack a second ghost
   closeMenus();
   lockMouse();
@@ -703,14 +705,35 @@ function farmAdjacent(team,x,z){
   // (farm-borders-farm was removed: it let fields chain across the whole map)
   for(const b of buildings){
     if(!b.alive||b.team!==team)continue;
-    if(b.type==="towncenter"&&dist2(x,z,b.x,b.z)<26*26)return true;
+    // v134.1: 26 -> TC_RING. The ground a Town Center BLESSES for fields and the ground it
+    // RESERVES for them are now the same ground, stated once. A blessing that stopped short of the
+    // reservation would leave an annulus where nothing at all could be built.
+    if(b.type==="towncenter"&&dist2(x,z,b.x,b.z)<TC_RING*TC_RING)return true;
     if(b.type==="storage_pit"&&b.built&&dist2(x,z,b.x,b.z)<20*20)return true; // room for the full 8-farm ring
     if(b.type==="castle"&&b.built&&dist2(x,z,b.x,b.z)<22*22)return true;
   }
   return false;
 }
+// v134.1 THE FARM RING, as a predicate of its own so that the refusal MESSAGE can name the real
+// cause. "Can't build there — too close to something" is true of this and useless: a player who has
+// just been refused four plots in a row around their own Town Center needs to be told the law, not
+// reminded that a law exists.
+// Returns "" when the ring is not what refuses this plot.
+function tcRingReason(type,x,z,team){
+  if(typeof teamTC!=="function")return "";
+  const tc=teamTC(team); if(!tc)return "";           // the throne has fallen: the ring falls with it
+  const d2=dist2(x,z,tc.x,tc.z);
+  if(type==="farm")
+    return d2<TC_FARM_MIN*TC_FARM_MIN
+      ? "That field crowds the Town Center — its barn would stand in the walls. Plant it further out."
+      : "";
+  if(d2<TC_RING*TC_RING)
+    return "Only FARMS may stand beside a Town Center. Build that further out.";
+  return "";
+}
 function validFor(type,x,z,team){
   if(team===undefined)team=BLUE;
+  if(tcRingReason(type,x,z,team))return false;   // v134.1 the farm ring — see tcRingReason above
   if(type==="market"||type==="blacksmith"){ // an economy runs on five markets; one forge serves a whole army
     const cap=type==="market"?5:1;
     let mc=0;
@@ -815,7 +838,13 @@ function confirmPlace(){
   }
   if(!placing)return;
   const x=ghost.position.x,z=ghost.position.z;
-  if(!placementValid(x,z)){msg("Can't build there — too close to something.");return;}
+  if(!placementValid(x,z)){
+    // v134.1: name the real cause where we know it. A generic refusal in front of a rule the player
+    // cannot see is how a rule reads as a bug.
+    const why=tcRingReason(placing.type,x,z,MYTEAM);
+    msg(why||"Can't build there — too close to something.");
+    return;
+  }
   if(!canAfford(MYTEAM,bldCost(player,placing.type))){msg("Not enough resources anymore.");cancelPlacing();return;}
   if(typeof NET!=="undefined"&&NET.mode==="guest"){
     NET.guestAct({act:"build",type:placing.type,x:x,z:z,rot:placing.rot||0});

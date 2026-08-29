@@ -1305,7 +1305,9 @@ NET.hostAct=function(r,a){
   }
   if(a.act==="build"){
     const d=BLD[a.type]; if(!d)return deny("Unknown building.");
-    if(!validFor(a.type,a.x,a.z,u.team))return deny("Can't build there — too close to something.");
+    if(!validFor(a.type,a.x,a.z,u.team)) // v134.1: the guest hears the same reason the host would
+      return deny((typeof tcRingReason==="function"&&tcRingReason(a.type,a.x,a.z,u.team))||
+                  "Can't build there — too close to something.");
     if(!canAfford(u.team,bldCostD(u,d)))return deny("Not enough resources for a "+d.name+".");
     pay(u.team,bldCostD(u,d));
     const nb=makeBuilding(u.team,a.type,a.x,a.z,false,a.rot||0); nb.qBy=u.id; // quest credit on completion

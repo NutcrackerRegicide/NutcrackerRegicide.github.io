@@ -54,6 +54,14 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "startAgeResearch,tickAgeResearch,ageResT,AGE_RESEARCH_S,ageUp,AGES,"+
   "laneTarget,laneFor,assignLane,LANE_Z,LANE_TURNIN,LANE_EDGE,HOLD_TOUR,HOLD_QUIET,HOLD_WATCH,bandHoldPoint,OXSCALE,"+
   "buildBodyFor,fireAimedShot,FARM_PASSIVE,setAiming:v=>{aiming=v;},"+
+  // v134.0 the movement layer: the lifted collider, the validated sidestep, and walkable itself —
+  // which the suite has never once been able to ask a question of.
+  "walkable,pushOutOfBuildings,pickDetour,detourFree,MOVE_STALL_T,MOVE_GOAL_JUMP,separate,"+
+  "TC_RING,TC_FARM_MIN,tcRingReason,farmAdjacent,"+   // v134.1 the farm ring
+  // the bench drives moveToward directly, outside tick(), and both the watchdog and a detour's
+  // lifetime are measured in T. A bench that leaves T frozen tests a world where no detour ever
+  // expires — which is a different program, and it reads as "nobody ever arrives".
+  "advanceT:(sec)=>{T+=sec;},"+
   "makeTree,depleteNode,clearFootprint,TREE_SCALE,TREE_GEOS,STUMP_GEOS,TREE_STANDS,TREE_CLEAR_BASE,TREE_CLEAR_ROAD,roadPoint,"+
   "vikingPoint,BAZAAR_SITES,TREE_CLEAR_VIKING,CREEP_SITES,CREEP_R_INNER,"+
   "setHideD,getHideD:()=>HIDE_D,getMouseLocked:()=>mouseLocked,"+
@@ -173,6 +181,51 @@ function isolateArea(x,z,r,opts){
     u.root.position.set(x-(x/L)*r*2.5+(undo.length%5)*1.6,u.root.position.y,z-(z/L)*r*2.5);
   }
   return {moved:undo.length,restore(){for(const e of undo){e.u.root.position.set(e.x,e.u.root.position.y,e.z);e.u.bot=e.bot;}}};
+}
+// v134.0 AN INDEPENDENT READ OF THE COLLIDER. Deliberately NOT pushOutOfBuildings: a test that
+// asks the code under test whether the code under test worked proves nothing, which is the
+// handoff's own falsify rule ("a mutation that also blinds the instrument proves nothing"). This
+// re-derives the box from BLD and the team's age the way buildingMesh does, and nothing else.
+// Farms (the field is walkable by design), walls (their response is a slide, not a push) and the
+// castle (several shapes) are out of scope here and answer false.
+function note(msg){console.log("  ---- "+msg);}
+// v134.0 …AND IT RETURNS PENETRATION DEPTH, not a boolean. A count alone cannot tell a body
+// standing 1.30 deep inside a barracks from one brushing a boundary by 0.02, and after the fix the
+// only bodies left are of the second kind — held on a boundary by a SECOND collider that overlaps
+// the first. A farm's barn disc reaches 9.5 from a Town Center's centre and that box is 12.58, so
+// the pair leaves a sliver of ground that is inside both and legal in neither. No resolver can fix
+// that; the town-plan work has to stop the two being placed that way. Depth is the honest measure
+// in the meantime, and it is the one that actually says "is anybody stuck in a wall".
+function insideCollider(b,x,z){
+  const G=global.__G;
+  if(!b.alive||b.def.flat||b.def.wall||b.def.blockShapes)return 0;
+  const rot=b.rot||0,c=Math.cos(rot),sn=Math.sin(rot);
+  const lx=(x-b.x)*c-(z-b.z)*sn, lz=(x-b.x)*sn+(z-b.z)*c;
+  const A=Math.max((b.def.age||0),Math.min(5,(G.teamAge&&G.teamAge[b.team])||0));
+  if(b.def.fx!==undefined){
+    const fx=(b.def.fxA&&b.def.fxA[A]!==undefined)?b.def.fxA[A]:b.def.fx;
+    const fz=(b.def.fzA&&b.def.fzA[A]!==undefined)?b.def.fzA[A]:b.def.fz;
+    const dx=fx+0.7-Math.abs(lx), dz=fz+0.7-Math.abs(lz);
+    return (dx>1e-4&&dz>1e-4)?Math.min(dx,dz):0;   // v134.0 DEPTH, not a yes/no — see below
+  }
+  const r=(b.def.rBlock!==undefined?b.def.rBlock:b.def.r)+0.7;
+  const d=Math.sqrt((x-b.x)*(x-b.x)+(z-b.z)*(z-b.z));
+  return (r-d>1e-3)?r-d:0;
+}
+function bodiesInsideColliders(){
+  // BOT-DRIVEN BODIES ONLY. The local player and any harness-posed body are placed by hand and are
+  // not what this measures; the player in particular spawns at TCPOS+12 inside a Town Center whose
+  // box grows to 12.58 by the Enlightenment, which is a spawn-ring/collider overlap worth its own
+  // fix and not a pathing verdict.
+  const G=global.__G, hits=[];
+  for(const u of G.units){
+    if(!u.alive||u.isPlayer||u.remote||!u.bot)continue;
+    const p=u.root.position;
+    let worst=0,wb=null;
+    for(const b of G.buildings){const d=insideCollider(b,p.x,p.z);if(d>worst){worst=d;wb=b;}}
+    if(wb)hits.push({u,b:wb,depth:worst});
+  }
+  return hits;
 }
 function clearBuildings(x,z,r,pred){
   const G=global.__G, undo=[], r2=r*r;
@@ -729,6 +782,53 @@ for(let a=0;a<24&&!farmSpot;a++){
     if(global.__G.validFor("farm",tcB.x+Math.cos(ang)*r,tcB.z+Math.sin(ang)*r,0)){farmSpot=true;break;}
 }
 check("legal farm spots exist around the TC",farmSpot);
+// ==================== v134.1 THE FARM RING ====================
+// John: "the only buildings to be built around the town center, directly adjacent to it, should be
+// farms." Measured before the change, blue's town read
+//   watch_tower@16.7 farm@21.3 farm@22.4 barracks@22.9 house@25.5 …
+// — a tower standing where the corn should be. There was no distance-from-the-TC rule at all; the
+// only thing holding anything back was generic spacing, which SHRINKS as the town ages because
+// bSpace reads the live age and a Town Center's half-extent drops from 11.26 to 8.50 at Classical.
+{
+  const G=global.__G, tc=G.teamTC(0), RING=G.TC_RING, FMIN=G.TC_FARM_MIN;
+  const at=(t,r,a)=>G.validFor(t,tc.x+Math.cos(a)*r,tc.z+Math.sin(a)*r,0);
+  const TYPES=["house","barracks","storage_pit","market","blacksmith","temple","watch_tower",
+               "tower","stable","archery_range","siege_workshop","castle","stone_wall","stone_gate"];
+  // 1. NOTHING but a farm, anywhere inside the ring.
+  const inside=[];
+  for(const t of TYPES)for(let i=0;i<24;i++)for(const r of [4,10,16,22,28,RING-0.5]){
+    const a=i/24*Math.PI*2;
+    if(at(t,r,a)===true)inside.push(t+"@"+r.toFixed(1));
+  }
+  check("v134.1 ring: NO non-farm plot is legal within "+RING+" of your Town Center ("+
+    (inside.length?inside.slice(0,4).join(" · ")+(inside.length>4?" +"+(inside.length-4):""):
+     "swept "+TYPES.length+" types x 24 bearings x 6 radii, all refused")+")",
+    inside.length===0);
+  // 2. …and a farm may not crowd it either — that inner edge is what keeps a barn out of the walls.
+  const tooClose=[];
+  for(let i=0;i<24;i++)for(const r of [4,10,16,FMIN-0.5]){
+    const a=i/24*Math.PI*2;
+    if(at("farm",r,a)===true)tooClose.push(r.toFixed(1)+"@"+(a*57.3).toFixed(0)+"deg");
+  }
+  check("v134.1 ring: a farm is refused inside "+FMIN+" too — its barn would stand in the Town "+
+    "Center's walls ("+(tooClose.length?tooClose.slice(0,3).join(" · "):"24 bearings, all refused")+")",
+    tooClose.length===0);
+  // 3. NON-VACUITY, the fields. A rule that refuses everything everywhere passes 1 and 2 perfectly.
+  let farmOk=0;
+  for(let i=0;i<24;i++)for(const r of [FMIN+1,24,27,RING-1])
+    if(at("farm",r,i/24*Math.PI*2)===true)farmOk++;
+  check("v134.1 ring: …and the band between them IS plantable ("+farmOk+" of 96 probes legal) — "+
+    "without this, a rule that refused every plot on the map would pass the two gates above",
+    farmOk>=8);
+  // 4. NON-VACUITY, the town. The one that matters most: findSpot gets 50 attempts, and an AI that
+  //    cannot find a plot is an AI that silently stops building.
+  let outOk=0;
+  for(let i=0;i<24;i++)for(const r of [RING+2,RING+8,RING+16])
+    if(at("house",r,i/24*Math.PI*2)===true)outOk++;
+  check("v134.1 ring: …and a house is legal just OUTSIDE it ("+outOk+" of 72 probes) — the AI "+
+    "samples 50 times before it gives up, so a ring that leaves no room is an AI that stops building",
+    outOk>=8);
+}
 // FULL CAMPAIGN: 8 sim-minutes at 30fps — directors age up, build workshops/markets,
 // and field carts + siege engines. This is the test that would have caught the
 // vehicle-rig animation crash (undefined limbs on carts/rams).
@@ -738,6 +838,146 @@ for(let i=0;i<8*60*30;i++){
 }
 const farms=buildings.filter(b=>b.alive&&b.built&&b.type==="farm").length;
 check("AI still builds farms with doubled footprint ("+farms+")",farms>=2);
+// v134.1 …AND THE TOWNS OBEY THE RING. Observed on the campaign above, both teams, every building.
+{
+  const G=global.__G, RING=G.TC_RING, FMIN=G.TC_FARM_MIN;
+  const viol=[]; let nonFarm=0, ringFarms=0;
+  for(const t of [0,1]){
+    const tc=G.buildings.find(b=>b.alive&&b.team===t&&b.type==="towncenter"); if(!tc)continue;
+    for(const b of G.buildings){
+      if(!b.alive||b.team!==t||b.type==="towncenter")continue;
+      const d=Math.hypot(b.x-tc.x,b.z-tc.z);
+      if(b.type==="farm"){ if(d<FMIN)viol.push("farm@"+d.toFixed(1)); else if(d<RING)ringFarms++; }
+      else { if(d<RING)viol.push(b.type+"@"+d.toFixed(1)); nonFarm++; }
+    }
+  }
+  check("v134.1 ring: eight minutes of AI town-building breaks it "+viol.length+" times ("+
+    (viol.length?viol.slice(0,4).join(" · "):"none")+") — v133 put a watch_tower at 16.7 and a "+
+    "barracks at 22.9",viol.length===0);
+  // …and it is not obeying the ring by building nothing. A starved AI would pass the line above.
+  check("v134.1 ring: …and the AI still raised a real town around it ("+nonFarm+" buildings out "+
+    "past the ring, "+ringFarms+" fields inside it)",nonFarm>=8&&ringFarms>=3);
+}
+// v134.1 THE BARN AND THE BOX, pinned per age. TC_FARM_MIN exists so a farm's barn does not stand
+// inside its own Town Center's collider — that overlap is a sliver of ground inside two colliders
+// at once, legal in neither, and it is the residue v134.0's push-out could not resolve.
+//
+// The binding case is the DIAGONAL, not the axes: the barn hangs off the farm's own corner at
+// (-3.03,-4.72) after BSCALE, and a box's corner is exactly where a diagonal offset reaches
+// furthest in. Solved numerically over 3600 bearings, the least farm-centre distance that clears
+// the box is
+//
+//     age 1  23.45      age 2  20.80      age 3  23.75      age 4  26.75      age 5  22.20
+//
+// driven by the Town Center's own half-extents: 11.26x10.75 at Stone, 8.50x7.75 at Classical,
+// PEAKING at 11.88x11.90 at age 4 and dropping to 9.10 at 5. TC_FARM_MIN 21 therefore clears the
+// box at ONE age (2) and not at the other four.
+//
+// The first cut of this gate asserted zero overlap and went red. The second asserted "clears every
+// age except the peak at 4" and went red too — and that second red is the useful one, because the
+// claim was a guess dressed as a fact. The overlap is the NORMAL state of a farm ring at this
+// radius, not a one-age pinch, and a comment saying otherwise is exactly what the next session
+// would have believed.
+//
+// WHY IT SHIPS ANYWAY: clearing every age needs TC_FARM_MIN 27, which against TC_RING 30 leaves a
+// three-unit band for a field thirteen wide — the ring would have to move out to ~36 and the town
+// with it, and there are only 45 units behind a Town Center before the map edge. The overlap is
+// bounded (2.81, gated below), it is strictly smaller than v133's, where farms sat at 16.2, and
+// v134.0's push-out and idle sweep resolve bodies out of the sliver — the "nobody standing IN a
+// wall" gate measures exactly that on this same campaign and reads 0.00 deep.
+//
+// THE REAL CURE, when someone wants it: rotate each field so its barn faces AWAY from the Town
+// Center. The barn's offset is fixed in world space only because a farm is never rotated;
+// makeBuilding already takes a rot and the collider, the apron and the mesh all honour it. Then the
+// overlap vanishes at any distance, TC_FARM_MIN can stay where it is, and the barns face the town —
+// which is also how a farm ought to look. It needs a shot before it ships, not a derivation.
+{
+  const G=global.__G, P=G.BLD.farm.blockParts||[], bs=G.BSCALE.farm||1;
+  const tcDef=G.BLD.towncenter;
+  const clearAt=(A)=>{ // the least farm-centre distance with no barn disc touching the TC box
+    const hx=((tcDef.fxA&&tcDef.fxA[A])||tcDef.fx)+0.7, hz=((tcDef.fzA&&tcDef.fzA[A])||tcDef.fz)+0.7;
+    for(let D=16;D<=44;D+=0.05){
+      let ok=true;
+      for(let i=0;i<720&&ok;i++){
+        const th=i/720*Math.PI*2, fx=Math.cos(th)*D, fz=Math.sin(th)*D;
+        for(const q of P){
+          if(q.minAge!==undefined&&A<q.minAge)continue;
+          if(q.maxAge!==undefined&&A>q.maxAge)continue;
+          const wx=fx+q.x*bs, wz=fz+q.z*bs, qr=q.r*bs+0.7;
+          const gx=Math.max(0,Math.abs(wx)-hx), gz=Math.max(0,Math.abs(wz)-hz);
+          if(gx*gx+gz*gz<qr*qr){ok=false;break;}
+        }
+      }
+      if(ok)return D;
+    }
+    return 99;
+  };
+  const tbl=[1,2,3,4,5].map(A=>({A,d:clearAt(A)}));
+  const shown=tbl.map(r=>"age"+r.A+" "+r.d.toFixed(2)).join(" · ");
+  // The table is the pin. Rescale the farm model, move a blockPart, or change the Town Center's
+  // fxA/fzA and these numbers move and this goes red — which is the only way the sentence
+  // "TC_FARM_MIN is 21 because the geometry says so" stays true rather than becoming folklore.
+  const expect={1:23.45,2:20.80,3:23.75,4:26.75,5:22.20};
+  const drift=tbl.filter(r=>Math.abs(r.d-expect[r.A])>0.1)
+                 .map(r=>"age"+r.A+" "+r.d.toFixed(2)+" not "+expect[r.A]);
+  check("v134.1 barn: the farm-to-Town-Center clearance table is unmoved ("+shown+")"+
+    (drift.length?" — DRIFTED: "+drift.join(" · "):""),drift.length===0);
+  // The state of affairs stated as it IS rather than as it would be convenient for it to be. This
+  // gate exists so that stays a DECISION rather than drifting into an accident: if a future change
+  // clears more ages — rotating the barns would clear all five — this goes red and whoever reads it
+  // gets to delete a caveat instead of inheriting a stale one.
+  const shortAt=tbl.filter(r=>G.TC_FARM_MIN<r.d).map(r=>"age"+r.A);
+  check("v134.1 barn: TC_FARM_MIN ("+G.TC_FARM_MIN+") clears the box at age 2 ALONE — short at "+
+    shortAt.join(",")+", because clearing them all needs 26.75 against a ring of "+G.TC_RING+
+    ". The overlap is bounded below, no body ends up in it, and the cure is to rotate the barns "+
+    "to face away — which needs a shot before it ships",
+    shortAt.join(",")==="age1,age3,age4,age5");
+  // …and whatever overlap the ring does permit stays inside what a farm at its inner edge can
+  // reach. A deeper one would mean the RING leaked, not the barn.
+  let worst=0;
+  for(const t of [0,1]){
+    const tc=G.buildings.find(b=>b.alive&&b.team===t&&b.type==="towncenter"); if(!tc)continue;
+    const A=Math.max((tc.def.age||0),Math.min(5,G.teamAge[t]||0));
+    const hx=((tc.def.fxA&&tc.def.fxA[A])||tc.def.fx)+0.7, hz=((tc.def.fzA&&tc.def.fzA[A])||tc.def.fz)+0.7;
+    for(const f of G.buildings){
+      if(!f.alive||f.team!==t||f.type!=="farm")continue;
+      const rot=f.rot||0, c=Math.cos(rot), sn=Math.sin(rot);
+      for(const q of P){
+        if(q.minAge!==undefined&&A<q.minAge)continue;
+        if(q.maxAge!==undefined&&A>q.maxAge)continue;
+        const qx=q.x*bs, qz=q.z*bs, qr=q.r*bs+0.7;
+        const wx=f.x+qx*c+qz*sn, wz=f.z-qx*sn+qz*c;   // the same local->world as the collider
+        const gx=Math.max(0,Math.abs(wx-tc.x)-hx), gz=Math.max(0,Math.abs(wz-tc.z)-hz);
+        const ov=qr-Math.hypot(gx,gz);
+        if(ov>worst)worst=ov;
+      }
+    }
+  }
+  check("v134.1 barn: the worst overlap the campaign produced is "+worst.toFixed(2)+", within what "+
+    "a farm at the ring's inner edge can reach (2.81) — deeper would mean the ring leaked",
+    worst<=2.81);
+}
+// v134.0 …AND NOBODY IS STANDING INSIDE ONE. A pure read of the world the campaign above just
+// built — no ticks, no bodies added, nothing perturbed. Run against the shipped v133 game code
+// with this same harness it returns 7 of 146 live — villagers standing in two Town Centers, a
+// blacksmith and an archery range — permanently, because separate() ran last in the frame and wrote
+// root.position with no collider and no walkable test, and moveToward's stall detector measured
+// realized displacement (which the shove/push-out pair keeps large) instead of ground gained
+// toward the goal. Both are fixed; this is the instrument that says so.
+{
+  const wedged=bodiesInsideColliders();
+  let deep=0; for(const h of wedged)deep=Math.max(deep,h.depth);
+  const who=wedged.slice(0,3).map(h=>h.u.name+" "+h.depth.toFixed(2)+" into a "+h.b.type).join(" · ");
+  // DEPTH is the claim, not the count. Measured with THIS instrument against shipped v133 game
+  // code, the same campaign leaves 7 bodies touching, the worst 0.29 into an archery range. (The
+  // 1.30 figure quoted on the shove bench below is a different measurement — a crowd driven into a
+  // barracks face — and is not this one.) 0.25 is a quarter of a body\'s half-width: past it a body
+  // is IN the wall rather than brushing it.
+  check("v134.0 pathing: the campaign leaves nobody standing IN a wall (worst "+deep.toFixed(2)+
+    " deep, "+wedged.length+" touching, of "+global.__G.units.filter(u=>u.alive).length+" live"+
+    (who?" — "+who:"")+") — v133: 7 bodies, worst 0.29",
+    deep<0.25);
+}
 check("corn grows on farms",buildings.some(b=>b.type==="farm"&&b.crop>0));
 // v113: passive farm income is 2 food every 3 seconds (2/3 per sec) — v86 halved it to 0.5,
 // John's field test called that over-nerfed. Harvest payout untouched.
@@ -3667,12 +3907,53 @@ global.__G.setGameOver(false);
     // a failure. The HOT case five lines below is staged deliberately; this one has to be too, or
     // the pair is the same test run twice with different luck.
     const cellar=isolateArea(-200,-118,30,{team:1-team,keep:[cold]});
+    // v134.0 …AND THE SQUARE IS PART OF THE FIELD. bandHoldPoint posts a hold band ON a bazaar, and
+    // manageBands refuses to relieve a band standing on one that is mid-capture (the v132.26
+    // `_taking` rule) — by EITHER side, because a square the enemy is taking under your feet is not
+    // quiet ground either. So a campaign that leaves any bazaar part-captured makes this assertion
+    // fail while the code does exactly the right thing. The enemy count was staged here from v127;
+    // the capture state was not. Both now are.
+    const bazHold=G2.neutralMarkets.map(m=>({m,cap:m.cap,capTeam:m.capTeam}));
+    for(const m of G2.neutralMarkets){m.cap=0;m.capTeam=-1;}
     cold.bandRef=hb; D.bands.push(hb);
     G2.manageBands(D);
     cellar.restore();
+    for(const e of bazHold){e.m.cap=e.cap;e.m.capTeam=e.capTeam;}
     check("v113 relief: a hold band with a spent tour and a cold field takes a new mission ("+hb.role+
       ", field cleared of "+cellar.moved+")",
       hb.role!=="hold"&&["econ","patrol","assassin"].includes(hb.role)&&hb.point===null);
+    // v134.0 A SQUARE HALF TAKEN IS NOT QUIET GROUND. The v132.26 `_taking` rule — "a band
+    // mid-capture is not relieved", John's point being that marching a band off a bazaar at 59%
+    // hands the square straight back — shipped without a test and was never once exercised until
+    // the v134.0 pathing work tripped it by accident. This is that test, run the same way the
+    // relief case above is: everything identical, one field moved.
+    {
+      const bz=G2.neutralMarkets.find(m=>m.owner!==team);
+      if(bz){
+        const hb3={id:9003,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,laneZ:0,laneUntil:NOWT+999};
+        const keep3=G2.neutralMarkets.map(m=>({m,cap:m.cap,capTeam:m.capTeam}));
+        for(const m of G2.neutralMarkets){m.cap=0;m.capTeam=-1;}
+        bz.cap=0.6; bz.capTeam=team;               // OUR band, six tenths of the way in
+        const cell3=isolateArea(-200,-118,30,{team:1-team,keep:[cold]});
+        cold.bandRef=hb3; D.bands.push(hb3);
+        G2.manageBands(D);
+        cell3.restore();
+        const held=hb3.role==="hold";
+        // …and prove the harness is not simply refusing to relieve anything: the same band, the
+        // same everything, with the capture wound back to zero, IS relieved.
+        const hb4={id:9004,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,laneZ:0,laneUntil:NOWT+999};
+        for(const m of G2.neutralMarkets){m.cap=0;m.capTeam=-1;}
+        const cell4=isolateArea(-200,-118,30,{team:1-team,keep:[cold]});
+        cold.bandRef=hb4; D.bands.push(hb4);
+        G2.manageBands(D);
+        cell4.restore();
+        for(const e of keep3){e.m.cap=e.cap;e.m.capTeam=e.capTeam;}
+        check("v132.26 relief: a band MID-CAPTURE is not relieved, and the same band with the "+
+          "square at zero is ("+hb3.role+" holding vs "+hb4.role+" relieved)",
+          held&&hb4.role!=="hold");
+        D.bands=D.bands.filter(b=>b!==hb3&&b!==hb4);
+      }
+    }
     // A HOT POSTING: the same spent tour, but an enemy standing on it — the ground still matters
     const hb2={id:9002,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,laneZ:0,laneUntil:NOWT+999};
     cold.bandRef=hb2; D.bands.push(hb2);
@@ -3764,9 +4045,34 @@ global.__G.setGameOver(false);
     check("v114 clearing: EVERY LIVE stone pile refuses a plot ("+blocked+"/"+piles.length+
       " live of "+allPiles.length+" sited)",
       blocked===piles.length&&allPiles.length===6&&piles.length>=4);
-    check("v114 clearing: …and on the standalone piles the stone is provably the cause — "+
-      freedByRemoval+" of "+piles.length+" free up when the pile is removed (the other four sit\n      inside v132.24 resource CLUSTERS, where a neighbour still covers the footprint)",
-      freedByRemoval>=2);
+    // v134.0 CONSTRUCTED, NOT SCAVENGED. See tools/patch-smoketest-stone-invariant-v134.js: this
+    // asserted freedByRemoval>=2, a tally of how many piles happened to have nothing built beside
+    // them at the end of one campaign, and it went red on the default seed the moment the pathing
+    // changed — 3 of 4 plots were refused by a BUILDING, and the one genuinely standalone pile
+    // freed up exactly as it should. Clean ground, one planted pile, both directions:
+    {
+      const RH=G.BLD.house.r;
+      let spot=null;
+      for(let x=-150;x<=150&&!spot;x+=7)for(let z=-110;z<=110&&!spot;z+=7){
+        if(G.validFor("house",x,z,0)!==true)continue;              // legal before we touch anything
+        if(N.some(n=>n.type!=="wood"&&n.amount>0&&Math.hypot(n.x-x,n.z-z)<RH+9))continue;
+        spot={x,z};
+      }
+      let refused=false,freed=false;
+      if(spot){
+        const planted={type:"stone",x:spot.x,z:spot.z,amount:500};
+        N.push(planted);                                           // …and out again, below
+        refused=G.validFor("house",spot.x,spot.z,0)===false;
+        planted.amount=0;
+        freed=G.validFor("house",spot.x,spot.z,0)===true;
+        N.splice(N.indexOf(planted),1);   // nodes is POSITIONAL on the wire — leave it as we found it
+      }
+      check("v114 clearing: on clean ground a stone pile REFUSES the plot and emptying it frees "+
+        "the plot again ("+(spot?"at "+spot.x+","+spot.z+": refused "+refused+", freed "+freed:
+        "NO CLEAN GROUND FOUND")+"; of the "+piles.length+" live piles on the map "+freedByRemoval+
+        " stand alone, the rest are covered by a building or a neighbour)",
+        !!spot&&refused&&freed);
+    }
     check("v114 clearing: …and the refusal is LOCAL to the prize, not regional terrain — open\n      ground within 12-34 of all "+openAround+"/"+piles.length+" piles",openAround===piles.length);
     const before=live.amount;
     const h=G.makeBuilding(0,"house",live.x,live.z,true);
@@ -6182,6 +6488,137 @@ global.__G.setGameOver(false);
   if(hadAudio===undefined)delete global.Audio; else global.Audio=hadAudio;
   MM.el=null;MM.on=false;MM.playing=false;MM.fade=0;MM.dead=false;MM.wait=0;
   A.setVol("master",savedVol.m);A.setVol("music",savedVol.mu);A.setMute(savedMute);
+}
+
+// ==================== v134.0 THE PATHING BENCH ====================
+// Last in the file on purpose: these add bodies and buildings, which shifts unit ids, and nothing
+// runs after them. tools/pathprobe.js is the same set of experiments on a 2-second load, for when
+// one of these goes red and you want to iterate without paying for the suite.
+{
+  const G=global.__G;
+  const probe=[];
+  const pBld=(t,x,z)=>{const b=G.makeBuilding(0,t,x,z,true);probe.push(b);return b;};
+  const pGuy=(x,z,n)=>{const u=G.makeUnit(0,"villager",x,z,{name:n,bot:{role:"citizen"}});
+    u.bot=null;probe.push(u);return u;};                       // bot=null: it walks where WE say
+  const wipe=()=>{for(const o of probe)o.alive=false;probe.length=0;};
+  const faceZ=(b)=>{const A=Math.max((b.def.age||0),Math.min(5,G.teamAge[b.team]||0));
+    const fz=(b.def.fzA&&b.def.fzA[A]!==undefined)?b.def.fzA[A]:
+             (b.def.fz!==undefined?b.def.fz:(b.def.rBlock!==undefined?b.def.rBlock:b.def.r));
+    return b.z+fz+0.7;};
+  const insideAny=(x,z)=>{for(const b of G.buildings)if(insideCollider(b,x,z))return b;return null;};
+
+  // --- 1. THE STATIC SHOVE. No movement at all: a packed blob beside a barracks, and only
+  //        separate() running. Anything that ends up inside got there by teleport, full stop.
+  {
+    const b=pBld("barracks",-120,-60), face=faceZ(b);
+    const crowd=[];
+    for(let i=0;i<24;i++)crowd.push(pGuy(b.x-1.2+(i%3)*1.2,face+0.1+Math.floor(i/3)*0.9,"Shove"+i));
+    for(let i=0;i<80;i++)G.separate();
+    let inside=0,deepest=0;
+    for(const u of crowd){const p=u.root.position;
+      const b2=insideAny(p.x,p.z); if(b2)inside++;
+      deepest=Math.max(deepest,face-p.z);}
+    check("v134.0 separate(): a packed crowd is never SHOVED INSIDE a building ("+inside+
+      " of 24, deepest "+deepest.toFixed(2)+") — v133 put 3 in, 1.30 deep",
+      inside===0&&deepest<0.01);
+    wipe();
+  }
+
+  // --- 2. THE HAUL. Eighteen bodies converging on a stand point on the FAR side of a building,
+  //        moving, with separate() after them exactly as 09-main.js runs it. This is the drop-off
+  //        queue, which is the shape John sees jam.
+  {
+    const b=pBld("storage_pit",-120,-60);
+    const goal={x:b.x,z:2*b.z-faceZ(b)-2.2};                   // the stand point on the north side
+    const crowd=[];
+    for(let i=0;i<18;i++)crowd.push(pGuy(b.x-4+(i%5)*2,faceZ(b)+8+Math.floor(i/5)*2,"Haul"+i));
+    let insideFrames=0,worst=0; const done=new Set();
+    for(let f=0;f<700;f++){
+      for(const u of crowd){if(done.has(u))continue;
+        if(G.moveToward(u,goal.x,goal.z,0.05,1.6))done.add(u);}
+      G.separate(); G.advanceT(0.05);
+      let ins=0; for(const u of crowd)if(insideAny(u.root.position.x,u.root.position.z))ins++;
+      if(ins){insideFrames++;worst=Math.max(worst,ins);}
+    }
+    let sidesteps=0; for(const u of crowd)sidesteps+=(u._stkT||0);
+    check("v134.0 haul: a queue rounding a building never stands inside it ("+insideFrames+
+      "/700 frames, worst "+worst+" at once) — v133: 624 frames, 7 at once",
+      insideFrames===0&&worst===0);
+    check("v134.0 haul: …and every body still reaches the stand point ("+done.size+" of 18)",
+      done.size===18);
+    if(sidesteps)note("v134.0 haul: "+sidesteps+" sidesteps issued clearing the queue");
+    wipe();
+  }
+
+  // --- 2b. THE WATCHDOG ITSELF, in isolation and by construction. The haul above is a
+  //         REALISTIC jam, and whether it happens to trip the watchdog depends on the exact
+  //         geometry of the crowd — which makes it a bad non-vacuity test. This is the precise
+  //         claim instead: a body moving AT FULL SPEED that gains no ground on its goal must be
+  //         unstuck. v133 measured realized displacement, so it would run this treadmill until
+  //         the heat death of the universe without ever noticing.
+  {
+    const u=pGuy(-120,-100,"Treadmill");
+    const home={x:u.root.position.x,z:u.root.position.z};
+    let fired=0,secs=0,realMotion=0;
+    for(let f=0;f<400&&!fired;f++){
+      G.moveToward(u,-60,-100,0.05,1.2);                        // full-speed motion at the goal…
+      realMotion=Math.max(realMotion,Math.hypot(u.root.position.x-home.x,u.root.position.z-home.z));
+      u.root.position.set(home.x,u.root.position.y,home.z);     // …and something puts it right back
+      G.advanceT(0.05); secs+=0.05;
+      if(u._stkT>0)fired=secs;
+    }
+    check("v134.0 watchdog: a body moving at full speed ("+realMotion.toFixed(2)+"/frame) that "+
+      "gains NO ground is unstuck within "+G.MOVE_STALL_T+"s (fired at "+
+      (fired?fired.toFixed(2)+"s":"NEVER")+") — v133 watched displacement and never would",
+      fired>0&&fired<=G.MOVE_STALL_T+0.3&&realMotion>0.1);
+    wipe();
+  }
+
+  // --- 3. OPEN GROUND. A watchdog that fires on a clear walk would thrash every unit in the game.
+  {
+    const u=pGuy(-120,-100,"Stroller");
+    let steps=0,arrived=false;
+    while(steps<900&&!arrived){arrived=G.moveToward(u,-60,-100,0.05,1.2);steps++;G.advanceT(0.05);}
+    check("v134.0 open ground: a clear walk arrives and costs NO sidesteps ("+steps+" steps, "+
+      (u._stkT||0)+" sidesteps)",arrived&&!(u._stkT>0));
+    wipe();
+  }
+
+  // --- 4. THE DETOUR IS SOMEWHERE REAL. Every escalation level, both hands, all validated.
+  if(typeof G.pickDetour==="function"){
+    pBld("barracks",-120,-40); pBld("barracks",-142,-58); pBld("barracks",-98,-58);
+    const u=pGuy(-120,-58,"Detourer");
+    let bad=0,n=0,issued=0;
+    for(let k=0;k<=4;k++){u._stkN=k;
+      for(const side of [1,-1]){u._detSide=side;
+        const d=G.pickDetour(u,0,50,50); n++;
+        if(!d)continue;                       // null is "nowhere legal to go" — a legal answer
+        issued++;
+        if(!G.walkable(d.x,d.z)||insideAny(d.x,d.z))bad++;}}
+    check("v134.0 detour: every sidestep ISSUED aims at ground a body can stand on ("+bad+
+      " bad of "+issued+" issued, "+n+" asked) — v133 never tested one, and a first cut of this "+
+      "fell back to a BLIND offset that put 2 of 10 inside a building on SMOKE_SEED=42",
+      bad===0&&issued>0);
+    wipe();
+  }
+
+  // --- 5. THE POCKET BORDER. A body legally standing in a camp pocket, pressed to its rim. The
+  //        old walkable() failure snapped to the map RECTANGLE, which is a teleport out of ground
+  //        the fringe rule explicitly allows.
+  {
+    const u=pGuy(0,G.MAP.z+40,"Pocketed");
+    let biggest=0;
+    for(let i=0;i<200;i++){
+      const p0x=u.root.position.x,p0z=u.root.position.z;
+      G.moveUnit(u,0,1,0.05);
+      biggest=Math.max(biggest,Math.hypot(u.root.position.x-p0x,u.root.position.z-p0z));
+    }
+    const step=u.spd*0.05;
+    check("v134.0 border: a body in a camp pocket is never SNAPPED to the map rectangle (biggest "+
+      "frame "+biggest.toFixed(2)+" vs a step of "+step.toFixed(2)+") — v133 jumped 34.85",
+      biggest<=step+1e-6&&u.root.position.z>G.MAP.z);
+    wipe();
+  }
 }
 
 console.log(fails?("\n"+fails+" FAILURES"):"\nALL SMOKE TESTS PASSED");
