@@ -118,6 +118,17 @@
   .overlay button{font-family:inherit;font-size:17px;font-weight:bold;padding:10px 26px;cursor:pointer;
     background:var(--parch);border:3px solid var(--ink);border-radius:4px;box-shadow:0 3px 0 rgba(0,0,0,.5)}
   #deathtimer{font-size:34px;color:var(--parch);font-weight:bold}
+  /* v134.2 WHO KILLED YOU. Ice blue (#9fd8ff) is the buff system's colour everywhere else —
+     .scbuffs, .scload, .scbuff b — so a loadout reads as the same thing wherever you meet it. */
+  #deathby{max-width:520px;padding:8px 14px;border:1px solid rgba(159,216,255,.28);border-radius:6px;
+    background:rgba(159,216,255,.05)}
+  .dbywho{font-size:16px;color:#f0e6c8}
+  .dbywho b{color:#ffd24a;font-weight:600}
+  .dbyhead{font-size:10.5px;letter-spacing:1.5px;color:#9fd8ff;opacity:.8;margin:6px 0 3px}
+  .dbylist{display:flex;flex-wrap:wrap;gap:2px 18px;justify-content:center}
+  .dbuff{font-size:11.5px;line-height:1.45;color:#d9d2bd}
+  .dbuff b{color:#9fd8ff;font-weight:600}
+  .dbynone{font-size:12px;color:#9a8f7a;font-style:italic}
   #objective{position:fixed;top:74px;left:50%;transform:translateX(-50%);padding:8px 18px;z-index:10;
     font-weight:bold;font-size:14px;letter-spacing:.5px;transition:opacity 1s}
 
@@ -133,7 +144,10 @@
 }
 /* …the antique face needs a little more air between letters to read as lettering rather than as
    a smudge, and its numerals are old-style, so anything NUMERIC stays on the sans. */
-.overlay .verstamp,.overlay .netnote,#serverlist,.overlay input,.overlay select,.overlay .optline{
+/* v134.2: …and the slain-by block, which is full of "×3" and "LV 7". Same reason as the rest of
+   this list — IM Fell's numerals are old-style and a stack count set in them reads as a smudge. */
+.overlay .verstamp,.overlay .netnote,#serverlist,.overlay input,.overlay select,.overlay .optline,
+#deathby,.dbywho,.dbyhead,.dbylist,.dbuff,.dbynone{
   font-family:"Trebuchet MS",Verdana,sans-serif;
 }
 #namerow input{font-family:var(--fell);font-size:clamp(17px,2.6vw,22px);}

@@ -40,6 +40,7 @@ function endGame(winner,killerName){
   closeMenus();cancelPlacing();
   if(document.exitPointerLock)document.exitPointerLock();
   document.getElementById("deathoverlay").style.display="none";
+  if(typeof renderSlainBy==="function")renderSlainBy(null); // v134.2: the war is over, not your life
   const ov=document.getElementById("endoverlay");
   const title=document.getElementById("endtitle"),text=document.getElementById("endtext");
   if(winner===BLUE){
@@ -536,6 +537,42 @@ function useBlacksmith(u){ // E at the forge: put the trio on the table
     if(r)try{r.conn.send({t:"smith",offer:offer.slice(),xp:u.xp});}catch(_){}
   }
 }
+// ---- v134.2 HOW AN NPC RISES ----
+// The same two currencies a player earns, minted the same way, and then SPENT immediately — a bot
+// has no forge to walk to and no menu to read, so banked XP would sit on it for ever doing nothing.
+//
+// The draw is uniform over everything the unit is not already holding at its ceiling, INCLUDING the
+// pieces that will do it no good (a swordsman can draw Timberwright). That is not an oversight: a
+// player at the forge is dealt three and picks one, and the gap between "picks" and "takes what
+// comes" is most of the difference between a build and a bag. It is the first dial to reach for if
+// the veterans come out too strong, and it is a lot cheaper to turn than a stat curve.
+//
+// ⚠ Math.random() here is fine and the seeded window is not at risk — worldgen closed long before
+// any of this runs (invariant #2 is about LOAD time). nodehash is the tripwire; check it anyway.
+function npcSpendXP(u){
+  while((u.xp||0)>=1){
+    const pool=BUFFS.filter(b=>buffSt(u,b.id)<buffMax(b.id));
+    if(!pool.length)break;                       // holding everything at its ceiling: keep the coin
+    const pick=pool[(Math.random()*pool.length)|0];
+    u.xp--;
+    u.buffs=u.buffs||{};
+    u.buffs[pick.id]=Math.min(buffMax(pick.id),(u.buffs[pick.id]||0)+1);
+  }
+  applyBuffStats(u);
+}
+function npcAdvance(u,n){
+  // v134.2 NO SINGLE EVENT MINTS A MONSTER — see NPC_EVENT_CAP. The clamp is HERE and not at the
+  // call sites so that a faucet added later cannot forget it: the Viking raid pays 15, and one
+  // fight is not allowed to be worth five careers.
+  n=Math.min(n,NPC_EVENT_CAP);
+  const lv0=u.lvl||0;
+  u.lvl=Math.min(XP_MAX_LVL,lv0+n);
+  const got=u.lvl-lv0;                           // at the cap nothing is minted, coin included —
+  if(got<=0)return 0;                            // otherwise the cap would only cap the number
+  u.xp=(u.xp||0)+got;
+  npcSpendXP(u);
+  return got;
+}
 function grantBuff(u,id){ // direct grant (tests & future scripted rewards)
   u.buffs=u.buffs||{};
   u.buffs[id]=Math.min(buffMax(id),(u.buffs[id]||0)+1);
@@ -822,6 +859,10 @@ function tickVignette(dt){
   }else if(el.style.opacity!=="0")el.style.opacity="0";
 }
 function renderFrame(dt){
+  // v134.2 the veteran's star. HERE, and not in tickBody's host branch, for trap #12's reason:
+  // renderFrame is what every frame path calls — host, guest and solo — and a display driver hung
+  // off the host branch is a display that does not exist for two thirds of the players.
+  if(typeof vetTagTick==="function")vetTagTick(dt);
   // v132.53 THE AURA SWEEP RIDES HERE, and the reason is the comment three lines below: this is
   // the one function every frame path calls. auraTick lives in updateEffects, which sits inside
   // tickBody's !gameOver block and behind its inMenu return — so anything that stops tickBody

@@ -196,7 +196,7 @@ if("serviceWorker" in navigator && location.protocol.startsWith("http")){
   </div>
   <div id="whoami">You fight as <b id="myname">—</b>
     <button id="btnrename" class="renamebtn" type="button" title="change your name">✎</button></div>
-  <p class="verstamp">v134.1 — THE FARM RING</p>
+  <p class="verstamp">v134.2 — THE VETERANS</p>
 </div>
 
 <!-- ====================== SCREEN 3 — HOST, JOIN, THE HALL =======================
@@ -279,6 +279,10 @@ if("serviceWorker" in navigator && location.protocol.startsWith("http")){
 
 <div class="overlay" id="deathoverlay">
   <h1>SLAIN</h1>
+  <!-- v134.2: who did it, and what they were carrying. Written by renderSlainBy (08-ui.js) and
+       hidden when there is nothing to say, the way #qbuffs is. Sits above the standing text
+       because it is the part that changes. -->
+  <div id="deathby" style="display:none"></div>
   <p>You respawn as a Villager at your Town Center. Houses shorten this wait. Your gear is lost — re-arm at the Barracks (team resources). Your level, XP and blacksmith buffs die with you.</p>
   <div id="deathtimer">10</div>
 </div>

@@ -43,7 +43,8 @@ try{(0,eval)(fs.readFileSync(path.join(ROOT,"assets/anims.js"),"utf8"));}catch(e
 const order=["00-data","01-engine","02-world","03-buildings","04-units","05-combat",
   "06-input","07-ai","08-ui","09-main","10-net","11-audio","12-touch","13-deskui"];
 let bundle=order.map(f=>fs.readFileSync(path.join(ROOT,"js",f+".js"),"utf8")).join("\n");
-bundle+="\n;global.__P={units,buildings,makeUnit,makeBuilding,moveToward,moveUnit,separate,tick,NET,nodes,updateBot,setGameOver,menuUp:()=>inMenu,CLS,isSiege,teamAge,stock,kings,"+
+bundle+="\n;global.__P={units,buildings,makeUnit,makeBuilding,moveToward,moveUnit,separate,tick,NET,nodes,updateBot,setGameOver,menuUp:()=>inMenu,CLS,isSiege,teamAge,stock,kings,isHuman,hasProg,"+
+  "clock,setAIDiff:v=>{aiDifficulty=v;},getAIDiff:()=>aiDifficulty,AI_DIFF,"+
   "steerAroundBuildings,walkable,validFor,BLD,teamAge,MAP,BLUE,RED,advanceT:(s)=>{T+=s;},getT:()=>T,"+
   (fs.readFileSync(path.join(ROOT,"js","05-combat.js"),"utf8").indexOf("function pushOutOfBuildings")>=0
      ?"pushOutOfBuildings,pickDetour,detourFree,MOVE_STALL_T,":"")+
@@ -86,13 +87,23 @@ function say(k,v){out.push([k,v]);console.log(k.padEnd(52," ")+" "+v);}
 // ---------------------------------------------------------------------------
 function runCampaign(){
   clear();
+  // ⚠ tick() takes NO dt — it reads clock.getDelta(), which in a headless run is REAL elapsed time,
+  // i.e. microseconds. Ten thousand ticks then advance the sim by almost nothing, and a campaign
+  // that never ages up or trains a soldier reports zeroes that look like a finding. smoketest.js
+  // pins the same clock at line 151 for exactly this reason; the probe has to as well.
+  G.clock.getDelta=()=>1/30;
+  // PROBE_DIFF picks the solo/co-op tier. Without it every run measures whatever aiDifficulty
+  // defaults to ("easy"), which makes a three-tier comparison three runs of the same tier — and
+  // without PROBE_SEED they are three DIFFERENT maps as well, so the numbers disagree for reasons
+  // that have nothing to do with what is being compared.
+  if(process.env.PROBE_DIFF)G.setAIDiff(process.env.PROBE_DIFF);
   if(G.menuUp())G.NET.uiSolo();
   const MIN=+(process.env.PROBE_MIN||6);
   const samples=[]; let peak=0, insideUnitFrames=0, unitFrames=0, wedged=new Map();
-  const frames=Math.round(MIN*60/0.05);
+  const frames=Math.round(MIN*60*30);   // 30 fixed frames a second, per the clock above
   for(let f=0;f<frames;f++){
-    G.setGameOver(false); G.tick(0.05);
-    if(f%20)continue;                                  // sample at 1 Hz
+    G.setGameOver(false); G.tick();
+    if(f%30)continue;                                  // sample at 1 Hz
     let ins=0,live=0;
     for(const u of G.units){
       if(!u.alive||u.isPlayer)continue;
@@ -101,12 +112,13 @@ function runCampaign(){
       if(anyInside(p.x,p.z)){ins++;wedged.set(u,(wedged.get(u)||0)+1);}
     }
     insideUnitFrames+=ins; unitFrames+=live; peak=Math.max(peak,ins);
-    if(f%(60*20)===0)samples.push(ins);
+    if(f%(60*30*2)===0)samples.push(ins);              // one sample every 2 minutes
   }
   const pct=unitFrames?100*insideUnitFrames/unitFrames:0;
   let chronic=0; const secs=MIN*60;
   for(const [u,n] of wedged)if(n>secs*0.25)chronic++;   // inside for a quarter of the match
-  say("CAMPAIGN "+MIN+"min: mean % of the army inside a collider",pct.toFixed(2)+"%");
+  say("CAMPAIGN "+MIN+"min ("+G.getAIDiff()+", vetKills "+
+    ((G.AI_DIFF[G.getAIDiff()]||{}).vetKills||"n/a")+"): mean % of the army inside a collider",pct.toFixed(2)+"%");
   say("  peak bodies inside a collider at once",peak);
   say("  per-minute samples",samples.join(" "));
   say("  bodies inside for >25% of the match",chronic);
@@ -123,6 +135,19 @@ function runCampaign(){
   say("  HEALTH units blue/red (military)",liveU(0)+"/"+liveU(1)+" ("+mil(0)+"/"+mil(1)+")");
   say("  HEALTH ages blue/red",G.teamAge[0]+"/"+G.teamAge[1]);
   say("  HEALTH kings alive",(G.kings[0].alive?1:0)+"/"+(G.kings[1].alive?1:0));
+  // --- v134.2 the veterans. THE dial: bots hold power only through buff STACKS, because levels
+  // multiply nothing. Reported per team so a one-sided war is visible as one.
+  const prog=(t)=>{
+    const b=G.units.filter(u=>u.alive&&u.team===t&&u.bot&&!G.isHuman(u));
+    const lv=b.filter(u=>(u.lvl||0)>0);
+    let stacks=0,holders=0,top=0;
+    for(const u of b){const n=u.buffs?Object.keys(u.buffs).reduce((a,k)=>a+u.buffs[k],0):0;
+      if(n){holders++;stacks+=n;} top=Math.max(top,u.lvl||0);}
+    return {n:b.length,lv:lv.length,top,holders,stacks};
+  };
+  for(const t of [0,1]){const p=prog(t);
+    say("  VETERANS team"+t,p.lv+"/"+p.n+" levelled (top LV "+p.top+"), "+
+      p.holders+" carrying "+p.stacks+" stacks");}
 }
 
 // The bench scenarios below spawn and kill bodies, and a killed body is a body the game will

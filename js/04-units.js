@@ -5077,7 +5077,32 @@ function syncNameTags(sc){ // sc rows: [name, score, team, unitId, lvl?] — tag
     want[row[3]]=row[0]+(row[4]?" ⭐"+row[4]:"");} // v87: everyone sees a player's LEVEL over their head
   for(const u of units){
     if(want[u.id]!==undefined&&u!==player)setNameTag(u,want[u.id]);
-    else if(u._tag)clearNameTag(u);
+    // v134.2: …but do not strip a tag this function does not own. vetTagTick owns the veteran
+    // stars, runs on every frame path (this one runs only when a snapshot arrives, i.e. never in
+    // solo), and the two would otherwise take the tag off each other frame by frame.
+    else if(u._tag&&!u._vtag)clearNameTag(u);
+  }
+}
+// ---- v134.2 THE VETERAN'S STAR ----
+// John's ruling was "no aura for bots, but you need to be able to tell one is higher level". This is
+// the mark players already wear (04-units.js has put "name ⭐N" over a player's head since v87), so
+// it means the same thing whoever is carrying it rather than inventing a second vocabulary.
+//
+// Driven from renderFrame, NOT from the snapshot: syncNameTags is called only by the net layer, so
+// a solo match — the common case, and the one this feature exists for — would never have shown it.
+// On a host u.lvl is authoritative; on a guest the s.lv rows have already written it.
+//
+// Throttled, because this walks the roster and touches the DOM/scene through setNameTag: a level
+// changes a few times a minute at most, and re-labelling a hundred bodies every frame to say the
+// same thing is how a display feature becomes a frame-rate bug.
+let _vetT=0;
+const VET_TAG_EVERY=0.5;
+function vetTagTick(dt){
+  _vetT-=dt||0; if(_vetT>0)return; _vetT=VET_TAG_EVERY;
+  for(const u of units){
+    const want=(u.alive&&u.bot&&!u.isPlayer&&!u.remote&&(u.lvl||0)>0)?("⭐"+u.lvl):null;
+    if(want){ if(u._vtagN!==want){setNameTag(u,want);u._vtag=true;u._vtagN=want;} }
+    else if(u._vtag){ clearNameTag(u); u._vtag=false; u._vtagN=null; }
   }
 }
 // v99 CARGO VISUALS: every client can SEE what a cart hauls. Hosts compute the load
@@ -5530,10 +5555,36 @@ function applyBuffStats(u){
   u.cd=Math.max(0.2,d.cd*(1-0.10*buffSt(u,"atkspd")));
   if(u.bar)setBar(u.bar,u.hp/u.maxHp);
 }
+// ---- v134.2 A CLASS CHANGE CAN REVOKE PROGRESSION ----
+// hasProg() asks a question about a unit's CLASS, and a unit's class changes under it. Two doors:
+//   · the LEVY (07-ai.js) arms a villager when the Town Center is overwhelmed and stands it down
+//     ten quiet seconds later — and in between the militia fights, kills and earns. It used to walk
+//     back to the fields still holding the loadout: a farmhand with Honed Edge, which is exactly the
+//     invisible power the "soldiers only" rule exists to prevent. (Same door at 10-net.js:731, where
+//     a deserter's ox cart is handed a villager's tools.)
+//   · RESPAWN. respawnUnit sets u.cls="villager" DIRECTLY rather than through setClass, so a
+//     soldier that reached it without passing through killUnit's wipe — anything that clears
+//     alive=false by hand, which the harness does in a dozen places and a future feature might —
+//     came back a villager with a full loadout intact.
+// One function, both doors, because two derivations of the same rule is how they drift apart.
+// ⚠ NEVER a player: respawnUnit re-classes YOU to villager on every death and killUnit has already
+// decided what you keep — half your level, as coin. hasProg is true for a player whatever class
+// they are wearing, so this reads correctly by construction, and that is a property of hasProg
+// this function depends on.
+function revokeProg(u){
+  if(typeof hasProg!=="function"||hasProg(u))return false;
+  if(!((u.lvl||0)||(u.xp||0)||(u.buffs&&Object.keys(u.buffs).length)||(u._kills||0)||(u.hpBonus||0)))
+    return false;
+  u.lvl=0; u.xp=0; u.buffs={}; u._kills=0; u.hpBonus=0;
+  u._tmods=null; u._lowLatch=false;      // …and the timed modifiers a soldier was carrying
+  if(typeof applyBuffStats==="function")applyBuffStats(u);
+  return true;
+}
 function setClass(u,cls){
   u.cls=cls; buildBodyFor(u); setClassStats(u);
   if(cls==="dragoon")u.ammo=6; // a fresh dragoon rides out with a loaded revolver
   u.gathering=null;
+  revokeProg(u);               // v134.2 — see above
   if(u.isPlayer)updatePlayerHud();
 }
 function dist2(ax,az,bx,bz){const dx=ax-bx,dz=az-bz;return dx*dx+dz*dz;}

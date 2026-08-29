@@ -24,7 +24,12 @@ var NET={
   // v132.9 29 -> 30: the Viking road's bow was reversed. The spine moved, so its clearance corridor
   // moved, so the trees moved; and the two team bazaars are defined ON the spine, so they moved too
   // and took their own clearance with them. Every node index downstream is different.
-  PROTO:46,             // v132.46 the damage-number message (dnum). Was:
+  PROTO:48,             // v134.2 the slain-by record (who killed you and what they carried) — a
+                        // guest has no death EVENT at all, only an alive bit flipping in a
+                        // snapshot, so it needs one. Was:
+                        // v134.2 veteran NPCs: s.bfa now rows every buff HOLDER rather than every
+                        // player, and s.lv carries their levels for the nametag star. Was:
+                        // v132.46 the damage-number message (dnum). Was:
                         // v132.44 the thrown-knife kind. Was:
                         // v132.43 public timed modifiers (s.tm) — the other half of "a client
                         // knows what other units are carrying". Was:
@@ -1577,7 +1582,23 @@ NET.packSnap=function(){
       _bfa.push([x.id,packed]); };
     _bfRow(player);
     for(const k in NET.remotes){const rr=NET.remotes[k];if(rr.unit)_bfRow(rr.unit);}
+    // v134.2 …AND EVERY VETERAN NPC. This list is COMPLETE by contract — the consumer clears
+    // u.buffs on anything carrying buffs and absent from it — so with the producer rowing players
+    // alone, a guest erased every bot's loadout on every full snap and then recomputed its stats
+    // from a bare class table. That is not a missing feature, it is a live disagreement about how
+    // hard a unit hits. Only HOLDERS get a row: a hundred bots carrying nothing would be a hundred
+    // empty rows a second, and the sweep only ever clears units that have something to lose.
+    const _seen={}; for(const r of _bfa)_seen[r[0]]=1;
+    for(const u of units)
+      if(u.alive&&!_seen[u.id]&&u.buffs&&Object.keys(u.buffs).length)_bfRow(u);
     s.bfa=_bfa;
+    // v134.2 THE VETERANS' LEVELS, for the star over their heads. NOT s.sc: that is the scoreboard,
+    // a roll of players, and it is built from player+remotes for good reasons. Two numbers a
+    // veteran, on full snaps only, and quiet entirely in a match where no bot has earned one.
+    const _lv=[];
+    for(const u of units)if(u.alive&&u.bot&&!u.isPlayer&&!u.remote&&(u.lvl||0)>0)_lv.push([u.id,u.lvl|0]);
+    if(_lv.length||NET._lvLast)s.lv=_lv;   // …and ONE empty list when the last of them falls, or a
+    NET._lvLast=_lv.length;                // guest keeps the star over a body that lost the level
   }
   { // v95: buildings ship as DELTAS — only rows that changed (usually none), full set on refresh.
     // v97: rows are BINARY (8B) and the delta key IS the quantized wire row — sub-quantum
@@ -1757,6 +1778,11 @@ NET.guestData=function(d){
   if(d.t==="dnum"){ // v132.46 YOUR damage, sent only to you — see patch-dmgnum-hook.js
     const v=NET.unitById(d.i);
     if(v&&typeof dmgNum==="function")dmgNum(v,(d.d||0)/100,!!d.c);
+    return;
+  }
+  if(d.t==="slain"){ // v134.2 who killed US, frozen at the blow — a guest has no other way to know
+    if(typeof player!=="undefined"&&player)player._slain=d.s||null;
+    if(typeof renderSlainBy==="function")renderSlainBy(d.s||null);
     return;
   }
   if(d.t==="note")return msg(d.m,d.tone||"");
@@ -2003,6 +2029,10 @@ NET.applySnap=function(s){
       u.bar.bg.visible=u.bar.fg.visible=false;
       u.gathering=null;
       if(u===player){
+        // v134.2: the record may already have arrived (the message is immediate, this edge waits
+        // for a snapshot) or may not have (a lossy channel, or the two crossing). Paint whatever we
+        // hold now; the message handler paints again if it lands after this.
+        if(typeof renderSlainBy==="function")renderSlainBy(u._slain||null);
         document.getElementById("deathoverlay").style.display="flex";
         closeMenus();cancelPlacing();
         if(document.exitPointerLock)document.exitPointerLock();
@@ -2013,6 +2043,7 @@ NET.applySnap=function(s){
       if(u!==player){u.bar.bg.visible=u.bar.fg.visible=true;setBar(u.bar,1);}
       else{
         document.getElementById("deathoverlay").style.display="none";
+        u._slain=null; if(typeof renderSlainBy==="function")renderSlainBy(null); // v134.2
         msg("You respawn as a Villager. Re-arm at the Barracks.","blue");
       }
     }
@@ -2063,6 +2094,12 @@ NET.applySnap=function(s){
       }
       un._tmods=list.length?list:null;
     }
+  }
+  if(s.lv){ // v134.2 veteran NPC levels — the star over the head, and nothing else reads it
+    const named=new Set();
+    for(const row of s.lv){const un=NET.unitById(row[0]); if(!un)continue; named.add(un.id); un.lvl=row[1]|0;}
+    // the same clear-first rule s.ar and s.bfa live by: an empty list has to be able to say "none"
+    for(const un of units)if(un.bot&&(un.lvl||0)>0&&!named.has(un.id)&&un!==player&&!un.remote)un.lvl=0;
   }
   if(s.bfa){ // v132.40 every player's loadout — see patch-buffs-public.js
     if(!NET._bfIdx&&typeof BUFFS!=="undefined"){NET._bfIdx={};BUFFS.forEach((b,i)=>{NET._bfIdx[b.id]=i;});}

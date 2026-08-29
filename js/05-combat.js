@@ -117,7 +117,10 @@ const AURA_STILL=3;      // SANCTUARY's stillness clock
 // separation and terrain settling.
 const STILL_SPD=0.6;     // units/sec above which a unit counts as MOVING
 function auraBuffTick(u,dt){
-  if(!u.alive||typeof isHuman!=="function"||!isHuman(u))return;
+  // v134.2 hasProg: a veteran bot's SANCTUARY should shelter the band standing in it, or the buff
+  // it is holding is a decoration. The six buffSt reads on the next line already bail in one step
+  // for anything holding none of them, which is every unit that never earned one.
+  if(!u.alive||typeof hasProg!=="function"||!hasProg(u))return;
   const sanct=buffSt(u,"sanctuary"), brand=buffSt(u,"brand"), kin=buffSt(u,"kinship"),
         stew=buffSt(u,"steward"), res=buffSt(u,"resolve"), pha=buffSt(u,"phalanx");
   if(!(sanct||brand||kin||stew||res||pha)){
@@ -1405,9 +1408,10 @@ function dealDamage(att,victim,dmg){
     if(typeof Sound!=="undefined"){Sound.play("block",{x:victim.root.position.x,z:victim.root.position.z}); // v102: shield-up block
       Sound.play("veffort",{x:victim.root.position.x,z:victim.root.position.z});} // v109: the strain behind the shield
   }
-  // ---- v87 BLACKSMITH BUFFS: attacker-side (humans only) ----
+  // ---- v87 BLACKSMITH BUFFS: attacker-side ----
+  // v134.2: "humans only" until now. hasProg, not isHuman — see the note at hasProg in 00-data.js.
   const attU=att&&!att.def&&att.cls?att:null; // a unit, not a tower
-  if(attU&&isHuman(attU)&&attU.team!==victim.team){
+  if(attU&&hasProg(attU)&&attU.team!==victim.team){
     if(attU._tmods)dmg+=tmodSum(attU,"dmgflat");                   // KILLING FRENZY — flat, and
                                                                    // added before the multipliers
                                                                    // so a crit doubles it too
@@ -1445,8 +1449,8 @@ function dealDamage(att,victim,dmg){
     }
     if(cap)dmg*=1+0.05*cap;
   }
-  // ---- victim-side (humans only): dodge, then the tempered shield ----
-  if(isHuman(victim)){
+  // ---- victim-side: dodge, then the tempered shield ---- (v134.2: hasProg, was humans only)
+  if(hasProg(victim)){
     const ds=buffSt(victim,"dodge");                               // SIXTH SENSE
     if(ds&&Math.random()<0.05*ds){
       puff(victim.root.position.x,1.6,victim.root.position.z,0x9fd8ff);
@@ -1530,7 +1534,7 @@ function dealDamage(att,victim,dmg){
   }
   // SURVIVAL INSTINCT: an EDGE, not a level. The latch stops it re-arming on every blow landed
   // while already under a quarter health, which would be a permanent speed buff in disguise.
-  if(isHuman(victim)&&victim.alive&&buffSt(victim,"flight")&&victim.maxHp>0&&
+  if(hasProg(victim)&&victim.alive&&buffSt(victim,"flight")&&victim.maxHp>0&&
      victim.hp>0&&victim.hp<victim.maxHp*TMOD_LOW&&!victim._lowLatch){
     victim._lowLatch=true;
     tmodAdd(victim,"spdmul",0.40*buffSt(victim,"flight"),5,false);
@@ -1538,12 +1542,12 @@ function dealDamage(att,victim,dmg){
                                           // is why it can afford to be the longest of the cues
   }
   // HUNTER'S STEP: a landed MELEE blow quickens the step.
-  if(attU&&isHuman(attU)&&buffSt(attU,"hunt")&&CLS[attU.cls]&&!CLS[attU.cls].ranged&&
+  if(attU&&hasProg(attU)&&buffSt(attU,"hunt")&&CLS[attU.cls]&&!CLS[attU.cls].ranged&&
      attU.team!==victim.team){
     tmodAdd(attU,"spdmul",0.10*buffSt(attU,"hunt"),2,false);
   }
   // ---- v132.36 BATCH E: EARTHSHAKER and RAPID VOLLEY ----
-  if(attU&&isHuman(attU)&&attU.team!==victim.team&&!_volleyIn){
+  if(attU&&hasProg(attU)&&attU.team!==victim.team&&!_volleyIn){
     const meleeE=CLS[attU.cls]&&!CLS[attU.cls].ranged;
     const qk=buffSt(attU,"quake");
     if(qk&&meleeE&&Math.random()<0.15*qk){                 // EARTHSHAKER — borrows AURA_BR rather
@@ -1572,7 +1576,7 @@ function dealDamage(att,victim,dmg){
     }
   }
   // ---- v132.34 BATCH C: what the blow leaves BEHIND on the victim ----
-  if(attU&&isHuman(attU)&&attU.team!==victim.team&&victim.alive){
+  if(attU&&hasProg(attU)&&attU.team!==victim.team&&victim.alive){
     const melee=CLS[attU.cls]&&!CLS[attU.cls].ranged;
     const bl=buffSt(attU,"bleed");
     if(bl&&Math.random()<0.15*bl){                      // SERRATED EDGE — 1 HP/s for 20s = 20 HP
@@ -1609,7 +1613,7 @@ function dealDamage(att,victim,dmg){
     }
   }
   // SHRUG IT OFF: struck, and everything the enemy put on you falls away.
-  if(isHuman(victim)&&victim._tmods&&buffSt(victim,"shrug")&&
+  if(hasProg(victim)&&victim._tmods&&buffSt(victim,"shrug")&&
      Math.random()<0.20*buffSt(victim,"shrug")){
     if(shedDebuffs(victim)){
       _vfx(VFX_SHRUG,victim.root.position.x,victim.root.position.z,0,0);
@@ -1620,7 +1624,7 @@ function dealDamage(att,victim,dmg){
   // BRAMBLE MAIL: a melee attacker takes it back. att.hp is touched DIRECTLY — recursing into
   // dealDamage would re-run every modifier including the attacker's own thorns, and two units
   // both wearing it would volley a blow back and forth.
-  if(isHuman(victim)&&buffSt(victim,"thorns")&&att&&!att.def&&att.cls&&
+  if(hasProg(victim)&&buffSt(victim,"thorns")&&att&&!att.def&&att.cls&&
      CLS[att.cls]&&!CLS[att.cls].ranged&&att.alive&&att.team!==victim.team){
     att.hp-=1*buffSt(victim,"thorns");
     if(att.hp<=0&&typeof killUnit==="function"){att.hp=0;killUnit(att,victim);}
@@ -1633,12 +1637,14 @@ function dealDamage(att,victim,dmg){
   if(victim.bot&&victim.bot.camp&&att&&!att.def&&att.team!==undefined&&att.team!==NEUTRAL){
     victim.bot.camp.wake=T+CAMP_WAKE;
     victim.bot.camp.threat=att;
-    // v132.28 PARTICIPATION. Any damage to any member puts a human on the camp's list; the
-    // pack is cleared by whoever fought it, not by whoever landed the last blow. Bots are not
-    // recorded — they never quest and hold no XP (the isHuman gate is the same one questProgress
-    // uses). The list lives on the CAMP STATE, so it survives the death of any individual creep
-    // and is cleared when the next wave lands.
-    if(typeof isHuman==="function"&&isHuman(att)){
+    // v132.28 PARTICIPATION. Any damage to any member puts the attacker on the camp's list; the
+    // pack is cleared by whoever fought it, not by whoever landed the last blow. The list lives on
+    // the CAMP STATE, so it survives the death of any individual creep and is cleared when the next
+    // wave lands.
+    // v134.2: the gate was isHuman, with a comment reading "Bots are not recorded — they never
+    // quest and hold no XP". They hold XP now, so they are recorded — a band that clears a camp has
+    // earned the same thing a player would have earned for it.
+    if(typeof hasProg==="function"&&hasProg(att)){
       const _st=victim.bot.camp;
       if(!_st.part)_st.part=[];
       if(_st.part.indexOf(att)<0)_st.part.push(att);
@@ -1661,7 +1667,7 @@ function dealDamage(att,victim,dmg){
        !(victim.bot&&victim.bot.camp&&victim.bot.camp.kind==="wolf")) // v110: wolves don't cry like men
       Sound.vox(dmg<12?"painm":dmg<25?"pain":"painh",victim,{x:victim.root.position.x,z:victim.root.position.z});
   }
-  if(attU&&isHuman(attU)&&attU.alive&&attU.team!==victim.team){    // BLOODTHIRST drinks
+  if(attU&&hasProg(attU)&&attU.alive&&attU.team!==victim.team){    // BLOODTHIRST drinks
     // v133.0 BLOODTHIRST DRINKS A SHARE OF THE BLOW, not a flat point. 1 HP a hit was noise on a
     // 40-damage swing and a lifeline on a 3-damage one; 7% a stack scales with what you actually
     // hit for, and reads 35% at full. `dmg` here is the figure AFTER every multiplier and both
@@ -1690,8 +1696,25 @@ function dealDamage(att,victim,dmg){
     if(typeof Sound!=="undefined"&&victim.team===MYTEAM)Sound.play("alert_attack"); // v100: under-attack horn
   }
   if(victim.hp<=0){
+    // ---- v134.2 …AND WHAT THREE KILLS PAY AN NPC ----
+    // John: "a bot gains a level per every 3 soldier enemies killed, not one. One is too frequent."
+    // SOLDIERS. Not villagers, not carts, not the wilds — a raid through an undefended economy is
+    // not what should make a veteran, and camps already pay through campPayParticipants below.
+    // Counted on the killer, so a bot that dies loses the part-progress with everything else.
+    if(attU&&!isHuman(attU)&&hasProg(attU)&&attU.alive&&attU.team!==victim.team&&
+       victim.team!==NEUTRAL&&victim.cls!=="villager"&&!(victim.bot&&victim.bot.role==="cart")&&
+       typeof npcAdvance==="function"){
+      // v134.2 the rate is the DIFFICULTY DIAL. diffFor() is the same routing the marshal's think
+      // clock and train tempo already use, so a team holding a human advances at "normal" whatever
+      // the solo dial says — the existing rule, inherited rather than reinvented.
+      const _dt=(typeof diffFor==="function"&&typeof AI_DIFF!=="undefined")
+        ?(AI_DIFF[diffFor(attU.team)]||AI_DIFF.normal):null;
+      const _need=(_dt&&_dt.vetKills)||NPC_KILLS_PER_LVL;
+      attU._kills=(attU._kills||0)+1;
+      if(attU._kills>=_need){attU._kills=0;npcAdvance(attU,1);}
+    }
     // ---- v132.30 BATCH A: what a kill pays the killer ----
-    if(attU&&isHuman(attU)&&attU.alive&&attU.team!==victim.team){
+    if(attU&&hasProg(attU)&&attU.alive&&attU.team!==victim.team){
       const fe=buffSt(attU,"feast");                                  // SECOND WIND
       if(fe){attU.hp=Math.min(attU.maxHp,attU.hp+attU.maxHp*0.10*fe);
         _vfx(VFX_FEAST,attU.root.position.x,attU.root.position.z,0,0);} // relief, not a spell
@@ -1779,6 +1802,31 @@ function killUnit(u,killer){
     }
   }
   const kn=killer? (killer.isPlayer?"You":(killer.def?killer.def.name:killer.name)) : "The wilds";
+  // ---- v134.2 WHO KILLED YOU, AND WHAT THEY CARRIED ----
+  // FROZEN HERE, not looked up later: the death screen stands for 10-30 seconds, s.bfa refreshes at
+  // about 1 Hz, and if the killer dies inside that window its own wipe empties u.buffs — you would
+  // be shown an empty loadout by someone who was fully loaded when they cut you down.
+  // ⚠ killer may be a BUILDING (a tower or castle carries .def and no .cls) or null ("the wilds"),
+  // and the suite calls killUnit(qh,null) six times. Everything below is guarded on that.
+  if(hasProg(u)&&typeof BUFFS!=="undefined"){
+    const kU=(killer&&!killer.def&&killer.cls)?killer:null;
+    const packed=[];
+    if(kU&&kU.buffs)for(let i=0;i<BUFFS.length;i++){
+      const st=kU.buffs[BUFFS[i].id]|0; if(st>0)packed.push(i,st);   // canonical BUFFS order, so the
+    }                                                               // display needs no sort of its own
+    u._slain={
+      n:killer?(killer.isPlayer?"You":(killer.def?("A "+killer.def.name):(killer.name||"?"))):"The wilds",
+      c:kU&&CLS[kU.cls]?CLS[kU.cls].name:(killer&&killer.def?"tower":""),
+      l:kU?(kU.lvl||0):0,
+      b:packed
+    };
+    // …and to the owner's own screen, wherever they sit. A guest learns it died from a bit flip in
+    // a snapshot row — there is no death event at all — so without this it would never know.
+    if(u.remote&&typeof NET!=="undefined"&&NET.mode==="host"){
+      const r=NET.remotes[u.remote];
+      if(r&&r.conn){try{r.conn.send({t:"slain",s:u._slain});}catch(_){}}
+    }
+  }
   if(u.isKing){ endGame(u.team===BLUE?RED:BLUE, kn); return; }
   if(u.bot&&u.bot.role==="cart"){ // NPC carts are plundered for good; the Market builds anew
     u.respawnT=Infinity;
@@ -1792,8 +1840,13 @@ function killUnit(u,killer){
   // v132.28: the guard now tests EVERYTHING the wipe below clears. It used to test only
   // lvl/xp/quest/buffs, so a fresh player holding nothing but a drawn draft — or banked rerolls,
   // or a standing forge offer — died without losing them. The two lists must stay identical.
-  if(isHuman(u)&&((u.lvl||0)>0||(u.xp||0)>0||u.quest||(u.buffs&&Object.keys(u.buffs).length)||
-     u.questDraft||(u.qRerolls||0)>0||u.smithOffer||u._scoutOut)){
+  // v134.2 …AND IT REACHES A VETERAN NPC ON THE SAME TERMS (John: "half the level, all buffs —
+  // same as you"). Bots die far more often than you do, so this is also what keeps the whole
+  // feature self-limiting: a bot's loadout is only ever as good as its current life.
+  // ⚠ THE GUARD LIST AND THE WIPE LIST MUST STAY IDENTICAL — the v132.28 note below says why.
+  // _kills is part-progress toward the next level and dies with the rest of it.
+  if(hasProg(u)&&((u.lvl||0)>0||(u.xp||0)>0||u.quest||(u.buffs&&Object.keys(u.buffs).length)||
+     u.questDraft||(u.qRerolls||0)>0||u.smithOffer||u._scoutOut||(u._kills||0)>0)){
     // ---- v132.48 DEATH TAKES HALF, AND HANDS IT BACK AS COIN ----
     // Was: lvl=0, xp=0 — a total wipe, which John called too harsh after playing it. Now half the
     // level survives AND becomes spendable XP, so you rise with a bare forge and the means to
@@ -1805,6 +1858,7 @@ function killUnit(u,killer){
     u.hpBonus=0;      // v132.30: TROPHY HUNTER is a buff's earnings — death takes it with the buffs
     u._tmods=null; u._lowLatch=false; // v132.32: and the timed modifiers die with the body
     if(typeof tmodSyncClear==="function")tmodSyncClear(u); // …on the owner's screen as well as here
+    u._kills=0;       // v134.2: part-progress toward the next level dies with the level
     u._rrCycle=false; // v132.28.2: re-arm the reroll grant, or a player who died QUESTLESS would
                       // carry the spent cycle into the new life and never be granted one
     if(typeof questNotify==="function"){
@@ -1830,7 +1884,8 @@ function killUnit(u,killer){
     msg(kn+" slew "+(u.isPlayer?"you":u.name)+" ("+CLS[u.cls].name+")",u.team===BLUE?"warn":"gold");
   u.respawnT=respawnDelay(u.team);
   if(u.isPlayer){
-    document.getElementById("deathoverlay").style.display="flex";
+    if(typeof renderSlainBy==="function")renderSlainBy(u._slain); // v134.2 — built ONCE, here, not
+    document.getElementById("deathoverlay").style.display="flex"; // per frame beside the countdown
     closeMenus(); cancelPlacing();
     if(document.exitPointerLock)document.exitPointerLock();
   }
@@ -1862,7 +1917,12 @@ function respawnUnit(u){
   const a=Math.random()*Math.PI*2;
   u.root.position.set(hx+Math.cos(a)*_spR,0,hz+Math.sin(a)*_spR);
   u.root.position.y=terrainHeight(u.root.position.x,u.root.position.z);
+  u._slain=null;                       // v134.2: a new life opens on nobody's name
   u.cls="villager"; buildBodyFor(u); setClassStats(u);
+  // v134.2: this sets cls directly rather than calling setClass, so it needs the revocation of its
+  // own. A soldier that reached respawn WITHOUT passing through killUnit's wipe — anything that
+  // clears alive=false by hand — used to come back a villager holding a veteran's whole loadout.
+  if(typeof revokeProg==="function")revokeProg(u);
   u.alive=true; u.root.visible=true; u.warned=false;
   u.corpse=false; u.body.rotation.x=0; // stand the reborn villager back up (buildBodyFor clears meshes but not the toppled tilt)
   u.chargeTo=null; u.rally=false; u.rallyBy=null; // the dead answer no horn — a respawned villager forgets the band

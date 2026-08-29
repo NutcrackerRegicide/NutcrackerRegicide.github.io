@@ -883,6 +883,34 @@ function awardPts(u,n){ // humans only: the host player and possessed guests
   if(u&&(u.isPlayer||u.remote)&&n>0)u.score=(u.score||0)+n;
 }
 function isHuman(u){return !!(u&&(u.isPlayer||u.remote));}
+// ---- v134.2 WHO CARRIES PROGRESSION ----
+// NOT a widened isHuman. That predicate has 34 call sites and at most of them it means "a real
+// player's screen is watching this" — quests, the Town Board, kill-feed growls, per-owner net
+// messages, the HUD. Widening it would hand bots quest state they can never use and fire
+// owner-channel sends at bodies with no owner. This is the other question, asked separately.
+//
+// Soldiers only. A villager holding three buffs is invisible power spread across half an economy;
+// a trade cart cannot fight; the King is a win condition rather than a duellist; and the wilds keep
+// their own balance (CAMP_XP already pays the humans who clear them). A LEVIED villager qualifies
+// the moment it takes up arms, because from then on it is a soldier by every other rule here.
+function hasProg(u){
+  if(!u)return false;
+  if(u.isPlayer||u.remote)return true;
+  if(!u.bot||u.isKing||u.team===NEUTRAL)return false;
+  const r=u.bot.role;
+  if(r==="creep"||r==="cart"||r==="king")return false;
+  return u.cls!=="villager";
+}
+// John: "a bot gains a level per every 3 soldier enemies killed, not one. One is too frequent."
+// The per-tier rates live in AI_DIFF.vetKills below; this is the fallback for a team with no
+// director and the number the whole feature was measured at.
+const NPC_KILLS_PER_LVL=3;
+// …AND NO SINGLE FIGHT MINTS A MONSTER. campPayParticipants pays CAMP_XP_BOSS = 15 as both levels
+// and XP, which is a fine moment for a player and absurd for an NPC: measured, a clubman that
+// helped break the Viking raid came out at level 15 holding fourteen buff pieces. Bots do not fight
+// camps yet — v134.3 is the version that teaches them — so this goes in before the faucet opens,
+// in npcAdvance, where every present and future source has to pass through it. Humans are unaffected.
+const NPC_EVENT_CAP=3;
 
 // ---------- QUESTING & THE BLACKSMITH (v87) ----------
 // The Town Board by each Town Center hands out random quests (E). A finished quest
@@ -1154,9 +1182,21 @@ const PERSONALITIES={
 // ---------- v94: AI DIFFICULTY (applies to teams with NO human players) ----------
 // easy/hard are the co-op & solo dials; "normal" is the supportive brain human teams keep.
 const AI_DIFF={
-  easy:  {name:"Easy",  think:2.2, eco:1.0, raidMul:1.6,  raidFracMul:0.6, trainMul:1.6, buf:1.5, counter:false},
-  normal:{name:"Normal",think:1.0, eco:1.0, raidMul:1.0,  raidFracMul:1.0, trainMul:1.0, buf:1.0, counter:false},
-  hard:  {name:"Hard",  think:0.6, eco:1.2, raidMul:0.75, raidFracMul:1.1, trainMul:0.7, buf:0.8, counter:true}
+  // v134.2 vetKills: enemy soldiers a bot must kill for a level — and a level is one blacksmith
+  // piece, because levels themselves multiply nothing. This is the veterans' whole dial.
+  //
+  // MEASURED, red army at twenty minutes, four seeds a tier, as buff stacks held across the army:
+  //     4 kills:  2 · 1 · 15 · 7   = 25       (top level seen: 2)
+  //     3 kills:  3 · 0 · 21 · 4   = 28       (top level seen: 3)
+  //     1 kill :  4 · 3 · 34 · 16  = 57       (top level seen: 7)
+  // The variance between seeds dwarfs the tier, because whether a war really joins decides almost
+  // everything — but the shape is clear, and so is the finding that 4 and 3 were INDISTINGUISHABLE.
+  // A dial whose first two settings measure the same is not a dial, so the ladder is 6 : 3 : 1.
+  // EASY is deliberately the slowest: aiDifficulty defaults to "easy", and a default match should
+  // not get harder because a feature landed — it is still strictly more than v133's nothing.
+  easy:  {name:"Easy",  think:2.2, eco:1.0, raidMul:1.6,  raidFracMul:0.6, trainMul:1.6, buf:1.5, counter:false, vetKills:6},
+  normal:{name:"Normal",think:1.0, eco:1.0, raidMul:1.0,  raidFracMul:1.0, trainMul:1.0, buf:1.0, counter:false, vetKills:3},
+  hard:  {name:"Hard",  think:0.6, eco:1.2, raidMul:0.75, raidFracMul:1.1, trainMul:0.7, buf:0.8, counter:true,  vetKills:1}
 };
 let aiDifficulty="easy"; // the solo/co-op dial (EASY|HARD in the menus); human teams always run "normal"
 let MYTEAM=BLUE; // the LOCAL player's team — red guests flip this on join

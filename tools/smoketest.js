@@ -58,6 +58,8 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   // which the suite has never once been able to ask a question of.
   "walkable,pushOutOfBuildings,pickDetour,detourFree,MOVE_STALL_T,MOVE_GOAL_JUMP,separate,"+
   "TC_RING,TC_FARM_MIN,tcRingReason,farmAdjacent,"+   // v134.1 the farm ring
+  "hasProg,npcAdvance,npcSpendXP,NPC_KILLS_PER_LVL,NPC_EVENT_CAP,revokeProg,vetTagTick,DEATH_KEEP,"+ // v134.2
+  "renderSlainBy,BUFFS,"+                              // v134.2 the slain-by death screen
   // the bench drives moveToward directly, outside tick(), and both the watchdog and a detour's
   // lifetime are measured in T. A bench that leaves T frozen tests a world where no detour ever
   // expires — which is a different program, and it reads as "nobody ever arrives".
@@ -1428,8 +1430,23 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
      global.__G.interactCandidateD2()===0);
    p0.garrison=g0;}
 }
-const vehicles=units.filter(u=>u.alive&&(CLS[u.cls].rig==="cart"||isSiege(u.cls))).length;
-check("8-minute campaign survived with vehicles fielded ("+vehicles+" carts/siege alive, ages "+teamAge[0]+"/"+teamAge[1]+")",vehicles>0);
+// v134.2 FIELDED AND BUILT, not "still alive after eight minutes of war". This asked whether any
+// cart or engine SURVIVED the campaign, which is a fact about who won a skirmish and not about the
+// code: it was already red on two of four off-seeds, and NPC progression turned it red on the
+// default seed too — not by making anyone stronger (the veterans hold six buff stacks between them
+// at minute eight, which cannot move a war) but because npcSpendXP draws Math.random() and every
+// draw reshuffles every draw after it.
+// Its own comment says what it is here for: "the test that would have caught the vehicle-rig
+// animation crash (undefined limbs on carts/rams)". A rig that fails to build is caught by whether
+// the things were fielded at all and whether their bodies exist — neither of which depends on the
+// battle going one way rather than another.
+const _veh=units.filter(u=>CLS[u.cls].rig==="cart"||isSiege(u.cls));
+const _vehBy=_veh.reduce((m,u)=>{m[u.cls]=(m[u.cls]||0)+1;return m;},{});
+const _noRig=_veh.filter(u=>!u.root||!u.body||!(u.body.children&&u.body.children.length));
+check("8-minute campaign FIELDED vehicles and every rig was built ("+_veh.length+" ever: "+
+  JSON.stringify(_vehBy)+", "+_veh.filter(u=>u.alive).length+" still alive, "+_noRig.length+
+  " with no rig, ages "+teamAge[0]+"/"+teamAge[1]+")",
+  _veh.length>0&&_noRig.length===0);
 // ---------------- WALL LINES, GATES, AND ROYAL MORTALITY ----------------
 global.__G.setGameOver(false); // a campaign that ended in regicide must not mute the mechanics tests
 const {wallLineSegments,placeGateOnWall,kings,healTick}=global.__G;
@@ -1762,11 +1779,32 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
     ghost.alive=false; ghost.respawnT=Infinity; ghost.corpse=true; // held dead: a bare alive=false is revived by the respawn clock within the tick
     for(const c of shore.creeps)if(c.alive)G.dealDamage(closer,c,999999);
     warTicks(1);
-    check("v132.28 participation: the list holds ONLY humans — no bots, no towers ("+listed.length+
-      " listed: "+listed.map(x=>x&&x.name).join("/")+")",
-      listed.length>0&&listed.every(x=>G.isHuman(x))&&!listed.some(x=>x&&x.def));
-    check("v132.28 participation: a BOT that fought the raid is not paid (xp "+(drone.xp||0)+")",
-      (drone.xp||0)===0);
+    // v134.2: was "ONLY humans — no bots, no towers". Bots hold XP now, so a band that clears a
+    // camp is paid for it exactly as a player would be. The NEGATIVE half is the half that still
+    // earns its keep and it is kept: a tower is not a participant, and neither is anything that
+    // fails hasProg.
+    check("v132.28/v134.2 participation: the list holds SOLDIERS, human or not — never a tower, "+
+      "never anything hasProg refuses ("+listed.length+" listed: "+
+      listed.map(x=>x&&x.name).join("/")+")",
+      listed.length>0&&listed.every(x=>G.hasProg(x))&&!listed.some(x=>x&&x.def));
+    // …and the bot IS paid now. Its XP reads 0 because npcSpendXP spends it on the spot — a bot has
+    // no forge to walk to — so the level and the loadout are what say it was paid, not the coin.
+    check("v134.2 participation: the BOT that fought the raid IS paid, and SPENDS it (lvl "+
+      (drone.lvl||0)+", "+(drone.buffs?Object.keys(drone.buffs).length:0)+" pieces, xp "+
+      (drone.xp||0)+")",
+      (drone.lvl||0)>0&&drone.buffs&&Object.keys(drone.buffs).length>0&&(drone.xp||0)===0);
+    // …and a VILLAGER bot that fought is still paid nothing. This is the line that would go red if
+    // hasProg were ever widened carelessly — a villager carrying buffs is invisible power spread
+    // across an entire economy.
+    {
+      const hod=G.makeUnit(0,"villager",shore.x+15,shore.z,{name:"Hod",bot:{role:"citizen"}});
+      G.dealDamage(hod,raiders[0],1);
+      const wasListed=(shore.part||[]).indexOf(hod)>=0;
+      check("v134.2 participation: a VILLAGER bot is still no participant and holds nothing "+
+        "(listed "+wasListed+", lvl "+(hod.lvl||0)+")",
+        !wasListed&&!(hod.lvl>0)&&!(hod.buffs&&Object.keys(hod.buffs).length));
+      hod.alive=false;
+    }
     check("v132.28 participation: a participant DEAD at the wipe collects nothing (xp "+(ghost.xp||0)+")",
       (ghost.xp||0)===0);
     check("v132.28 raid: ONE point of damage earns a full share — the poker was paid "+(poker.xp||0)+
@@ -3193,8 +3231,9 @@ global.__G.setGameOver(false);
     // v132.0 26 -> 27 with the map rework: MAP.x/MAP.z moved, so every node moved, and the netcode
   // indexes nodes positionally. The assertion is that the number MOVED WITH THE WORLD, which is the
   // thing a peer actually needs — a stale literal here is how two builds shake hands and disagree.
-  check("v132.46 wire: PROTO is 46 — the set-piece channel, public timed modifiers, the "+
-    "thrown knife and the damage-number message",NET.PROTO===46);
+  check("v134.2 wire: PROTO is 48 — the set-piece channel, public timed modifiers, the thrown "+
+    "knife, the damage-number message, every buff HOLDER in s.bfa, veteran NPC levels in s.lv, and "+
+    "the slain-by record a guest has no other way to learn",NET.PROTO===48);
     // the version stamp is READ from the page, not frozen in the recorder. Every log John
     // field-tested on v125.1 said ver:"v98", because that literal was written in v98 and never
     // touched again — a flight recorder you have to take somebody's word about.
@@ -3686,8 +3725,8 @@ global.__G.setGameOver(false);
   const w=G.NET.packWorld(1);
   let snapAres=null;
   try{G.NET._lastRow=null;const s=G.NET.packSnap(); snapAres=s&&s.ares;}catch(_){}
-  check("v115/v132.46 net: PROTO 46 (the damage number) and `ares` still rides both payloads",
-    G.NET.PROTO===46&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
+  check("v115/v134.2 net: PROTO 48 (veterans + the slain-by record) and `ares` still rides both payloads",
+    G.NET.PROTO===48&&Array.isArray(w.ares)&&Math.abs(w.ares[0]-42.5)<0.06&&
     Array.isArray(snapAres)&&Math.abs(snapAres[0]-42.5)<0.06);
   G.ageResT[0]=0;
 
@@ -5263,13 +5302,16 @@ global.__G.setGameOver(false);
         const N=G.NET, mode0=N.mode, P=G.getPlayer(), q0=N.lastQ, b0=P.buffs;
         try{
           N.mode="host";
-          // only humans can hold one — assert that rather than assuming it
+          // v134.2: was "every unit carrying buffs is a HUMAN". Soldiers carry them now, so the
+          // complete set of holders is hasProg — and the point of the assertion is unchanged: it is
+          // the SET that matters, not a convenient subset of it. What must never hold one is a
+          // villager, a trade cart, a creep or a tower, and that is what this now says.
           const holders=G.units.filter(u=>u.buffs&&Object.keys(u.buffs).length);
-          const nonHuman=holders.filter(u=>!G.isHuman(u));
-          check("v132.40 loadouts: every unit carrying buffs is a HUMAN — useBlacksmith and "+
-            "smithPick are reachable only for the local player and a remote's unit, so isHuman "+
-            "is the complete set of holders, not a convenient subset ("+holders.length+" holding, "+
-            nonHuman.length+" of them bots)",nonHuman.length===0);
+          const illegal=holders.filter(u=>!G.hasProg(u));
+          check("v132.40/v134.2 loadouts: every unit carrying buffs passes hasProg — no villager, "+
+            "no cart, no creep, no tower ("+holders.length+" holding, "+illegal.length+
+            " of them illegal"+(illegal.length?": "+illegal.slice(0,3).map(u=>u.cls).join(","):"")+
+            ")",illegal.length===0);
           // a full snapshot carries the loadout, with STACKS
           P.buffs={dmg:3,hp:5,sanctuary:1};
           let full=null;
@@ -6617,6 +6659,305 @@ global.__G.setGameOver(false);
     check("v134.0 border: a body in a camp pocket is never SNAPPED to the map rectangle (biggest "+
       "frame "+biggest.toFixed(2)+" vs a step of "+step.toFixed(2)+") — v133 jumped 34.85",
       biggest<=step+1e-6&&u.root.position.z>G.MAP.z);
+    wipe();
+  }
+}
+
+// ==================== v134.2 THE VETERANS ====================
+{
+  const G=global.__G;
+  const kept=[];
+  const mk=(team,cls,x,z,bot)=>{const u=G.makeUnit(team,cls,x,z,
+    {name:"Vet_"+cls+"_"+kept.length,bot:bot===undefined?{role:"citizen"}:bot});kept.push(u);return u;};
+  const wipe=()=>{for(const u of kept)u.alive=false;kept.length=0;};
+
+  // --- 1. WHO CARRIES IT. hasProg reads fields only, so this needs no bodies at all — which also
+  //        means it cannot be fooled by anything a real unit happens to be doing at the time.
+  {
+    const bot=(cls,role)=>({bot:{role:role||"citizen"},cls,team:0});
+    const cases=[
+      ["a soldier bot",              bot("clubman"),                                   true ],
+      ["a priest bot",               bot("priest"),                                    true ],
+      ["a siege bot",                bot("batteringram"),                              true ],
+      ["a VILLAGER bot",             bot("villager"),                                  false],
+      ["a trade cart",               bot("tradecart","cart"),                          false],
+      ["an ox cart",                 bot("oxcart","cart"),                             false],
+      ["a creep",                    {bot:{role:"creep"},cls:"wolf",team:G.NEUTRAL},   false],
+      ["a barbarian in the wilds",   {bot:{role:"creep"},cls:"barbarian",team:G.NEUTRAL},false],
+      ["the KING",                   {bot:{role:"king"},cls:"king",team:0,isKing:true},false],
+      ["a botless body",             {cls:"clubman",team:0},                           false],
+      ["the local player (villager)",{isPlayer:true,cls:"villager",team:0},            true ],
+      ["a remote's body",            {remote:"peer",cls:"villager",team:0},            true ],
+      ["nothing at all",             null,                                             false],
+    ];
+    const bad=cases.filter(c=>!!G.hasProg(c[1])!==c[2]).map(c=>c[0]);
+    check("v134.2 hasProg: soldiers and humans carry progression, and NOTHING else does ("+
+      (bad.length?"WRONG: "+bad.join(" · "):cases.length+" cases, all as stated")+")",bad.length===0);
+  }
+
+  // --- 2. THE RATE IS THE DIFFICULTY DIAL. Attacker on RED, because diffFor() pins any team
+  //        holding a human to "normal" and the player is blue — so a blue attacker would measure
+  //        the same tier whatever the dial said, and the test would pass without testing anything.
+  {
+    const d0=G.getAIDiff(), m0=G.NET.mode; G.NET.mode="solo";
+    const rows=[];
+    for(const tier of ["easy","normal","hard"]){
+      G.setAIDiff(tier);
+      const need=G.AI_DIFF[tier].vetKills;
+      const att=mk(G.RED,"clubman",120,-120,{role:"war"});
+      let atLevel=-1;
+      for(let k=1;k<=need+2;k++){
+        const vic=mk(G.BLUE,"clubman",120.5,-120,{role:"war"});
+        G.dealDamage(att,vic,999999);
+        if(atLevel<0&&(att.lvl||0)>0)atLevel=k;
+      }
+      rows.push(tier+" "+atLevel+"/"+need);
+      if(atLevel!==need)rows.push("MISMATCH");
+    }
+    G.setAIDiff(d0); G.NET.mode=m0;
+    check("v134.2 rate: a bot levels on exactly AI_DIFF[tier].vetKills soldier kills, and the tier "+
+      "is read per TEAM through diffFor ("+rows.join(" · ")+")",rows.indexOf("MISMATCH")<0);
+    wipe();
+  }
+
+  // --- 3. …AND A LEVEL IS A PIECE OF THE FORGE. Levels multiply nothing, so a level that did not
+  //        buy a buff would be a cosmetic and the whole feature would be a nametag change.
+  {
+    const d0=G.getAIDiff(), m0=G.NET.mode; G.NET.mode="solo"; G.setAIDiff("hard"); // 1 kill a level
+    const att=mk(G.RED,"clubman",130,-120,{role:"war"});
+    for(let k=0;k<3;k++){const vic=mk(G.BLUE,"clubman",130.5,-120,{role:"war"});G.dealDamage(att,vic,999999);}
+    const stacks=att.buffs?Object.keys(att.buffs).reduce((a,k)=>a+att.buffs[k],0):0;
+    G.setAIDiff(d0); G.NET.mode=m0;
+    check("v134.2 rate: …and every level is SPENT at once — 3 kills on hard bought "+stacks+
+      " blacksmith pieces and left "+(att.xp||0)+" XP banked (a bot has no forge to walk to)",
+      (att.lvl||0)===3&&stacks===3&&(att.xp||0)===0);
+    wipe();
+  }
+
+  // --- 4. WHAT DOES NOT COUNT. A raid through an undefended economy must not make a veteran.
+  {
+    const d0=G.getAIDiff(), m0=G.NET.mode; G.NET.mode="solo"; G.setAIDiff("hard");
+    const att=mk(G.RED,"clubman",140,-120,{role:"war"});
+    const prey=[mk(G.BLUE,"villager",140.5,-120),
+                mk(G.BLUE,"tradecart",140.5,-121,{role:"cart"}),
+                mk(G.NEUTRAL,"wolf",140.5,-122,{role:"creep"})];
+    for(const p of prey)G.dealDamage(att,p,999999);
+    const after=att.lvl||0, kills=att._kills||0;
+    G.setAIDiff(d0); G.NET.mode=m0;
+    check("v134.2 rate: villagers, carts and the wilds pay NOTHING — three of them killed on hard "+
+      "left level "+after+" and "+kills+" toward the next",after===0&&kills===0);
+    wipe();
+  }
+
+  // --- 5. NO SINGLE EVENT MINTS A MONSTER. The Viking raid pays 15.
+  {
+    const u=mk(G.RED,"clubman",150,-120,{role:"war"});
+    const got=G.npcAdvance(u,15);
+    const stacks=u.buffs?Object.keys(u.buffs).reduce((a,k)=>a+u.buffs[k],0):0;
+    check("v134.2 cap: one event pays an NPC at most NPC_EVENT_CAP ("+G.NPC_EVENT_CAP+") — a "+
+      "15-level Viking payout granted "+got+" levels and "+stacks+" pieces, not 15 and 14",
+      got===G.NPC_EVENT_CAP&&u.lvl===G.NPC_EVENT_CAP&&stacks===G.NPC_EVENT_CAP);
+    wipe();
+  }
+
+  // --- 6. DEATH TAKES HALF, SAME AS YOURS. And the two doors that revoke on a class change.
+  {
+    const u=mk(G.RED,"clubman",160,-120,{role:"war"});
+    G.npcAdvance(u,3); u._kills=1;
+    const lv0=u.lvl, st0=Object.keys(u.buffs).length;
+    G.killUnit(u,null);
+    check("v134.2 death: a veteran NPC loses half its level and ALL of its loadout, exactly as you "+
+      "do (LV "+lv0+" with "+st0+" pieces -> LV "+u.lvl+" with "+Object.keys(u.buffs||{}).length+
+      ", "+(u.xp||0)+" XP, "+(u._kills||0)+" toward the next)",
+      u.lvl===Math.floor(lv0*G.DEATH_KEEP)&&u.xp===u.lvl&&
+      Object.keys(u.buffs||{}).length===0&&(u._kills||0)===0);
+    wipe();
+  }
+  {
+    // THE LEVY. This is the hole the rewritten loadout gate caught on its first run: a villager
+    // armed by 07-ai.js fights, earns, and used to walk back to the fields still carrying it.
+    const v=mk(G.BLUE,"villager",170,-120);
+    G.setClass(v,"clubman");            // …the Town Center is overwhelmed
+    G.npcAdvance(v,2);
+    const armed={lvl:v.lvl,st:Object.keys(v.buffs||{}).length};
+    G.setClass(v,"villager");           // …ten quiet seconds later
+    check("v134.2 revoke: a LEVIED villager gives back what only a soldier may hold (armed: LV "+
+      armed.lvl+" with "+armed.st+" pieces -> stood down: LV "+(v.lvl||0)+" with "+
+      Object.keys(v.buffs||{}).length+")",
+      armed.lvl>0&&armed.st>0&&(v.lvl||0)===0&&Object.keys(v.buffs||{}).length===0);
+    wipe();
+  }
+  {
+    // …and the OTHER door, which is the one nobody would have gone looking for: respawnUnit sets
+    // cls directly rather than through setClass, so a soldier that reaches it without passing
+    // through killUnit's wipe came back a villager with the whole loadout intact.
+    const u=mk(G.RED,"clubman",180,-120,{role:"war"});
+    G.npcAdvance(u,3);
+    const before=Object.keys(u.buffs||{}).length;
+    u.alive=false; u.respawnT=0;        // exactly what a dozen places do by hand
+    G.respawnUnit(u);
+    check("v134.2 revoke: …and a body that reaches RESPAWN without passing through the death wipe "+
+      "does not come back a villager holding a veteran's kit ("+before+" pieces -> "+
+      Object.keys(u.buffs||{}).length+", cls "+u.cls+")",
+      before>0&&u.cls==="villager"&&Object.keys(u.buffs||{}).length===0&&(u.lvl||0)===0);
+    wipe();
+  }
+  {
+    // …and NEVER a player. respawnUnit re-classes you to villager on every death, and killUnit has
+    // already decided what you keep. If revokeProg ever stopped reading hasProg correctly, this is
+    // the line that would go red instead of a player quietly losing their loadout on respawn.
+    const p=G.getPlayer(), b0=p.buffs, l0=p.lvl, c0=p.cls;
+    p.buffs={dmg:2}; p.lvl=6;
+    G.setClass(p,"villager");
+    const held=Object.keys(p.buffs||{}).length===1&&p.lvl===6;
+    p.buffs=b0; p.lvl=l0; G.setClass(p,c0);
+    check("v134.2 revoke: …and it never touches a PLAYER — you keep your loadout through a "+
+      "re-class, because killUnit already ruled on it",held);
+    wipe();
+  }
+
+  // --- 7. THE WIRE. Both halves, and the completeness contract that made this dangerous.
+  {
+    const N=G.NET, m0=N.mode; N.mode="host";
+    const vet=mk(G.RED,"clubman",190,-120,{role:"war"});
+    G.npcAdvance(vet,2);
+    let snap=null;
+    try{N._lastRow=null;for(let i=0;i<4&&!(snap&&snap.bfa);i++)snap=N.packSnap();}catch(e){}
+    const row=snap&&snap.bfa&&snap.bfa.find(r=>r[0]===vet.id);
+    const lvRow=snap&&snap.lv&&snap.lv.find(r=>r[0]===vet.id);
+    check("v134.2 wire: a full snapshot carries a veteran NPC's LOADOUT ("+
+      (row?row[1].length/2+" pieces":"NO ROW")+") and its LEVEL ("+(lvRow?"LV "+lvRow[1]:"NO ROW")+
+      ") — with the producer rowing players only, a guest ERASED both on every full snap",
+      !!row&&row[1].length>0&&!!lvRow&&lvRow[1]===vet.lvl);
+    // …and the guest half: wipe it locally, apply the snapshot, and only the wire can have put it
+    // back. This is the shape the v132.40 rings test uses, for the same reason.
+    if(snap){
+      const heldB=vet.buffs, heldL=vet.lvl;
+      vet.buffs={}; vet.lvl=0;
+      N.mode="guest";
+      try{N.applySnap(snap);}catch(e){}
+      const back=Object.keys(vet.buffs||{}).length;
+      const backL=vet.lvl||0;
+      N.mode="host"; vet.buffs=heldB; vet.lvl=heldL;
+      check("v134.2 wire: …and a GUEST rebuilds both from it ("+back+" pieces, LV "+backL+
+        ") rather than clearing them — s.bfa is a COMPLETE list by contract and its sweep wipes "+
+        "any holder missing from it",back>0&&backL>0);
+    }
+    N.mode=m0;
+    wipe();
+  }
+
+  // --- 8. THE MARK. John: "no [aura] but you do need to be able to tell a bot is higher level."
+  {
+    const u=mk(G.RED,"clubman",200,-120,{role:"war"});
+    G.vetTagTick(1); const tag0=!!u._tag;
+    G.npcAdvance(u,4);
+    G.vetTagTick(1); const tag1=u._vtagN;
+    u.lvl=0;
+    G.vetTagTick(1); const tag2=!!u._tag;
+    // …and syncNameTags, which owns the PLAYERS' tags, must not strip it — it runs only when a
+    // snapshot arrives, so in solo it never runs at all and a star driven from there would appear
+    // in multiplayer and nowhere else.
+    G.npcAdvance(u,1); G.vetTagTick(1);
+    G.syncNameTags([]);
+    const survived=!!u._tag;
+    check("v134.2 mark: a veteran bot wears the same ⭐LV players wear, gains it when it levels, "+
+      "loses it when the level goes, and syncNameTags does not strip it (before: "+tag0+
+      ", at LV 3: "+tag1+", after: "+tag2+", survives a scoreboard sync: "+survived+")",
+      tag0===false&&tag1==="⭐3"&&tag2===false&&survived===true);
+    wipe();
+  }
+}
+
+// ==================== v134.2 THE SLAIN-BY SCREEN ====================
+{
+  const G=global.__G;
+  const kept=[];
+  const mk=(team,cls,x,z,bot)=>{const u=G.makeUnit(team,cls,x,z,
+    {name:"Slain_"+kept.length,bot:bot===undefined?{role:"war"}:bot});kept.push(u);return u;};
+  const wipe=()=>{for(const u of kept)u.alive=false;kept.length=0;};
+  const stacksOf=(rec)=>{let n=0;const p=(rec&&rec.b)||[];for(let i=1;i<p.length;i+=2)n+=p[i];return n;};
+
+  // --- 1. A UNIT KILLER: name, class, level and the loadout, frozen at the blow.
+  {
+    const killer=mk(G.RED,"clubman",210,-120);
+    G.npcAdvance(killer,3);
+    const held=Object.keys(killer.buffs||{}).length, lv=killer.lvl;
+    const victim=mk(G.BLUE,"clubman",210.5,-120);
+    G.killUnit(victim,killer);
+    const rec=victim._slain;
+    check("v134.2 slain: the record names the killer, its class and its level, and carries its "+
+      "loadout ("+(rec?rec.n+" · "+rec.c+" · LV "+rec.l+" · "+(rec.b.length/2)+" pieces":"NO RECORD")+")",
+      !!rec&&rec.n===killer.name&&rec.c===G.CLS.clubman.name&&rec.l===lv&&rec.b.length/2===held&&held>0);
+    // …and the pieces are the ones the killer actually held, decoded through BUFFS the way the
+    // screen decodes them — a mis-strided [idx,stacks] pairing gives plausible names at wrong counts.
+    let ok=true;
+    for(let i=0;i+1<rec.b.length;i+=2){const B=G.BUFFS[rec.b[i]];
+      if(!B||(killer.buffs[B.id]|0)!==rec.b[i+1])ok=false;}
+    check("v134.2 slain: …and every [index,stacks] pair decodes back to what the killer was "+
+      "holding ("+stacksOf(rec)+" stacks)",ok&&stacksOf(rec)>0);
+
+    // --- 2. THE FREEZE. This is the whole design decision. Kill the killer AFTER the blow — its
+    //        own death wipe empties u.buffs — and the record must not have moved. A live lookup
+    //        would show an empty loadout from someone who was fully loaded when they cut you down.
+    const before=JSON.stringify(rec);
+    G.killUnit(killer,null);
+    check("v134.2 slain: the record is FROZEN at the blow — the killer dying (and losing every "+
+      "buff to its own wipe) leaves it untouched ("+stacksOf(victim._slain)+" stacks still listed, "+
+      "killer now holds "+Object.keys(killer.buffs||{}).length+")",
+      JSON.stringify(victim._slain)===before&&Object.keys(killer.buffs||{}).length===0);
+    wipe();
+  }
+
+  // --- 3. THE SHAPES killUnit IS ACTUALLY HANDED. A tower carries .def and no .cls; "the wilds"
+  //        is null, and the suite calls killUnit(qh,null) six times in the death-wipe block above.
+  {
+    const tower=G.buildings.find(b=>b.alive&&b.def&&b.def.atk)||G.buildings.find(b=>b.alive);
+    const v1=mk(G.BLUE,"clubman",220,-120);
+    let threw=null;
+    try{G.killUnit(v1,tower);}catch(e){threw=e.message;}
+    const v2=mk(G.BLUE,"clubman",221,-120);
+    try{G.killUnit(v2,null);}catch(e){threw=threw||e.message;}
+    check("v134.2 slain: a BUILDING and the WILDS both read as themselves and neither throws "+
+      "(tower: "+(v1._slain?v1._slain.n:"none")+" · null: "+(v2._slain?v2._slain.n:"none")+
+      (threw?" · THREW "+threw:"")+")",
+      !threw&&!!v1._slain&&!!v2._slain&&v2._slain.n==="The wilds"&&
+      v1._slain.b.length===0&&v2._slain.b.length===0);
+    wipe();
+  }
+
+  // --- 4. THE SCREEN ITSELF.
+  {
+    const el=global.document.getElementById("deathby");
+    G.renderSlainBy({n:"Ragnar the Iron",c:"Halberdier",l:7,b:[0,3]});
+    const html=el.innerHTML||"", shown=el.style.display;
+    const named=html.indexOf("Ragnar the Iron")>=0, classed=html.indexOf("Halberdier")>=0,
+          levelled=html.indexOf("LV 7")>=0, piece=html.indexOf(G.BUFFS[0].name)>=0&&html.indexOf("×3")>=0;
+    G.renderSlainBy(null);
+    const cleared=(el.style.display==="none")&&!(el.innerHTML||"").length;
+    check("v134.2 slain: the screen prints the killer, the class, the level and each piece with "+
+      "its stacks (name "+named+", class "+classed+", level "+levelled+", piece "+piece+
+      ", shown "+shown+"), and clears to nothing ("+cleared+")",
+      named&&classed&&levelled&&piece&&shown==="block"&&cleared);
+    // …and a killer carrying NOTHING still gets a screen. The empty-hide convention is for the
+    // LOADOUT, not for the whole block — "Slain by" with no name is what a broken feature looks like.
+    G.renderSlainBy({n:"A Guard Tower",c:"tower",l:0,b:[]});
+    const bare=el.innerHTML||"";
+    check("v134.2 slain: …and a killer with no loadout still names itself, with no empty buff "+
+      "header ("+(bare.indexOf("A Guard Tower")>=0?"named":"UNNAMED")+", header "+
+      (bare.indexOf("CARRYING")>=0?"present":"absent")+")",
+      bare.indexOf("A Guard Tower")>=0&&bare.indexOf("CARRYING")<0);
+    G.renderSlainBy(null);
+  }
+
+  // --- 5. A NEW LIFE OPENS ON NOBODY'S NAME. Otherwise your second death shows your first killer.
+  {
+    const u=mk(G.BLUE,"clubman",230,-120);
+    G.killUnit(u,mk(G.RED,"clubman",230.5,-120));
+    const had=!!u._slain;
+    u.alive=false; u.respawnT=0; G.respawnUnit(u);
+    check("v134.2 slain: respawn clears the record ("+had+" -> "+!!u._slain+
+      ") — a new life must not open on the last one's killer",had&&!u._slain);
     wipe();
   }
 }

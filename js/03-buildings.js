@@ -4041,7 +4041,7 @@ function addConstructionHit(b,who){
 function damageBuilding(b,dmg,att){
   if(typeof NET!=="undefined"&&NET.mode==="guest")return; // host owns all damage
   if(!b.alive)return;
-  if(att&&!att.def&&isHuman(att)&&att.team!==b.team)
+  if(att&&!att.def&&hasProg(att)&&att.team!==b.team) // v134.2 hasProg — a veteran razes faster too
     dmg*=1+0.15*buffSt(att,"wreck"); // WRECKER: human demolition specialists
   b.lastHit=T; // patrol bands answer struck buildings
   b.hp-=dmg; b.bar.bg.visible=b.bar.fg.visible=true; setBar(b.bar,b.hp/b.maxHp);

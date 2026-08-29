@@ -13,6 +13,35 @@ function msg(text,kind){
 // v132.40: what that player is carrying. Reads u.buffs by unit id, which now means the same
 // thing on a host and on a guest — see patch-buffs-public.js. Before that a guest knew only its
 // own loadout, so this could not have been written.
+// ---- v134.2 WHO KILLED YOU ----
+// Built ONCE, at the moment the overlay is shown — never per frame beside the countdown, which
+// writes #deathtimer thirty times a second for half a minute. Takes the FROZEN record killUnit put
+// on the body (or the one the wire delivered to a guest), never a live lookup: see the note there.
+//
+// The name, class and level always show, so the screen never reads as broken when a bot carrying
+// nothing cuts you down — a tower, or the wilds, says so in its own words. The loadout is hidden
+// entirely when it is empty, which is the house convention (updateQuestHud does the same with
+// #qbuffs) and better than printing "no buffs" at someone who has just died.
+function renderSlainBy(info){
+  const el=document.getElementById("deathby"); if(!el)return;
+  if(!info){el.style.display="none";el.innerHTML="";return;}
+  const esc=(t)=>String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  let who="<div class='dbywho'>Slain by <b>"+esc(info.n)+"</b>";
+  const bits=[];
+  if(info.c)bits.push(esc(info.c));
+  if(info.l>0)bits.push("LV "+(info.l|0));
+  if(bits.length)who+=" <span class='dbynone'>— "+bits.join(" · ")+"</span>";
+  who+="</div>";
+  let rows="";
+  const p=info.b||[];
+  if(typeof BUFFS!=="undefined")for(let i=0;i+1<p.length;i+=2){
+    const B=BUFFS[p[i]]; if(!B)continue;                       // a retired id must not throw
+    rows+="<div class='dbuff'><b>"+esc(B.name)+" ×"+(p[i+1]|0)+"</b> — "+esc(B.desc)+"</div>";
+  }
+  el.innerHTML=who+(rows?("<div class='dbyhead'>⚒ THEY WERE CARRYING</div>"+
+    "<div class='dbylist'>"+rows+"</div>"):"");
+  el.style.display="block";
+}
 function _scBuffs(id){
   if(typeof units==="undefined"||id===undefined)return "";
   const u=units.find(x=>x.id===id);
