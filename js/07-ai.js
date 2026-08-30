@@ -198,7 +198,11 @@ function campPayParticipants(st){
   const gain=st.boss?CAMP_XP_BOSS:CAMP_XP;
   for(const u of list){
     if(!u||!u.alive)continue;                       // a corpse holds no XP — death already took it
-    if(typeof isHuman!=="function"||!isHuman(u))continue;
+    if(typeof hasProg!=="function"||!hasProg(u))continue;   // v134.2: soldiers, human or not
+    if(!isHuman(u)){ // v134.2 an NPC takes the same award, and SPENDS it — it has no forge to visit
+      if(typeof npcAdvance==="function")npcAdvance(u,gain);
+      continue;                                             // …and no HUD, quest or sync to notify
+    }
     // v132.28.1 (John): participation advances the player exactly as a finished quest does —
     // XP *and* level. Level clamps at the cap the same way completeQuest clamps it; XP does not
     // clamp, because it is a spendable currency and an uncapped XP faucet is what keeps the forge
@@ -720,9 +724,45 @@ function bandTargetEcon(team){ // juiciest target: carts and working villagers, 
 }
 // v113: how long a hold band stands its ground, and what counts as "nothing is happening here"
 const HOLD_TOUR=45, HOLD_QUIET=18, HOLD_WATCH=48;
-function bandHoldPoint(team,idx){ // castles first, then denying a bazaar, then the road
+// ---- v134.3 THE BAND ECONOMY ----
+// BAND_MIN: loose soldiers needed to deal a new mission band. Was an unnamed 5, which was not a
+//   considered number — it was the same literal as the "deal in sevens" band size.
+// BAND_SEED: …and how few may FOUND a mission nobody is running at all. A fourth body in the patrol
+//   is worth less than the first body in the econ raid this marshal's doctrine says it wants.
+const BAND_MIN=4, BAND_SEED=3;
+// ---- v134.3 THE WILDS ARE WORTH TAKING ----
+// CAMP_MIN_MIL: soldiers a team must field before it can spare a band for the woods. Camps cost
+//   bodies, and an army that trades its opening force for a chest loses the match it won.
+// CAMP_MAX_THREAT: a marshal does not send seven men after treasure while its king is being hunted.
+//   Same threat figure the kingsguard sizes itself from.
+// CAMP_LOOT_WAIT: the pack dies and the chest appears on that same frame. A band relieved on the
+//   instant of the kill walks away from the entire reason it came.
+const CAMP_MIN_MIL=16, CAMP_MAX_THREAT=2.5, CAMP_LOOT_WAIT=25;
+function bandCampTarget(D,team){
+  // the nearest live WILD camp no other band of this army has already claimed. The Viking bay is
+  // deliberately not in this pool — see the note at the head of tools/patch-campband-v134.js.
+  const taken=new Set();
+  for(const b of D.bands)if(b.role==="camp"&&b.camp)taken.add(b.camp);
+  let best=null,bd=1e12;
+  for(const st of campStates){
+    if(st.boss||st.waiting||taken.has(st))continue;
+    let alive=0; for(const c of st.creeps)if(c.alive)alive++;
+    if(!alive)continue;
+    const d=dist2(st.x,st.z,TCPOS[team][0],TCPOS[team][1]);
+    if(d<bd){bd=d;best=st;}
+  }
+  return best;
+}
+function bandHoldPoint(team,idx){ // an unheld SQUARE first, then a castle, then the road
+  // v134.3 THE CASTLE USED TO COME FIRST, AND EVERY DOCTRINE BUILDS A CASTLE. From the moment the
+  // first one finished, no band was ever posted to a bazaar again — which quietly retired the whole
+  // v132.26 change below at about minute ten, and left squares paying 4 a second standing neutral
+  // for a whole match (measured: seed 11, twenty minutes, one square never claimed by anybody).
+  // Standing in your own courtyard is not worth more than the thing that pays. Once every square IS
+  // yours the castle posting is right again, and that is exactly what this falls through to.
+  const _free=(typeof neutralMarkets!=="undefined")?neutralMarkets.filter(m=>m.owner!==team):[];
   const own=buildings.filter(b=>b.alive&&b.built&&b.team===team&&b.type==="castle");
-  if(own.length){const c=own[idx%own.length];const hr=(bSurf(c.def)+3)*0.7071; // +4,+4 was 5.66 out; a castle blocks to 19.8
+  if(own.length&&!_free.length){const c=own[idx%own.length];const hr=(bSurf(c.def)+3)*0.7071; // +4,+4 was 5.66 out; a castle blocks to 19.8
     return {x:c.x+hr,z:c.z+hr,why:"castle"};}
   // v132.26 A BAZAAR IS WORTH TAKING NOW, AND THIS USED TO STAND THREE UNITS OUTSIDE IT. The old
   // line dealt bazaars round-robin by band index and posted the band at (m.x+3, m.z+3) — outside
@@ -782,23 +822,74 @@ function manageBands(D){
     while(esc<4&&roster.length){const v=roster.shift();v.bandRef=st;st.members.push(v);esc++;}
   }
   // --- deal the rest into mission bands of ~7, line-sorted for mixed company ---
-  if(roster.length>=5){
+  // v134.3 ⚠ THE DOCTRINE IS READ EVEN WHEN THERE IS NOBODY LEFT TO DEAL. All of this used to sit
+  // inside the roster.length>=5 block, which was harmless while its only consumer was the deal loop
+  // in the same block — and quietly fatal to the founding pass below, whose entire purpose is to
+  // fire on a TRICKLE of three. With the wanted-role map undefined whenever the loose pool is short
+  // of a full band, three reinforcements fell straight past the pass into the straggler loop, and
+  // the fix was a no-op in precisely the case its own comment describes.
+  // The order of this list is a PRIORITY as well as a set: the founding pass opens the first role
+  // nobody is running. A square pays 1, 2 or 4 a second of three resources; a patrol loop around
+  // one's own town pays nothing. Squares first, then the enemy's supply lines, then the patrol.
+  const wantRoles=["hold","econ","patrol"];
+  for(let i=0;i<(PB.econHunters||0);i++)wantRoles.push("econ"); // rush lives on dead supply chains
+  if(roster.length>=20||D.raidUntil||((PB.assassins||0)&&roster.length>=10))wantRoles.push("assassin");
+  // v134.3 ONE HOLD BAND PER SQUARE STILL UP FOR GRABS. Three bazaars pay 1, 2 and 4 a second of
+  // food AND gold AND wood by count held; an army that fields one hold band can take one square.
+  {const _free=(typeof neutralMarkets!=="undefined")
+      ?neutralMarkets.filter(m=>m.owner!==team).length:0;
+   for(let i=1;i<_free&&wantRoles.length<9;i++)wantRoles.push("hold");}
+  // v134.3 …AND ONE BAND FOR THE WILDS, once there is an army to spare it from and the throne is
+  // quiet. Nine camps, a 300-resource chest on a 180-second cycle, and since v134.2 a pack is
+  // worth levels to whoever breaks it — and until now every one of them was a human prize by
+  // default rather than by contest.
+  // ⚠ BAND_MIN loose soldiers, not eight. The first cut asked for eight and measured ZERO camp
+  // bands across two twenty-minute campaigns, because by the time bands are dealt the loose pool is
+  // rarely that deep. This is also the one mission a trickle may NOT found — camps cost bodies, and
+  // three soldiers walking into a pack of five is a donation.
+  if(roster.length>=BAND_MIN&&threat<CAMP_MAX_THREAT&&
+     units.filter(v=>v.alive&&v.team===team&&v.bot&&!v.isKing&&v.cls!=="villager").length>=CAMP_MIN_MIL&&
+     bandCampTarget(D,team))wantRoles.push("camp");
+  // v134.3 …AND THE PICKER CAN COUNT NOW. It used to be:
+  //     let role=wantRoles[0],least=1e9;
+  //     for(const r of wantRoles){const n=bands(r).length; if(n<least){least=n;role=r;}}
+  // — which reads the list as a SET. A repeat computes the same n as its first occurrence and
+  // n<least is false, so no repeat could ever win, so PERSONALITIES.rush.econHunters ("rush lives
+  // on dead supply chains", v94) has done precisely nothing since the day it shipped and rush has
+  // raided supply lines exactly as hard as turtle. Weight = how many times the role is asked for;
+  // pick the biggest DEFICIT. ⚠ This is a real balance change for rush and expand.
+  const _want={};
+  for(const r of wantRoles)_want[r]=(_want[r]||0)+1;
+  if(roster.length>=BAND_MIN){
     roster.sort((a,b)=>CLS[a.cls].line<CLS[b.cls].line?-1:1);
-    const wantRoles=["patrol","econ","hold"];
-    for(let i=0;i<(PB.econHunters||0);i++)wantRoles.push("econ"); // rush lives on dead supply chains
-    if(roster.length>=20||D.raidUntil||((PB.assassins||0)&&roster.length>=10))wantRoles.push("assassin");
-    while(roster.length>=5){
-      // found the mission we're SHORTEST on — a persistent, self-balancing rotation
-      let role=wantRoles[0],least=1e9;
-      for(const r of wantRoles){
-        const n=D.bands.filter(b=>b.role===r).length;
-        if(n<least){least=n;role=r;}
+    while(roster.length>=BAND_MIN){
+      // the mission we are furthest SHORT on, counting how many of each the doctrine asked for
+      let role=wantRoles[0],worst=-1e9;
+      for(const r in _want){
+        const def=_want[r]-D.bands.filter(b=>b.role===r).length;
+        if(def>worst){worst=def;role=r;}
       }
       const size=Math.min(roster.length,7);
       let bd=D.bands.find(b=>b.role===role&&b.members.length<5);
       if(!bd){bd={id:BAND_ID++,role,members:[]};D.bands.push(bd);}
       for(let i=0;i<size;i++){const v=(i%2?roster.pop():roster.shift());v.bandRef=bd;bd.members.push(v);}
     }
+  }
+  // v134.3 …BUT FIRST, A MISSION NOBODY IS RUNNING GETS OPENED. The loop below used to hand every
+  // loose body to an existing band, up to eight, which meant REINFORCEMENT ALWAYS BEAT FORMATION:
+  // whatever bands existed after the first few think-clocks were the only bands the army ever had,
+  // and a twenty-minute match ended with one mission band or none (measured, both teams, several
+  // seeds). Every doctrine knob in PERSONALITIES was describing an army that never got built.
+  // BAND_SEED, not BAND_MIN: three is fewer than a band should be, and a great deal more than the
+  // nothing that was previously in the woods, on the squares, and on the enemy's supply lines.
+  while(roster.length>=BAND_SEED){
+    let missing=null;
+    for(const r in _want)if(!D.bands.some(b=>b.role===r)){missing=r;break;}
+    if(!missing)break;
+    const bd={id:BAND_ID++,role:missing,members:[]};
+    D.bands.push(bd);
+    const n=Math.min(roster.length,7);
+    for(let i=0;i<n;i++){const v=(i%2?roster.pop():roster.shift());v.bandRef=bd;bd.members.push(v);}
   }
   for(const v of roster){ // stragglers reinforce the weakest mission band, not the throne
     let bd=null,bs=99;
@@ -840,7 +931,22 @@ function manageBands(D){
       const _bz=bd.point&&bd.point.baz;
       const _taking=_bz&&(_bz.owner!==team)&&(_bz.capTeam===team||_bz.cap>0.02);
       if(T>bd.holdUntil&&T-(bd.lastContact||0)>HOLD_QUIET&&!_taking){ // relieved — march on
+        // v134.3 …AND THE WILDS ARE ONE OF THE MISSIONS IT CAN TAKE. Measured: a marshal forms one
+        // or two mission bands in a whole twenty-minute campaign — the kingsguard absorbs the army
+        // (kgBase plus threat, up to 14) and the loose pool reaches five only five or six times a
+        // match. So a NEW role competing for that slot loses to hold every time and never runs at
+        // all. A band with nothing left to hold is exactly the band that should be in the woods,
+        // and reusing it costs no slot.
+        // ⚠ AND IT HAS TO BE AN EXPLICIT PREFERENCE, not a tie-break. The loop below takes the
+        // FIRST role with the lowest count, so with econ at 0 and camp at 0 econ wins every time and
+        // camp never runs — the same "first wins ties" shape as the wantRoles bug this version
+        // already fixed. A band that has just finished taking a square, with a live pack on the map
+        // and nobody in the woods, goes to the woods.
         let role="econ",least=1e9;
+        if(bandCampTarget(D,team)&&!D.bands.some(b=>b.role==="camp")){
+          bd.role="camp"; bd.point=null; bd.camp=null; bd.lootUntil=0; assignLane(D,bd);
+          continue;
+        }
         for(const r of ["econ","patrol","assassin"]){
           const n=D.bands.filter(b=>b.role===r).length;
           if(n<least){least=n;role=r;}
@@ -848,6 +954,27 @@ function manageBands(D){
         bd.role=role; bd.point=null; bd.wps=null; bd.holdUntil=undefined; bd.target=null;
         assignLane(D,bd); // and it takes a NEW axis on the way out
       }
+    }
+    if(bd.role==="camp"){
+      // keep a live target; a pack that was wiped by somebody else is not worth walking to
+      if(bd.camp){
+        let alive=0; for(const c of bd.camp.creeps)if(c.alive)alive++;
+        if(!alive&&!bd.camp.chest)bd.lootUntil=bd.lootUntil||T+CAMP_LOOT_WAIT;
+        if(bd.camp.waiting&&!bd.camp.chest&&T>(bd.lootUntil||0)){bd.camp=null;bd.lootUntil=0;}
+      }
+      if(!bd.camp){
+        bd.camp=bandCampTarget(D,team);
+        bd.lootUntil=0;
+        if(!bd.camp){ // the wilds are quiet: back to the war, the way a relieved hold band goes
+          let role="econ",least=1e9;
+          for(const r of ["econ","patrol","assassin"]){
+            const n=D.bands.filter(b=>b.role===r).length;
+            if(n<least){least=n;role=r;}
+          }
+          bd.role=role; bd.point=null; bd.target=null; assignLane(D,bd);
+        }
+      }
+      // the throne outranks the treasure, always — bd.defend is already set above from threat
     }
     if(bd.role==="patrol"){
       if(!bd.wps){
@@ -1178,6 +1305,20 @@ function updateBot(u,dt){
       if(p){
         if(dist2(px,pz,p.x,p.z)>24*24)moveToward(u,p.x+u.spread*0.3,p.z+u.spread*0.3,dt,3); // leash first
         else if(!engageNearest(u,dt,16))moveToward(u,p.x+u.spread*0.35,p.z+u.spread*0.35,dt,2.5);
+      }
+      return;
+    }
+    if(bd.role==="camp"){ // into the wilds, and stand on the loot when the pack is down
+      const st=bd.camp;
+      if(st){
+        // The pack aggros on proximity, so walking in IS the attack. Stand at the centre once it is
+        // down: campTick hands the chest to any non-neutral body within 2.6 of it, so collecting is
+        // a matter of being there rather than of code.
+        if(!engageNearest(u,dt,16))
+          moveToward(u,st.x+u.spread*0.25,st.z+u.spread*0.25,dt,st.chest?1.6:4);
+      }else if(!engageNearest(u,dt,14)){
+        const k=kings[u.team];
+        moveToward(u,k.root.position.x+u.spread*0.4,k.root.position.z+u.spread*0.4,dt,5);
       }
       return;
     }

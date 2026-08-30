@@ -18,4 +18,14 @@ cd "$DST"
 OUT=$(timeout 500 node tools/smoketest.js 2>&1)
 echo "$OUT" | grep -E "$PAT" | sed 's/^ *//' | cut -c1-150
 TOT=$(echo "$OUT" | grep -c "FAIL —")
+# v134.3 A RUN THAT NEVER REACHED ITS VERDICT IS NOT A PASS. A mutation that throws — or one written
+# carelessly enough to take a line of real code out with its comment, which is exactly how this was
+# found — kills the process partway through, prints no FAIL line at all, and was reported here as
+# "0 total failures": the harness saying the gate did not notice, when the truth was that nothing
+# had finished looking. Zero failures has to mean the suite ran to the end and found nothing.
+if ! echo "$OUT" | grep -qE "ALL SMOKE TESTS PASSED|FAILURES"; then
+  echo "--- $NAME: SUITE DID NOT FINISH (crash or timeout) — this is not a fair test of the gate ---"
+  echo "$OUT" | tail -3 | sed 's/^/    /'
+  exit 3
+fi
 echo "--- $NAME: $TOT total failures ---"

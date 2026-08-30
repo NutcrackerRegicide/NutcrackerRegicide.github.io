@@ -60,6 +60,8 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "TC_RING,TC_FARM_MIN,tcRingReason,farmAdjacent,"+   // v134.1 the farm ring
   "hasProg,npcAdvance,npcSpendXP,NPC_KILLS_PER_LVL,NPC_EVENT_CAP,revokeProg,vetTagTick,DEATH_KEEP,"+ // v134.2
   "renderSlainBy,BUFFS,"+                              // v134.2 the slain-by death screen
+  "bazaarYield,BAZ_YIELD_BY_HELD,"+                    // v134.3 the squares
+  "bandCampTarget,CAMP_MIN_MIL,CAMP_MAX_THREAT,BAND_MIN,BAND_SEED,campStates,"+ // v134.3 the wilds
   // the bench drives moveToward directly, outside tick(), and both the watchdog and a detour's
   // lifetime are measured in T. A bench that leaves T frozen tests a world where no detour ever
   // expires — which is a different program, and it reads as "nobody ever arrives".
@@ -857,8 +859,16 @@ check("AI still builds farms with doubled footprint ("+farms+")",farms>=2);
     (viol.length?viol.slice(0,4).join(" · "):"none")+") — v133 put a watch_tower at 16.7 and a "+
     "barracks at 22.9",viol.length===0);
   // …and it is not obeying the ring by building nothing. A starved AI would pass the line above.
+  // v134.3: ringFarms comes OUT of the assertion. It was the anti-starvation half of this gate, but
+  // it counts farms standing in the 21-30 band at minute eight, and whether a marshal has wanted a
+  // farm by then is economy luck: on SMOKE_SEED=1 the red team built none at all in v134.3 while
+  // sitting on 3590 food, with the same villagers and the same soldiers as the v134.2 run that
+  // built three. The claim it was standing in for — that the band is plantable at all — is asserted
+  // by construction forty lines above, 96 probes of it. nonFarm>=8 is the starvation test.
   check("v134.1 ring: …and the AI still raised a real town around it ("+nonFarm+" buildings out "+
-    "past the ring, "+ringFarms+" fields inside it)",nonFarm>=8&&ringFarms>=3);
+    "past the ring; "+ringFarms+" fields inside it, which is reported and not asserted — the band's "+
+    "plantability is the staged probe above, this is whether the AI wanted a farm by minute eight)",
+    nonFarm>=8);
 }
 // v134.1 THE BARN AND THE BOX, pinned per age. TC_FARM_MIN exists so a farm's barn does not stand
 // inside its own Town Center's collider — that overlap is a sliver of ground inside two colliders
@@ -1085,7 +1095,11 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
     const walls0=buildings.filter(b=>b.team===1&&b.def.wall).length;
     for(let i=0;i<20&&!D1.wallsDone;i++){
       G.directorThink(D1);
-      for(const b of buildings)if(b.alive&&!b.built&&b.def.wall&&b.team===1){b.built=true;b.progress=b.def.hits;} // masons work instantly for the test
+      // v134.3: …on every building, not only the wall. The wall branch is gated on
+      // pendingBld(team).length<3, and a staked AI orders houses and towers while this loop runs —
+      // three of them and the wall planner is shut out for the rest of the bench. SMOKE_SEED=
+      // 20260827 reported "+0 segments" for a planner that was never asked a question.
+      for(const b of buildings)if(b.alive&&!b.built&&b.team===1){b.built=true;b.progress=b.def.hits;} // masons work instantly for the test
     }
     const walls1=buildings.filter(b=>b.team===1&&b.def.wall).length;
     const gates=buildings.filter(b=>b.alive&&b.team===1&&b.def.gate).length;
@@ -1657,7 +1671,15 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   // count rides in the message so a future breakage announces itself instead of going quiet.
   const ringR=(north.aggro||G.CAMP_AGGRO||11.5)+8;
   const calm=isolateArea(north.x,north.z,ringR,{keep:north.creeps,keepNeutral:true});
-  const wounded=north.creeps.find(c=>c.alive);
+  // v134.3 …AND A PACK SOMETHING UPSTREAM HAS ALREADY KILLED DOES NOT GET TO TAKE THE SUITE DOWN
+  // WITH IT. This dereferenced find(c=>c.alive) blind. Under one mutation run bodies blundered
+  // through the wilds and wiped the north pack, node threw on undefined.maxHp at this line, the
+  // process died a third of the way through the file — and tools/falsify.sh reported "0 total
+  // failures", because no FAIL line ever printed. NO RUN AT ALL READS EXACTLY LIKE A CLEAN ONE.
+  // falsify.sh now insists on a verdict; this stands a body back up rather than hoping for one, and
+  // says so in the message, because a staged pack is a different claim from a standing one.
+  let wounded=north.creeps.find(c=>c.alive), _revived=false;
+  if(!wounded){wounded=north.creeps[0]; wounded.alive=true; wounded.hp=wounded.maxHp; _revived=true;}
   wounded.hp=wounded.maxHp*0.4; // bloody one by hand — the camp is calm, so it must knit
   const wh=wounded.hp;
   const regenT0=global.__G.getT();
@@ -1672,7 +1694,8 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
     if(dist2h(u.root.position.x,u.root.position.z,north.x,north.z)>aggR*aggR)continue;
     inRing++; if(ringWho.length<40)ringWho+=(ringWho?",":"")+(u.name||u.cls);
   }
-  check("calm creeps regenerate (+"+Math.round(wounded.hp-wh)+" hp of "+Math.round(wounded.maxHp)+
+  check("calm creeps regenerate"+(_revived?" (PACK WAS DEAD — one stood back up for this)":"")+
+    " (+"+Math.round(wounded.hp-wh)+" hp of "+Math.round(wounded.maxHp)+
     ", T+"+(global.__G.getT()-regenT0).toFixed(1)+"s, cleared "+calm.moved+", still in ring "+inRing+
     (ringWho?" ["+ringWho+"]":"")+", alive "+(!!wounded.alive)+")",
     wounded.hp>wh+wounded.maxHp*0.12); // 8%/s over 3 sim-seconds is ~24% — assert against maxHp, not a flat 20 that a low-hp wolf can miss
@@ -3960,19 +3983,40 @@ global.__G.setGameOver(false);
     for(const e of bazHold){e.m.cap=e.cap;e.m.capTeam=e.capTeam;}
     check("v113 relief: a hold band with a spent tour and a cold field takes a new mission ("+hb.role+
       ", field cleared of "+cellar.moved+")",
-      hb.role!=="hold"&&["econ","patrol","assassin"].includes(hb.role)&&hb.point===null);
+      // v134.3: …and "camp" is one of the missions now. This whitelist was written at v113, when
+      // the relief branch chose between three roles; the wilds became the fourth this version and
+      // this line was not updated with it. On the default seed the marshal happened not to pick it
+      // and the gate stayed green — SMOKE_SEED=42 put a live pack within reach at that instant and
+      // the gate went red on a band doing exactly what v134.3 asks of it. Off-seed runs earn their
+      // keep here: the same code, one different world, one whitelist nobody had revisited.
+      hb.role!=="hold"&&["econ","patrol","assassin","camp"].includes(hb.role)&&hb.point===null);
     // v134.0 A SQUARE HALF TAKEN IS NOT QUIET GROUND. The v132.26 `_taking` rule — "a band
     // mid-capture is not relieved", John's point being that marching a band off a bazaar at 59%
     // hands the square straight back — shipped without a test and was never once exercised until
     // the v134.0 pathing work tripped it by accident. This is that test, run the same way the
     // relief case above is: everything identical, one field moved.
     {
+      // v134.3: was neutralMarkets.find(m=>m.owner!==team) — ONE square, staged on the assumption
+      // that bandHoldPoint would post the band to that one. It deals the unheld pool Grand-first by
+      // band index, so which square a band gets depends on how many hold bands exist — and v134.3
+      // changes that. Stage them ALL and the assertion is about the RULE rather than about the deal.
+      // v134.3 …AND IT STAGES ONE RATHER THAN HOPING TO FIND ONE. This read
+      //     const bz=neutralMarkets.find(m=>m.owner!==team); if(bz){...}
+      // and once the band economy fix taught the AI to take every square, there was no unheld one,
+      // so the whole block stopped running. The suite went from 800 passes to 799 with NO failure —
+      // a gate had silently left the building because the code got better, and only the count would
+      // ever have said so. A conditional gate is a gate that can disappear.
+      const _bzOwn=G2.neutralMarkets.map(m=>m.owner);
+      if(!G2.neutralMarkets.some(m=>m.owner!==team)&&G2.neutralMarkets.length)
+        G2.neutralMarkets[0].owner=1-team;
       const bz=G2.neutralMarkets.find(m=>m.owner!==team);
       if(bz){
         const hb3={id:9003,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,laneZ:0,laneUntil:NOWT+999};
         const keep3=G2.neutralMarkets.map(m=>({m,cap:m.cap,capTeam:m.capTeam}));
         for(const m of G2.neutralMarkets){m.cap=0;m.capTeam=-1;}
-        bz.cap=0.6; bz.capTeam=team;               // OUR band, six tenths of the way in
+        for(const m of G2.neutralMarkets)if(m.owner!==team){m.cap=0.6;m.capTeam=team;} // v134.3:
+        bz.cap=0.6; bz.capTeam=team;               // whichever square it is posted to, it is ours
+                                                   // and six tenths of the way in
         const cell3=isolateArea(-200,-118,30,{team:1-team,keep:[cold]});
         cold.bandRef=hb3; D.bands.push(hb3);
         G2.manageBands(D);
@@ -3991,6 +4035,7 @@ global.__G.setGameOver(false);
           "square at zero is ("+hb3.role+" holding vs "+hb4.role+" relieved)",
           held&&hb4.role!=="hold");
         D.bands=D.bands.filter(b=>b!==hb3&&b!==hb4);
+        for(let i=0;i<_bzOwn.length;i++)G2.neutralMarkets[i].owner=_bzOwn[i]; // v134.3: as we found it
       }
     }
     // A HOT POSTING: the same spent tour, but an enemy standing on it — the ground still matters
@@ -6547,11 +6592,23 @@ global.__G.setGameOver(false);
     const fz=(b.def.fzA&&b.def.fzA[A]!==undefined)?b.def.fzA[A]:
              (b.def.fz!==undefined?b.def.fz:(b.def.rBlock!==undefined?b.def.rBlock:b.def.r));
     return b.z+fz+0.7;};
-  const insideAny=(x,z)=>{for(const b of G.buildings)if(insideCollider(b,x,z))return b;return null;};
+  // v134.3: …and a building that is not STANDING is not a collider. pushOutOfBuildings skips !alive,
+  // so counting one here would report a body inside something the game itself walks straight through.
+  const insideAny=(x,z)=>{for(const b of G.buildings)if(b.alive&&insideCollider(b,x,z))return b;return null;};
+  // v134.3 A BENCH HAS TO CLEAR ITS OWN GROUND. Both benches below stand a building at a fixed spot
+  // behind blue's town and walk bodies around it — on ground the AI also builds on. The band economy
+  // of this version changed what blue could afford by that minute, a storage pit went up 3.8 from the
+  // haul stand point, and the gate reported 0 of 18 arrivals with nothing whatever wrong with the
+  // code it tests. That is the same failure as the vacuous mid-capture gate above wearing the other
+  // face: a constructed bench in a lived-in world either stages its neighbourhood or reports on it.
+  const clearGround=(x,z,r)=>{const hid=[];
+    for(const b of G.buildings)if(b.alive&&Math.hypot(b.x-x,b.z-z)<r){b.alive=false;hid.push(b);}
+    return ()=>{for(const b of hid)b.alive=true;};};
 
   // --- 1. THE STATIC SHOVE. No movement at all: a packed blob beside a barracks, and only
   //        separate() running. Anything that ends up inside got there by teleport, full stop.
   {
+    const restore=clearGround(-120,-60,22);                    // v134.3: nobody else on this ground
     const b=pBld("barracks",-120,-60), face=faceZ(b);
     const crowd=[];
     for(let i=0;i<24;i++)crowd.push(pGuy(b.x-1.2+(i%3)*1.2,face+0.1+Math.floor(i/3)*0.9,"Shove"+i));
@@ -6563,13 +6620,14 @@ global.__G.setGameOver(false);
     check("v134.0 separate(): a packed crowd is never SHOVED INSIDE a building ("+inside+
       " of 24, deepest "+deepest.toFixed(2)+") — v133 put 3 in, 1.30 deep",
       inside===0&&deepest<0.01);
-    wipe();
+    restore(); wipe();
   }
 
   // --- 2. THE HAUL. Eighteen bodies converging on a stand point on the FAR side of a building,
   //        moving, with separate() after them exactly as 09-main.js runs it. This is the drop-off
   //        queue, which is the shape John sees jam.
   {
+    const restore=clearGround(-120,-64,26);                    // v134.3: the pit AND the stand point
     const b=pBld("storage_pit",-120,-60);
     const goal={x:b.x,z:2*b.z-faceZ(b)-2.2};                   // the stand point on the north side
     const crowd=[];
@@ -6589,7 +6647,7 @@ global.__G.setGameOver(false);
     check("v134.0 haul: …and every body still reaches the stand point ("+done.size+" of 18)",
       done.size===18);
     if(sidesteps)note("v134.0 haul: "+sidesteps+" sidesteps issued clearing the queue");
-    wipe();
+    restore(); wipe();
   }
 
   // --- 2b. THE WATCHDOG ITSELF, in isolation and by construction. The haul above is a
@@ -6959,6 +7017,189 @@ global.__G.setGameOver(false);
     check("v134.2 slain: respawn clears the record ("+had+" -> "+!!u._slain+
       ") — a new life must not open on the last one's killer",had&&!u._slain);
     wipe();
+  }
+}
+
+// ==================== v134.3 THE SQUARES ====================
+{
+  const G=global.__G;
+  // --- 1. AN UNHELD SQUARE OUTRANKS A CASTLE — and a castle wins again when there is nothing left
+  //        to take. Both directions: a rule that always answered "bazaar" would pass the first.
+  {
+    const team=G.BLUE;
+    const own=G.neutralMarkets.map(m=>m.owner);
+    let castle=G.buildings.find(b=>b.alive&&b.built&&b.team===team&&b.type==="castle");
+    let made=null;
+    if(!castle){ // stand one up somewhere legal behind the throne
+      const tc=G.teamTC(team);
+      for(let r=40;r<=90&&!made;r+=6)for(let a=0;a<12&&!made;a++){
+        const th=a/12*Math.PI*2, x=tc.x+Math.cos(th)*r, z=tc.z+Math.sin(th)*r;
+        if(G.validFor("castle",x,z,team))made=G.makeBuilding(team,"castle",x,z,true);
+      }
+      castle=made;
+    }
+    for(const m of G.neutralMarkets)m.owner=-1;              // everything up for grabs
+    const withFree=G.bandHoldPoint(team,0);
+    for(const m of G.neutralMarkets)m.owner=team;            // …and now the map is swept
+    const swept=G.bandHoldPoint(team,0);
+    for(let i=0;i<own.length;i++)G.neutralMarkets[i].owner=own[i];
+    if(made)made.alive=false;
+    check("v134.3 squares: with a castle standing, an UNHELD bazaar still gets the band ("+
+      (withFree&&withFree.why)+") — and once every square is yours the castle posting is right "+
+      "again ("+(swept&&swept.why)+"). Before this, a castle pre-empted every square from about "+
+      "minute ten, and every doctrine builds a castle",
+      !!castle&&withFree&&withFree.why==="bazaar"&&swept&&swept.why==="castle");
+  }
+
+  // --- 2. THE ROLE PICKER COUNTS. A repeat in wantRoles could never win the old loop, so
+  //        PERSONALITIES.rush.econHunters — "rush lives on dead supply chains", v94 — has done
+  //        nothing since the day it shipped. Staged: a rush marshal with a roster big enough to
+  //        deal several bands, and the doctrine's econ raiders must actually appear.
+  {
+    const team=G.RED, D=G.directors[team], pers0=D.pers, bands0=D.bands;
+    D.pers="rush"; D.bands=[];
+    const made=[];
+    for(let i=0;i<34;i++){
+      const u=G.makeUnit(team,"clubman",150+(i%8)*2,-140-Math.floor(i/8)*2,
+        {name:"Roster"+i,bot:{role:"war"}});
+      u.bandRef=null; made.push(u);
+    }
+    for(let i=0;i<6;i++)G.manageBands(D);
+    const byRole={};
+    for(const b of D.bands)byRole[b.role]=(byRole[b.role]||0)+1;
+    const econ=byRole.econ||0, want=1+(G.PERSONALITIES.rush.econHunters||0);
+    D.pers=pers0; D.bands=bands0;
+    for(const u of made){u.bandRef=null;u.alive=false;}
+    check("v134.3 doctrine: the role picker reads wantRoles as a COUNT, so rush finally fields the "+
+      "econ raiders its doctrine has claimed since v94 ("+econ+" econ bands of "+want+" wanted; "+
+      JSON.stringify(byRole)+") — a repeat could never win the old loop, so the knob was dead",
+      econ>=want);
+  }
+}
+
+// ==================== v134.3 THE WILDS, AND THE BAND ECONOMY ====================
+{
+  const G=global.__G;
+  // --- 1. THE TARGET PICKER. Wild camps only, live packs only, one band per pocket.
+  {
+    const D={team:G.RED,bands:[]};
+    const live=G.campStates.filter(c=>!c.boss&&!c.waiting&&c.creeps.some(x=>x.alive));
+    const boss=G.campStates.find(c=>c.boss);
+    const t1=G.bandCampTarget(D,G.RED);
+    // …and a pocket another band already claimed is not offered twice
+    D.bands.push({role:"camp",camp:t1});
+    const t2=G.bandCampTarget(D,G.RED);
+    check("v134.3 wilds: the picker takes a live WILD pack, never the Viking bay, and never the "+
+      "pocket another band has already claimed ("+live.length+" live wild camps; first "+
+      (t1?"("+t1.x.toFixed(0)+","+t1.z.toFixed(0)+")":"none")+", second "+
+      (t2?"("+t2.x.toFixed(0)+","+t2.z.toFixed(0)+")":"none")+")",
+      !!t1&&!t1.boss&&t1!==boss&&t2!==t1&&(!t2||!t2.boss));
+    // THE NEGATIVE THAT MATTERS: eleven raiders and a chieftain guard the bay. Even with every wild
+    // camp claimed, the answer is "nowhere to go", not "the bay".
+    // ⚠ AND THE BAY HAS TO BE AWAKE FOR THIS TO MEAN ANYTHING. It starts as an empty wreck and the
+    // raid does not land until 15:00 (BOSS_RESPAWN), so at the point this runs it is WAITING and
+    // would be skipped by the live-pack test whether or not the boss test existed. Staged awake, the
+    // gate turns red the moment somebody deletes the st.boss test — which is exactly what it is for.
+    const Dall={team:G.RED,bands:G.campStates.filter(c=>!c.boss).map(c=>({role:"camp",camp:c}))};
+    const _bw=boss?boss.waiting:null, _ba=boss?boss.creeps.map(c=>c.alive):null;
+    if(boss){boss.waiting=false;for(const c of boss.creeps)c.alive=true;}
+    const t3=G.bandCampTarget(Dall,G.RED);
+    if(boss){boss.waiting=_bw;boss.creeps.forEach((c,i)=>{c.alive=_ba[i];});}
+    check("v134.3 wilds: with every wild pocket claimed the picker answers NOWHERE rather than "+
+      "sending seven soldiers at the Viking bay, even with the raid ashore and eleven raiders "+
+      "standing ("+(t3?"offered "+(t3.boss?"THE BAY":"a camp"):"none")+")",
+      !t3);
+  }
+
+  // --- 2. THE BAND ECONOMY, staged so that ONLY the founding pass can answer.
+  //        ⚠ THREE CUTS OF THIS GATE PASSED WITH THE FIX MUTATED OUT, and the third one was
+  //        telling the truth. The first handed the marshal forty soldiers at once — forty loose
+  //        bodies deal several bands through the ordinary loop, so it proved nothing. The second
+  //        trickled four, which is BAND_MIN, so the ordinary loop handled that too. The third
+  //        trickled THREE and still passed, and at that point the gate was not the thing that was
+  //        wrong: the founding pass could not fire on a trickle AT ALL, because the map of wanted
+  //        roles was built inside the roster>=BAND_MIN block and was undefined whenever the pool was
+  //        short. The pass was doing nothing worth mutating. Both are fixed; this is the staging
+  //        that tells them apart, and it is a single think-clock rather than a hopeful campaign.
+  //
+  //        THE STAGE: a kingsguard already filled to its need, so it takes nothing more; exactly one
+  //        mission band, of four, with room for four more; nobody loose. Then three reinforcements.
+  //        Three is above BAND_SEED and below BAND_MIN, so the ordinary deal loop cannot fire, and
+  //        the straggler loop would put all three into the band that exists. The only thing in the
+  //        function that can open a second mission is the pass this version added.
+  {
+    const team=G.RED, D=G.directors[team], pers0=D.pers, bands0=D.bands;
+    D.pers="expand"; D.bands=[];
+    const made=[];
+    const add=(n,tag)=>{for(let i=0;i<n;i++){
+      const u=G.makeUnit(team,"clubman",120+(made.length%10)*2,-150-Math.floor(made.length/10)*2,
+        {name:"Trickle"+tag+"_"+made.length,bot:{role:"war"}});
+      u.bandRef=null; made.push(u);}};
+    add(30,"seed"); G.manageBands(D);          // the guard fills, the rest deal into bands
+    const kg=D.bands.find(b=>b.role==="kingsguard");
+    const keep=D.bands.find(b=>b.role!=="kingsguard"&&b.role!=="siege");
+    for(const b of D.bands)if(b!==kg&&b!==keep)for(const v of b.members)v.alive=false;
+    if(keep)for(const v of keep.members.slice(4))v.alive=false;
+    G.manageBands(D);                          // …and the dead are pruned back out of the bands
+    const before=D.bands.filter(b=>b.role!=="kingsguard"&&b.role!=="siege").length;
+    const kept=keep?keep.members.length:0;
+    add(3,"tr"); G.manageBands(D);             // three men report for duty
+    const after=D.bands.filter(b=>b.role!=="kingsguard"&&b.role!=="siege").length;
+    const grew=keep?keep.members.length:0;
+    const byRole=D.bands.reduce((m,b)=>{m[b.role]=(m[b.role]||0)+1;return m;},{});
+    D.pers=pers0; D.bands=bands0;
+    for(const u of made){u.bandRef=null;u.alive=false;}
+    check("v134.3 bands: THREE reinforcements, a full kingsguard and one standing mission band of "+
+      kept+" with room for four more — and the three OPEN A SECOND MISSION rather than swelling "+
+      "the first ("+before+" mission band before, "+after+" after; the standing band went "+kept+
+      " -> "+grew+"; "+JSON.stringify(byRole)+"). Before this the straggler loop handed every "+
+      "reinforcement to a band that already existed, so a twenty-minute campaign ended with one "+
+      "mission band or none on both teams",
+      before===1&&after===2&&kept===4&&grew===4);
+  }
+
+  // --- 3. THE THRONE OUTRANKS THE TREASURE. Nothing goes hunting while the king is being hunted.
+  {
+    const team=G.RED, D=G.directors[team], pers0=D.pers, bands0=D.bands;
+    D.pers="expand"; D.bands=[];
+    const made=[];
+    // ⚠ EIGHTY, not forty. The camp is the LAST role in the doctrine's want-list, and with forty
+    // bodies the kingsguard took fourteen and the remaining twenty-six dealt four bands — three
+    // holds and an econ — before the roster ran dry. So the mutation run that deleted the threat
+    // test fielded no camp band either, and the gate reported green on a rule it was not reaching:
+    // it was measuring the deal order, not the throne. Eighty bodies deal past every other mission,
+    // so a camp band is what the marshal does next unless the throne stops it.
+    for(let i=0;i<80;i++){
+      const u=G.makeUnit(team,"clubman",120+(i%10)*2,-160-Math.floor(i/10)*2,
+        {name:"Siege"+i,bot:{role:"war"}});
+      u.bandRef=null; made.push(u);
+    }
+    // ⚠ AND A LIVE PACK HAS TO BE STANDING SOMEWHERE, or this gate passes because there was
+    // nowhere to go rather than because the rule held — the same vacuity as the mid-capture gate
+    // above, and the mutation run proved it: with the threat test deleted the camp bands cleared
+    // the wilds during the EARLIER gates, so by the time this one ran bandCampTarget answered null
+    // and the gate reported green on a rule it had just watched break. It stages a pack awake, and
+    // it asserts that a target existed, out loud, in the same breath as the rule.
+    const wild=G.campStates.find(c=>!c.boss);
+    const _ww=wild?wild.waiting:null, _wa=wild?wild.creeps.map(c=>c.alive):null;
+    if(wild){wild.waiting=false;for(const c of wild.creeps)c.alive=true;}
+    const reachable=!!G.bandCampTarget({team,bands:[]},team);
+    // stand a mob of enemies on the throne: threat is enemies within 42 of the king, weighted
+    const king=G.kings[team], foes=[];
+    for(let i=0;i<10;i++){
+      const f=G.makeUnit(1-team,"clubman",king.root.position.x+2+i*0.6,king.root.position.z+2,
+        {name:"Foe"+i,bot:{role:"war"}});
+      foes.push(f);
+    }
+    for(let i=0;i<4;i++)G.manageBands(D);
+    const camps=D.bands.filter(b=>b.role==="camp").length, thr=D.threat;
+    if(wild){wild.waiting=_ww;wild.creeps.forEach((c,i)=>{c.alive=_wa[i];});} // as we found it
+    D.pers=pers0; D.bands=bands0;
+    for(const u of made.concat(foes)){u.bandRef=null;u.alive=false;}
+    check("v134.3 wilds: no band goes treasure-hunting while the throne is under threat, WITH A "+
+      "LIVE PACK STANDING TO GO AFTER (a target was reachable: "+reachable+"; threat "+
+      (thr||0).toFixed(1)+" over the limit of "+G.CAMP_MAX_THREAT+", camp bands "+camps+")",
+      reachable&&thr>G.CAMP_MAX_THREAT&&camps===0);
   }
 }
 
