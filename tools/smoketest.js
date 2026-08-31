@@ -62,6 +62,8 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "renderSlainBy,BUFFS,"+                              // v134.2 the slain-by death screen
   "bazaarYield,BAZ_YIELD_BY_HELD,"+                    // v134.3 the squares
   "bandCampTarget,CAMP_MIN_MIL,CAMP_MAX_THREAT,BAND_MIN,BAND_SEED,campStates,"+ // v134.3 the wilds
+  "isWorker,OX_MAX,OX_MIN_VILLS,OX_MIN_CUTTERS,OX_WOOD_WANT,OX_WOOD_FULL,manageBands,"+ // v134.4 the ox
+  "bazaarWorth,HOLD_TOUR,"+                            // v134.5 what the squares pay
   // the bench drives moveToward directly, outside tick(), and both the watchdog and a detour's
   // lifetime are measured in T. A bench that leaves T frozen tests a world where no detour ever
   // expires — which is a different program, and it reads as "nobody ever arrives".
@@ -564,8 +566,18 @@ function liftExpr(file,anchor,close){
     if(!e){missing.push(what);return null;}
     return {expr:e,fn:new Function(...args,"bSurf","bStand","BLD","Math","return "+e)};
   };
-  const haul =lift("hauler drop-off stop","07-ai.js","if(moveToward(u,dp.x+2.5,dp.z+2,dt,",")",["dp"]);
-  const arm  =lift("citizen arm-up stop", "07-ai.js","if(moveToward(u,bar.x+3,bar.z+3,dt,",")",["bar"]);
+  // v134.4 THE HAULER AND THE ARM-UP ARE GONE FROM THIS HARNESS, and not because they were fixed
+  // quietly — because this harness is what let them ship broken. It computed best = ring - off, the
+  // approach from the side the offset points at, and asked whether THAT cleared the tolerance. It
+  // did. From the other three quarters of the circle the same arithmetic reads ring + off:
+  //     hauler at a pit        stop  8.34   near 4.40   FAR 10.80
+  //     hauler at a castle     stop 17.10   near 16.60  FAR 23.00
+  //     citizen at a barracks  stop  9.96   near 7.36   FAR 15.84
+  //     trade cart at a market stop 11.60   near 6.20   FAR 23.20
+  // All four unreachable from the far side, all four certified green here for the whole of v131 to
+  // v134.3. Both approaches now walk to the nearest point of the ring, so there is no "off" left to
+  // gate — and the replacement is not more arithmetic, it is the three BENCHES at the end of this
+  // file that stand a body on the wrong side and watch whether it ever arrives.
   const ageUp=lift("age-up radius","06-input.js",
     "dist2(player.root.position.x,player.root.position.z,tc.x,tc.z)>",")",["tc"]);
   const gate=(name,lifted,bind,off,squared)=>{
@@ -576,14 +588,10 @@ function liftExpr(file,anchor,close){
     if(!ok)bad.push(name+" needs <="+(squared?Math.sqrt(stop):stop).toFixed(3)+
                     ", best reachable "+best.toFixed(3)+"  ["+lifted.expr+"]");
   };
-  const H=Math.hypot(2.5,2);                                   // 07-ai.js:969's drop point offset
-  gate("hauler banks at a town centre",haul,{def:BLD.towncenter,type:"towncenter"}, H,false);
-  gate("hauler banks at a castle",     haul,{def:BLD.castle,     type:"castle"},     H,false);
-  gate("hauler banks at a storage pit",haul,{def:BLD.storage_pit,type:"storage_pit"},H,false);
-  gate("citizen arms up at a barracks",arm, {def:BLD.barracks},   Math.hypot(3,3),false); // 07-ai.js:917
   gate("player advances the age",      ageUp,{def:BLD.towncenter},0,true);                // 06-input.js:981
   check("the off-centre gates found the expressions they test ("+
-        (missing.length?"MISSING: "+missing.join(" · "):"hauler, arm-up and age-up all lifted from source")+")",
+        (missing.length?"MISSING: "+missing.join(" · "):"the age-up radius, the last aim in the game "+
+         "that is still a fixed distance from a centre, lifted from source")+")",
         missing.length===0);
   check("the gates that aim off-centre are physically satisfiable ("+
         (bad.length?bad.join(" · "):"hauler, citizen and age-up all reachable")+")",bad.length===0);
@@ -1090,10 +1098,21 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
   {
     const D1=DIRS[1], persSave=D1.pers;
     for(const b of buildings)if(b.alive&&!b.built){b.built=true;b.progress=b.def.hits;} // clear the queues
+    // v134.4 …AND FROM THE FRONT THE PLANNER STARTS AT. The bench cleared the plan, the count and
+    // the done flag but not wallFront or wallRetry — so on a seed where the CAMPAIGN had already
+    // spent its retries, the bench re-planned at 76 out with no retries left, found nothing legal
+    // there, and reported "+0 segments" for a planner it never let start. Measured on
+    // SMOKE_SEED=42: six of twenty-seven candidate segments are legal at 34, 48 and 62 — the
+    // marshal simply was never asked about those fronts.
     D1.pers="turtle"; D1.wallPlan=null; D1.wallPlaced=0; D1.wallsDone=false;
+    D1.wallFront=34; D1.wallRetry=0;
     stock[1].food+=5000; stock[1].gold+=5000; stock[1].stone+=5000; stock[1].wood+=5000;
     const walls0=buildings.filter(b=>b.team===1&&b.def.wall).length;
-    for(let i=0;i<20&&!D1.wallsDone;i++){
+    // v134.5: SIXTY thinks, not twenty. The wall branch places at most one segment per think and
+    // spends a think on each one it refuses, so a nine-segment plan that has to walk three fronts
+    // needs twenty-seven at the very least. SMOKE_SEED=777 reported "+0 segments" with fourteen of
+    // thirty-six candidates legal — the planner was still working when the bench stopped asking.
+    for(let i=0;i<60&&!D1.wallsDone;i++){
       G.directorThink(D1);
       // v134.3: …on every building, not only the wall. The wall branch is gated on
       // pendingBld(team).length<3, and a staked AI orders houses and towers while this loop runs —
@@ -1103,8 +1122,27 @@ global.__G.setGameOver(false); // an accidental regicide in the campaign must no
     }
     const walls1=buildings.filter(b=>b.team===1&&b.def.wall).length;
     const gates=buildings.filter(b=>b.alive&&b.team===1&&b.def.gate).length;
-    check("TURTLE raises a curtain wall (+"+(walls1-walls0)+" segments) and finishes with a gate ("+gates+")",
-      (walls1-walls0)>=1&&D1.wallsDone===true&&gates>=1);
+    // v134.4 …AND IF THERE IS NOWHERE TO PUT ONE, STANDING DOWN IS THE RIGHT ANSWER. On
+    // SMOKE_SEED=42 red reaches age 5 with the v134.4 economy and every one of its eight planned
+    // segments is refused by validFor at 34 AND at 48 — the curtain is a fixed 96-unit line at a
+    // fixed offset, tuned at v94 against a map this one no longer is (it is on the open list as one
+    // of the "stale map numbers"). The planner did its job and gave up correctly, and this gate
+    // called that a failure because it asserted an ABSOLUTE — a wall — instead of the invariant:
+    // if any legal ground exists on the line, a wall stands there; if none does, it stood down.
+    const _wt=global.__G.teamAge[1]>=4?"fort_wall":global.__G.teamAge[1]>=3?"stone_wall":"wood_wall";
+    const _rtc=global.__G.teamTC(1);
+    let _legal=0,_tried=0;
+    if(_rtc)for(const fr of [34,48,62,76]){
+      const fx=_rtc.x-fr;                                   // red faces the enemy across the middle
+      for(const sg of global.__G.wallLineSegments(_wt,fx,_rtc.z-48,fx,_rtc.z+48)){
+        _tried++; if(global.__G.validFor(_wt,sg.x,sg.z,1))_legal++;
+      }
+    }
+    check("TURTLE raises a curtain wall (+"+(walls1-walls0)+" segments) and finishes with a gate ("+
+      gates+") — or stands down because the line has nowhere to go ("+_legal+" of "+_tried+
+      " candidate segments are legal ground at 34, 48, 62 and 76 out)",
+      _legal>0 ? ((walls1-walls0)>=1&&D1.wallsDone===true&&gates>=1)
+               : (D1.wallsDone===true));
     D1.pers=persSave;
   }
 }
@@ -1489,8 +1527,17 @@ for(let i=0;i<30;i++)healTick(0.5);
 check("the king stays wounded despite a priest at his side ("+Math.round(kb.hp)+"/"+kb.maxHp+")",kb.hp<=hurtTo+0.01);
 
 // ---------------- ECONOMY DISCIPLINE: caps and hauls ----------------
-check("no unit ever exceeds the 20-carry cap",
-  units.every(u=>u.carry.food+u.carry.gold+u.carry.stone+u.carry.wood<=20));
+// v134.4: the cap is carryCap(u), not the flat 20 this asserted. A villager's is 20 (more with
+// Deep Satchel); AN OX BED HOLDS 300, which is the entire point of yoking one, and this gate would
+// have called the feature working as designed a bug. Assert the rule the game actually enforces.
+{
+  const over=units.filter(u=>u.carry.food+u.carry.gold+u.carry.stone+u.carry.wood>global.__G.carryCap(u)+0.001);
+  const ox=units.filter(u=>u.cls==="oxcart");
+  let most=0; for(const u of units)most=Math.max(most,u.carry.food+u.carry.gold+u.carry.stone+u.carry.wood);
+  check("no unit ever exceeds ITS OWN carry cap (heaviest load seen "+Math.round(most)+
+    ", oxen on the field "+ox.length+" at a cap of "+(ox.length?global.__G.carryCap(ox[0]):300)+")",
+    over.length===0);
+}
 const pits=[0,1].map(t=>buildings.filter(b=>b.alive&&b.team===t&&b.type==="storage_pit").length);
 console.log("  INFO — storage pits built: BLUE "+pits[0]+" / RED "+pits[1]);
 
@@ -1561,7 +1608,14 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
  for(let k=0;k<defs+4;k++)mob.push(global.__G.makeUnit(1,"clubman",tcB.x+14+(k%4)*2,tcB.z-6+Math.floor(k/4)*2,{name:"Mob "+k}));
  // ensure at least a few villagers stand near the TC to be levied
  const vills=[];
- for(let k=0;k<3;k++)vills.push(global.__G.makeUnit(0,"villager",tcB.x-10-k*2,tcB.z+6,{name:"Levy "+k}));
+ // v134.5: …WITH A BOT, or they cannot be levied. The levy loop skips any body that has none
+ // (07-ai.js: "!v.bot ... continue"), so these three have never been eligible and this bench has
+ // always been riding on whatever villagers the CAMPAIGN happened to leave within 45 of the Town
+ // Center. On SMOKE_SEED=1 with the v134.5 economy that number is zero, and the gate reported a
+ // working levy rule as a broken one. Measured at the moment it fires: 13 foes against 9 defenders,
+ // so the rule's own test passed — and not one villager it was allowed to call up.
+ for(let k=0;k<3;k++)vills.push(global.__G.makeUnit(0,"villager",tcB.x-10-k*2,tcB.z+6,
+   {name:"Levy "+k,bot:{role:"citizen",res:"food"}}));
  // DETERMINISTIC: run the war room synchronously on this exact state —
  // waiting on director timers lets the (working!) kingsguard spoil the head-count
  directors[0].lastLevy=-99;
@@ -1669,6 +1723,12 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   // never fired, and every camp assertion BELOW this one fell with it — eleven checks red for
   // a reason that had nothing to do with creeps. The ring is cleared explicitly now, and the
   // count rides in the message so a future breakage announces itself instead of going quiet.
+  // v134.4 …AND THE CAMP HAS TO BE ASLEEP, not merely un-intruded. updateCreep widens its aggro
+  // ring while st.wake is set and st.threat is alive — it is hunting whoever hit it — so a body
+  // outside THIS ring and inside that one keeps the pack aggro'd and regen never fires. The bench
+  // then reports "still in ring 0" beside "+0 hp", which is the sound of two different circles.
+  const _wake=north.wake, _thr=north.threat;
+  north.wake=0; north.threat=null;
   const ringR=(north.aggro||G.CAMP_AGGRO||11.5)+8;
   const calm=isolateArea(north.x,north.z,ringR,{keep:north.creeps,keepNeutral:true});
   // v134.3 …AND A PACK SOMETHING UPSTREAM HAS ALREADY KILLED DOES NOT GET TO TAKE THE SUITE DOWN
@@ -1700,9 +1760,20 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
     (ringWho?" ["+ringWho+"]":"")+", alive "+(!!wounded.alive)+")",
     wounded.hp>wh+wounded.maxHp*0.12); // 8%/s over 3 sim-seconds is ~24% — assert against maxHp, not a flat 20 that a low-hp wolf can miss
   calm.restore();
+  north.wake=_wake; north.threat=_thr;                        // v134.4: as we found it
   intruder.hp=1; G.dealDamage(north.creeps[0],intruder,9999); // tidy: the wilds claim their kill
   // WIPE a camp: the chest appears, typed by the pack that guarded it
-  const camp0=CS[0], slayer=G.makeUnit(0,"clubman",camp0.x,camp0.z,{name:"Slayer",bot:{role:"citizen"}});
+  // v134.4: …AND THE PACK HAS TO BE STANDING BEFORE YOU CAN WIPE IT. Since v134.3 the AI sends
+  // camp bands into the wilds, so by the time this runs the pack may already be dead and the pocket
+  // WAITING — and then "a wiped camp drops a treasure chest" fails on a camp nobody wiped, taking
+  // the chest-type and first-boot gates with it. Three reds for a feature working as designed.
+  const camp0=CS[0];
+  if(camp0.waiting||!camp0.creeps.some(c=>c.alive)){
+    camp0.waiting=false;
+    for(const c of camp0.creeps){c.alive=true;c.hp=c.maxHp;}
+    camp0.chest=null;
+  }
+  const slayer=G.makeUnit(0,"clubman",camp0.x,camp0.z,{name:"Slayer",bot:{role:"citizen"}});
   slayer.bot=null;
   const kind0=camp0.kind, want=kind0==="wolf"?"food":"gold";
   for(const c of camp0.creeps)if(c.alive)G.dealDamage(slayer,c,99999);
@@ -1905,7 +1976,17 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   check("the horn sounds: "+n+" rallied soldiers take a charge order east",
     n>=3&&troop.every(v=>v.chargeTo&&Math.abs(v.chargeTo.x-25)<1&&Math.abs(v.chargeTo.z+90)<1));
   let razedAt=-1;
+  // v134.5 …AND THE MARSHAL DOES NOT RE-TASK THE HORN MID-CHARGE. These three are ordinary bots
+  // with a role, so across 1400 frames the war room is free to deal them into a band and march
+  // them off on a mission — which is not a bug, it is the AI doing its job, and it has nothing to
+  // do with whether a charge takes and holds its ground. This bench has always been riding on the
+  // campaign happening not to want them for 23 sim-seconds; the v134.5 want-list wants more bands,
+  // so it started wanting them. directorThink is gated on D.nextThink: push it past the end of the
+  // bench and put it back afterwards.
+  const _nt=directors.map(D=>D.nextThink);
+  for(const D of directors)D.nextThink=1e9;
   for(let i=0;i<1400;i++){ tick(); if(razedAt<0&&!shack.alive)razedAt=i; }
+  for(let i=0;i<_nt.length;i++)directors[i].nextThink=_nt[i];
   check("the charge RAZES the building in its path ("+(razedAt>=0?("frame "+razedAt):("hp "+Math.round(shack.hp)))+")",razedAt>=0);
   // v93: the mark can land beside (or inside) a campaign building since the 2.2 gap
   // sprawled the towns — holders park around obstructions, so allow a wider ring and
@@ -3975,12 +4056,16 @@ global.__G.setGameOver(false);
     // quiet ground either. So a campaign that leaves any bazaar part-captured makes this assertion
     // fail while the code does exactly the right thing. The enemy count was staged here from v127;
     // the capture state was not. Both now are.
-    const bazHold=G2.neutralMarkets.map(m=>({m,cap:m.cap,capTeam:m.capTeam}));
-    for(const m of G2.neutralMarkets){m.cap=0;m.capTeam=-1;}
+    // v134.5 …AND WHO OWNS THEM, not only how far along a capture is. A band posted to a square
+    // this team already HOLDS is the last guard on it, and v134.5 does not march the last guard off
+    // — correctly. This bench is about the tour clock, so it stages the squares as nobody's and
+    // puts the owners back afterwards.
+    const bazHold=G2.neutralMarkets.map(m=>({m,cap:m.cap,capTeam:m.capTeam,owner:m.owner}));
+    for(const m of G2.neutralMarkets){m.cap=0;m.capTeam=-1;m.owner=-1;}
     cold.bandRef=hb; D.bands.push(hb);
     G2.manageBands(D);
     cellar.restore();
-    for(const e of bazHold){e.m.cap=e.cap;e.m.capTeam=e.capTeam;}
+    for(const e of bazHold){e.m.cap=e.cap;e.m.capTeam=e.capTeam;e.m.owner=e.owner;} // v134.5: owners too
     check("v113 relief: a hold band with a spent tour and a cold field takes a new mission ("+hb.role+
       ", field cleared of "+cellar.moved+")",
       // v134.3: …and "camp" is one of the missions now. This whitelist was written at v113, when
@@ -4114,6 +4199,15 @@ global.__G.setGameOver(false);
     // LIVE piles: the campaign mines one out during the run, and a spent pile correctly stops
     // refusing a plot. Asserting over all six made this gate flake 6/6 -> 5/6 between runs.
     const allPiles=N.filter(n=>n.type==="stone");
+    // v134.4 …AND IF THE CAMPAIGN HAS SPENT THEM, PUT THE STONE BACK FOR THE LENGTH OF THE SWEEP.
+    // piles.length>=4 below is a vacuity guard — it exists so this cannot pass with nothing to
+    // test — but it was counting what the AI had not yet mined, so a HEALTHIER economy failed it.
+    // SMOKE_SEED=42 on v134.4: three live piles, three of three blocked, rule perfect, gate red.
+    const _stoneWas=allPiles.map(n=>n.amount);
+    for(const n of allPiles){
+      if(allPiles.filter(m=>m.amount>0).length>=4)break;
+      if(n.amount<=0)n.amount=40;                       // enough to be a pile again, briefly
+    }
     const piles=allPiles.filter(n=>n.amount>0);
     let blocked=0,freedByRemoval=0,openAround=0;
     for(const st of piles){
@@ -4126,9 +4220,12 @@ global.__G.setGameOver(false);
         if(G.validFor("house",st.x+Math.cos(ang)*d,st.z+Math.sin(ang)*d,0)===true)ok++;
       if(ok>0)openAround++;
     }
+    const _restaked=piles.length-allPiles.filter((n,i)=>_stoneWas[i]>0).length;
     check("v114 clearing: EVERY LIVE stone pile refuses a plot ("+blocked+"/"+piles.length+
-      " live of "+allPiles.length+" sited)",
+      " live of "+allPiles.length+" sited"+(_restaked>0?", "+_restaked+" re-staked for the sweep "+
+      "after the campaign mined them out":"")+")",
       blocked===piles.length&&allPiles.length===6&&piles.length>=4);
+    for(let i=0;i<allPiles.length;i++)allPiles[i].amount=_stoneWas[i]; // v134.4: as we found them
     // v134.0 CONSTRUCTED, NOT SCAVENGED. See tools/patch-smoketest-stone-invariant-v134.js: this
     // asserted freedByRemoval>=2, a tally of how many piles happened to have nothing built beside
     // them at the end of one campaign, and it went red on the default seed the moment the pathing
@@ -4662,9 +4759,15 @@ global.__G.setGameOver(false);
       // KINSHIP check duly passed its "different class mends nothing" case by healing off a
       // stray clubman from an earlier block. Move every Batch D actor to a clear corner, and
       // ASSERT it is clear rather than assuming it.
-      const DX=-196, DZ=132;
       const near=(x,z,r)=>{let n=0;for(const o of G.units){if(!o.alive)continue;
         const dx=o.root.position.x-x,dz=o.root.position.z-z;if(dx*dx+dz*dz<=r*r)n++;}return n;};
+      // v134.4: …and it PICKS a clear corner rather than naming one. (-196,132) was clear on the
+      // default seed and had a campaign body standing in it on SMOKE_SEED=1 — the assertion below
+      // did its job and reported ground that was not empty, which is not the same as a bug in the
+      // auras. Four corners and two edges; the first empty one wins.
+      const _DP=(()=>{for(const c of [[-196,132],[196,132],[-196,-132],[196,-132],[-150,150],[150,-150]])
+        if(near(c[0],c[1],R*2)===0)return c; return [-196,132];})();
+      const DX=_DP[0], DZ=_DP[1];
       check("v132.35 aura harness: the test ground is EMPTY before anything is staged on it ("+
         near(DX,DZ,R*2)+" units within "+(R*2)+")",near(DX,DZ,R*2)===0);
       const place=(u,dx,dz)=>{u.root.position.set(DX+(dx||0),u.root.position.y,DZ+(dz||0));return u;};
@@ -5985,8 +6088,13 @@ global.__G.setGameOver(false);
       beforeRF.lit>=25&&afterRF.deadLit===0&&afterRF.worst<=G.AURA_LEASH+0.5);
     hero.root.position.x-=40; hero.alive=false;
     G.auraSweep();
+    // v134.4: deadLit, not lit. This asserted that NO aura point anywhere in the world was lit,
+    // when what it is named after is one dead hero's cloud. Since v134.2 veteran bots hold
+    // blacksmith buffs, so any living aura-holder on the map — a healthy one, doing its job —
+    // failed it. auraLit() already reports deadLit, which is exactly this gate's claim.
     check("v132.53 aura: a dead owner's cloud is out on the very next sweep, with no frame of "+
-      "simulation in between ("+G.auraLit().lit+" lit)",G.auraLit().lit===0);
+      "simulation in between ("+G.auraLit().deadLit+" of the dead owner's points still lit, "+
+      G.auraLit().lit+" lit on the map in total)",G.auraLit().deadLit===0);
     for(let i=0;i<20;i++)G.auraTick(0.05);
   }
   // ---------- v132.51: ONE EFFECT SYSTEM MUST NOT FREEZE THE OTHERS ----------
@@ -6276,8 +6384,10 @@ global.__G.setGameOver(false);
   let bv=0,bm=0,rv=0,rm=0;
   for(const u of G.units){
     if(!u.alive||u.isKing)continue;
-    if(u.team===G.BLUE)u.cls==="villager"?bv++:bm++;
-    else if(u.team===G.RED)u.cls==="villager"?rv++:rm++;
+    // v134.4: the hand-count has to use the same DEFINITION as the HUD or it is testing a different
+    // question. A trade cart and an ox carry no weapon; they are counted with the villagers now.
+    if(u.team===G.BLUE)G.isWorker(u)?bv++:bm++;
+    else if(u.team===G.RED)G.isWorker(u)?rv++:rm++;
   }
   check("v124 roster: the wilds belong to nobody — "+creepsAlive+" live creeps are counted for "+
     "neither crown (blue "+bv+"/"+bm+" · red "+rv+"/"+rm+")",
@@ -7044,11 +7154,18 @@ global.__G.setGameOver(false);
     const swept=G.bandHoldPoint(team,0);
     for(let i=0;i<own.length;i++)G.neutralMarkets[i].owner=own[i];
     if(made)made.alive=false;
+    // v134.5: …AND THE SECOND HALF OF THIS GATE WAS WRONG, and it was mine. It asserted that a
+    // swept map sends the band to a CASTLE, which is what v134.3 shipped and what this gate has
+    // certified ever since. A swept map pays 12 a second — the largest income in the game — and a
+    // castle has walls, towers and a garrison to look after itself. Measured on v134.4: blue took
+    // ten squares across three campaigns and lost five, because nothing was ever posted to keep
+    // one. The band GUARDS the square it holds now, and "why" says which of the two it is doing.
     check("v134.3 squares: with a castle standing, an UNHELD bazaar still gets the band ("+
-      (withFree&&withFree.why)+") — and once every square is yours the castle posting is right "+
-      "again ("+(swept&&swept.why)+"). Before this, a castle pre-empted every square from about "+
-      "minute ten, and every doctrine builds a castle",
-      !!castle&&withFree&&withFree.why==="bazaar"&&swept&&swept.why==="castle");
+      (withFree&&withFree.why)+") — and once every square is yours the band GUARDS one rather than "+
+      "going home to the courtyard ("+(swept&&swept.why)+"). Before v134.3 a castle pre-empted "+
+      "every square from about minute ten; before v134.5 it took the band back the moment the map "+
+      "was swept, which is the moment there is most to lose",
+      !!castle&&withFree&&withFree.why==="bazaar"&&swept&&swept.why==="guard"&&!!(swept&&swept.baz));
   }
 
   // --- 2. THE ROLE PICKER COUNTS. A repeat in wantRoles could never win the old loop, so
@@ -7200,6 +7317,364 @@ global.__G.setGameOver(false);
       "LIVE PACK STANDING TO GO AFTER (a target was reachable: "+reachable+"; threat "+
       (thr||0).toFixed(1)+" over the limit of "+G.CAMP_MAX_THREAT+", camp bands "+camps+")",
       reachable&&thr>G.CAMP_MAX_THREAT&&camps===0);
+  }
+}
+
+function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
+// ==================== v134.4 THE FAR SIDE, AND THE OX ====================
+{
+  const G=global.__G;
+  // Clear ground to build on: these benches are about ONE building and one body, and the campaign
+  // has been building all over the map for eight minutes. Same trick the v134.0 benches use.
+  const clearGround=(x,z,r)=>{const hid=[];
+    for(const b of G.buildings)if(b.alive&&Math.hypot(b.x-x,b.z-z)<r){b.alive=false;hid.push(b);}
+    return ()=>{for(const b of hid)b.alive=true;};};
+  const spot=(()=>{ // a patch of open ground behind blue's lines
+    for(let z=-140;z<=-40;z+=20)for(let x=-200;x<=-60;x+=20)
+      if(G.walkable(x,z)&&!G.buildings.some(b=>b.alive&&Math.hypot(b.x-x,b.z-z)<26))return {x,z};
+    return {x:-150,z:-100};
+  })();
+  const run=(u,secs)=>{for(let i=0;i<Math.round(secs*30);i++){G.updateBot(u,1/30);G.advanceT(1/30);}};
+
+  // --- 1. THE HAUL, FROM THE FAR SIDE. The old aim point was (dp.x+2.5, dp.z+2); a body standing
+  //        WEST of the store can never get within the tolerance of a point east of its centre, so
+  //        it stalls nine paces out, sidesteps, comes back, and carries the load all match.
+  //        Benched on v134.3 and on pristine v133: 0 wood banked in five minutes.
+  {
+    const restore=clearGround(spot.x,spot.z,30);
+    const pit=G.makeBuilding(0,"storage_pit",spot.x,spot.z,true);
+    const u=G.makeUnit(0,"villager",pit.x-13,pit.z,{name:"FarHauler",bot:{role:"citizen",res:"wood"}});
+    u.carry.wood=20; u.bot.haul=true; u.bot.node=null;
+    const w0=G.stock[0].wood;
+    run(u,45);
+    const banked=G.stock[0].wood-w0, d=Math.hypot(u.root.position.x-pit.x,u.root.position.z-pit.z);
+    const steps=u._stkT||0;
+    u.alive=false; pit.alive=false; restore();
+    check("v134.4 far side: a hauler standing WEST of a Storage Pit banks its twenty logs ("+
+      Math.round(banked)+" banked, ended "+d.toFixed(1)+" from the store). The aim used to be a "+
+      "fixed corner INSIDE the collider — reachable from the north-east and from nowhere else, "+
+      "which benched at 0 banked in five minutes on v134.3 and on pristine v133 alike. It walks "+
+      "straight in: "+steps+" sidesteps issued",
+      banked>=20&&steps===0);
+  }
+
+  // --- 2. THE ARM-UP, FROM THE FAR SIDE. Same bug, more expensive: the team has already PAID for
+  //        the conversion when the citizen sets off.
+  {
+    const restore=clearGround(spot.x,spot.z,34);
+    const bar=G.makeBuilding(0,"barracks",spot.x,spot.z,true);
+    const u=G.makeUnit(0,"villager",bar.x-16,bar.z,{name:"FarRecruit",bot:{role:"citizen",res:"food"}});
+    u.convertTo="clubman"; u.convertAt="barracks";
+    run(u,30);
+    const cls=u.cls, d=Math.hypot(u.root.position.x-bar.x,u.root.position.z-bar.z);
+    const steps=u._stkT||0;
+    u.alive=false; bar.alive=false; restore();
+    check("v134.4 far side: a citizen approaching a barracks from the WEST completes its arm-up "+
+      "(ended a "+cls+", "+d.toFixed(1)+" from the door). The old aim was (bar.x+3, bar.z+3) "+
+      "against a stop of 9.96 — near side 7.36, far side 15.84 — and the food and gold were spent "+
+      "the moment it set off. ⚠ ARRIVAL ALONE IS NOT THE TEST: given a minute, a body with a "+
+      "watchdog behind it can sidestep its way round a building and stumble onto the lucky side, "+
+      "which is how the first cut of this bench passed with the old aim restored. It has to walk "+
+      "STRAIGHT in — "+steps+" sidesteps issued",
+      cls==="clubman"&&steps===0);
+  }
+
+  // --- 3. THE TRADE CART, FROM THE FAR SIDE. Worst of the three by the arithmetic: a fixed point
+  //        bSurf+2 EAST of the market, 14.7 off centre, against a stop of 11.60.
+  {
+    const restore=clearGround(spot.x,spot.z,34);
+    const mk=G.makeBuilding(0,"market",spot.x,spot.z,true);
+    const u=G.makeUnit(0,"tradecart",mk.x-18,mk.z,{name:"FarCart",bot:{role:"cart",home:mk}});
+    u.tradeTarget={x:mk.x-60,z:mk.z}; u.tradePhase="back";
+    const g0=G.stock[0].gold;
+    // ⚠ WHERE IT PAYS, NOT HOW FAST. Two weaker versions of this bench passed with the bug put
+    // back: "it eventually pays" (given forty-five seconds a cart orbits its market and stumbles
+    // onto the lucky side) and "it pays within twelve" (twelve seconds is ninety paces for a cart —
+    // still enough to go round). The sidestep count that catches the other two benches is no good
+    // here either: a cart is wide and takes a legitimate step or two rounding its own market. What
+    // cannot be faked is WHICH SIDE it is standing on when the gold lands. The cart comes from the
+    // west; the fix aims it at the ring point in the direction it came, so it pays on the west
+    // side. The old fixed aim was a spot EAST of the market, so paying there means it drove round.
+    let paid=0, payX=null;
+    for(let i=0;i<30*45&&paid<=0;i++){
+      G.updateBot(u,1/30); G.advanceT(1/30);
+      paid=G.stock[0].gold-g0;
+      if(paid>0)payX=u.root.position.x-mk.x;
+    }
+    const phase=u.tradePhase;
+    const steps=u._stkT||0;
+    u.alive=false; mk.alive=false; restore();
+    check("v134.4 far side: a trade cart whose bazaar lies WEST of its market delivers its gold (+"+
+      Math.round(paid)+", phase now "+phase+"). v104 shipped this aiming at a fixed spot east of "+
+      "the market; a cart on the wrong side orbited its own home for the rest of the match. It "+
+      "delivers on the side it came from (+"+Math.round(paid)+" gold, paid standing "+
+      (payX===null?"nowhere":(Math.abs(payX).toFixed(1)+" "+(payX<0?"WEST":"east")+" of the market"))+
+      ", "+steps+" sidesteps on the way)",
+      paid>0&&payX!==null&&payX<0); // …and NOT the phase, which by then may already be the next run
+  }
+
+  // --- 4. WHAT AN OX IS NOT. It is a civilian riding bot.role "citizen", so every rule that spells
+  //        "civilian" as cls==="villager" would sweep it up. These are the assertions with teeth.
+  {
+    const team=G.RED, D=G.directors[team], bands0=D.bands;
+    D.bands=[];
+    const made=[];
+    for(let i=0;i<12;i++)made.push(G.makeUnit(team,"clubman",140+(i%6)*2,-150-((i/6)|0)*2,
+      {name:"OxBand"+i,bot:{role:"war"}}));
+    const ox=G.makeUnit(team,"oxcart",142,-152,{name:"BenchOx",bot:{role:"citizen",res:"wood"}});
+    made.push(ox);
+    for(const u of made)u.bandRef=null;
+    G.manageBands(D);
+    const drafted=!!ox.bandRef||D.bands.some(b=>b.members.includes(ox));
+    const prog=G.hasProg(ox);
+    const worker=G.isWorker(ox), cartWorker=G.isWorker({cls:"tradecart"}), soldier=G.isWorker(made[0]);
+    D.bands=bands0;
+    for(const u of made){u.bandRef=null;u.alive=false;}
+    check("v134.4 the ox is a CIVILIAN: never dealt into a band ("+(drafted?"DRAFTED":"left alone")+
+      "), earns no veteran levels (hasProg "+prog+"), and isWorker reads ox "+worker+" / trade cart "+
+      cartWorker+" / clubman "+soldier+". Every 'cls!==villager' in the marshal's file meant this, "+
+      "and a trade cart has quietly failed four of these tests since v99",
+      !drafted&&!prog&&worker&&cartWorker&&!soldier);
+  }
+
+  // --- 5. THE OX AT WORK: four logs a swing into a bed of 300, and it will not touch anything else.
+  {
+    const wood=G.nodes.find(n=>n.type==="wood"&&n.amount>60);
+    const gold=G.nodes.find(n=>n.type==="gold"&&n.amount>0);
+    const ox=G.makeUnit(0,"oxcart",wood.x+1.5,wood.z+1.5,{name:"WorkOx",bot:{role:"citizen",res:"wood"}});
+    ox.bot.node=wood; ox.bot.off={x:0.5,z:0.5};
+    const a0=wood.amount;
+    run(ox,20);
+    const took=a0-wood.amount, carried=ox.carry.wood;
+    // …and offered nothing but gold, it waits rather than rotating onto a vein it cannot touch
+    const ox2=G.makeUnit(0,"oxcart",gold.x+1.5,gold.z+1.5,{name:"SnubOx",bot:{role:"citizen",res:"wood"}});
+    ox2.bot.node=null;
+    const seams=G.nodes.filter(n=>n.type==="wood"&&n.amount>0).map(n=>n.amount);
+    for(const n of G.nodes)if(n.type==="wood")n.amount=0;   // the world is out of timber
+    run(ox2,4);
+    const res2=ox2.bot.res, node2=ox2.bot.node?ox2.bot.node.type:"none";
+    {let i=0;for(const n of G.nodes)if(n.type==="wood")n.amount=seams[i++];}
+    ox.alive=false; ox2.alive=false;
+    check("v134.4 the ox works timber and only timber: "+took+" logs off the seam in 20s carrying "+
+      Math.round(carried)+" of a 300 bed (a villager takes one a swing and walks home at 20) — and "+
+      "with every seam in the world empty it WAITS rather than rotating onto gold it cannot touch "+
+      "(res "+res2+", node "+node2+")",
+      took>=40&&carried>=40&&res2==="wood"&&node2==="none");
+  }
+
+  // --- 6. THE MARSHAL'S RULE: yoke when timber is short, unyoke when the stores are full.
+  {
+    const team=G.RED, D=G.directors[team];
+    const w0=G.stock[team].food, g0=G.stock[team].gold, wd0=G.stock[team].wood;
+    // stand a pit up and make sure there are hands to spare and seams being worked
+    const pit=G.makeBuilding(team,"storage_pit",160,-150,true);
+    const made=[];
+    const seam=G.nodes.find(n=>n.type==="wood"&&n.amount>0);
+    for(let i=0;i<14;i++){
+      const v=G.makeUnit(team,"villager",150+(i%7)*2,-150-((i/7)|0)*2,{name:"Hands"+i,bot:{role:"citizen",res:"wood"}});
+      if(i<4)v.bot.node=seam;
+      made.push(v);
+    }
+    G.stock[team].food=4000; G.stock[team].gold=4000; G.stock[team].wood=OX_SHORT();
+    // ⚠ AND THE TEAM HAS TO BE UNDER ITS OWN CAP, or this gate tests nothing. The campaign above
+    // yokes oxen of its own — RED had three standing when this first ran — so oxen<OX_MAX was
+    // already false and the marshal was right to order none. Take the standing ones off the board
+    // for the length of the bench and put them back after.
+    const standing=G.units.filter(u=>u.alive&&u.team===team&&u.cls==="oxcart");
+    for(const u of standing)u.alive=false;
+    let ordered=0;
+    for(let i=0;i<6&&!ordered;i++){ // directorThink has a think clock of its own
+      D.oxT=0; G.stock[team].wood=OX_SHORT();
+      G.directorThink(D);
+      // ⚠ ANY villager of this team, not just the ones this bench made. idleCitizen returns the
+      // first idle body it finds, which is as likely to be one the campaign raised — the first cut
+      // counted only its own and reported "0 ordered" on a marshal that had just yoked an ox.
+      ordered=G.units.filter(v=>v.alive&&v.team===team&&v.convertTo==="oxcart").length;
+    }
+    for(const u of standing)u.alive=true;
+    // …and now the stores are full: an ox already standing is stood down
+    const ox=G.makeUnit(team,"oxcart",160,-155,{name:"FullOx",bot:{role:"citizen",res:"wood"}});
+    let stoodDown=false;
+    for(let i=0;i<6&&!stoodDown;i++){
+      G.stock[team].wood=G.OX_WOOD_FULL+500; D.oxT=0;
+      G.directorThink(D);
+      stoodDown=ox.cls==="villager";
+    }
+    // …and a LOADED bed is never stood down: the same ox, holding logs, keeps its yoke
+    const ox2=G.makeUnit(team,"oxcart",162,-155,{name:"LoadedOx",bot:{role:"citizen",res:"wood"}});
+    ox2.carry.wood=120;
+    for(let i=0;i<4;i++){G.stock[team].wood=G.OX_WOOD_FULL+500; D.oxT=0; G.directorThink(D);}
+    const keptLoaded=ox2.cls==="oxcart";
+    ox2.alive=false;
+    G.stock[team].food=w0; G.stock[team].gold=g0; G.stock[team].wood=wd0;
+    ox.alive=false; pit.alive=false; for(const v of made){v.convertTo=null;v.alive=false;}
+    for(const v of G.units)if(v.team===team&&v.convertTo==="oxcart"){v.convertTo=null;v.convertAt=null;}
+    check("v134.4 the marshal yokes an ox when timber is short ("+ordered+" ordered at a wood stock "+
+      "under "+G.OX_WOOD_WANT+") and UNYOKES one when the stores are full over "+G.OX_WOOD_FULL+
+      " ("+(stoodDown?"stood down":"still yoked")+"). Measured: two oxen that were never stood down "+
+      "filled a team's stores to 14,012 wood it had nothing to spend on, with two bodies off the "+
+      "fields to do it. A LOADED ox keeps its yoke ("+(keptLoaded?"kept":"STOOD DOWN LOADED")+
+      ") — standing one down at 280 logs would leave a villager carrying fourteen times its cap",
+      ordered>=1&&stoodDown&&keptLoaded);
+  }
+}
+
+// ==================== v134.5 WHAT THE SQUARES PAY ====================
+{
+  const G=global.__G;
+  const NM=G.neutralMarkets;
+  const own0=NM.map(m=>m.owner);
+  const setOwn=(a)=>{for(let i=0;i<NM.length;i++)NM[i].owner=a[i];};
+
+  // --- 1. THE MARGIN. BAZ_YIELD_BY_HELD is 0/1/2/4 by COUNT, so the third square is worth two of
+  //        the first and a steal pays twice. Pure arithmetic, read off the shipped table.
+  {
+    const team=G.BLUE, foe=G.RED;
+    setOwn([-1,-1,-1]);            const first =G.bazaarWorth(team,NM[0]);
+    setOwn([team,-1,-1]);          const second=G.bazaarWorth(team,NM[1]);
+    setOwn([team,team,-1]);        const third =G.bazaarWorth(team,NM[2]);
+    setOwn([team,team,team]);      const hold3 =G.bazaarWorth(team,NM[2]);   // what losing it costs
+    setOwn([foe,foe,foe]);         const steal =G.bazaarWorth(team,NM[2]);   // their THIRD: 1 + 2
+    setOwn([-1,-1,foe]);           const steal1=G.bazaarWorth(team,NM[2]);   // their only one: 1 + 1
+    setOwn(own0);
+    check("v134.5 worth: the table doubles at the sweep, so the marginal square is not a constant — "+
+      "first "+first+"/sec, second "+second+", THIRD "+third+", and holding that third is worth "+
+      hold3+" to keep. A steal from an enemy holding one pays "+steal1+", and prising the THIRD "+
+      "out of an enemy who holds all three pays "+steal+" — your gain and their loss at once",
+      first===3&&second===3&&third===6&&hold3===6&&steal1===6&&steal===9);
+  }
+
+  // --- 2. THE POSTING IS RANKED BY WORTH, AND THE GRAND DOES NOT WIN BY BEING GRAND. The old sort
+  //        was Grand-first, a v132.26 fossil: the Grand's premium ended at v132.27 and it is the
+  //        biggest plaza in the middle of the map — the hardest of the three to hold, same pay.
+  {
+    const team=G.BLUE;
+    setOwn([-1,-1,-1]);
+    const p=G.bandHoldPoint(team,0);
+    const grand=NM.find(m=>m.grand);
+    // ⚠ THE SAME ORIGIN THE CODE RANKS FROM. bandHoldPoint measures from TCPOS — the throne's
+    // FIXED position — and this gate measured from teamTC(), the Town Center building, which on
+    // SMOKE_SEED=1 the campaign had razed and rebuilt somewhere else. Two different origins, one
+    // red gate, nothing wrong with either piece of code.
+    const tc={x:G.TCPOS[team][0],z:G.TCPOS[team][1]};
+    const nearest=NM.slice().sort((a,b)=>
+      Math.hypot(a.x-tc.x,a.z-tc.z)-Math.hypot(b.x-tc.x,b.z-tc.z))[0];
+    // …and with two already held, the LAST one outranks everything, wherever it sits
+    setOwn([team,team,-1]);
+    const sweep=G.bandHoldPoint(team,0);
+    // ⚠ READ THE VERDICT BEFORE PUTTING THE BOARD BACK. The first cut asked
+    // "sweep.baz.owner!==team" inside the check() call — which runs AFTER setOwn(own0) — so on any
+    // seed where the campaign really did own that square, the gate reported the staged answer as a
+    // held one and went red on a posting that was correct. Take the reading while the staging
+    // is still standing.
+    const sweepUnheld=!!(sweep.baz&&sweep.baz.owner!==team);
+    const sweepWorth=G.bazaarWorth(team,sweep.baz);
+    setOwn(own0);
+    check("v134.5 posting: with everything up for grabs the band takes the square this throne can "+
+      "keep — the nearest, not the Grand ("+(p.baz===grand?"THE GRAND":"a road square")+", "+
+      (p.baz===nearest?"nearest":"not nearest")+") — and with two held it goes for the one that "+
+      "COMPLETES THE SWEEP ("+(sweepUnheld?"the unheld one":"a held one")+
+      ", worth "+sweepWorth+"/sec against 3 for either of the others)",
+      p.baz===nearest&&p.baz!==grand&&sweepUnheld&&sweepWorth===6);
+  }
+
+  // --- 3. THE DOCTRINE ASKS FOR A GUARD. Before this the want-list counted only squares still up
+  //        for grabs, so a team holding two asked for one band and a team holding all three asked
+  //        for none — and then wondered where they went.
+  {
+    const team=G.RED, D=G.directors[team], pers0=D.pers, bands0=D.bands;
+    D.pers="expand"; D.bands=[];
+    const made=[];
+    for(let i=0;i<40;i++){
+      const u=G.makeUnit(team,"clubman",120+(i%10)*2,-170-((i/10)|0)*2,{name:"Guard"+i,bot:{role:"war"}});
+      u.bandRef=null; made.push(u);
+    }
+    setOwn([team,team,team]);                         // the map is swept: everything to lose
+    for(let i=0;i<4;i++)G.manageBands(D);
+    const holds=D.bands.filter(b=>b.role==="hold");
+    let onSquare=0;
+    for(const b of holds)if(b.point&&b.point.baz&&b.point.baz.owner===team)onSquare++;
+    setOwn(own0);
+    D.pers=pers0; D.bands=bands0;
+    for(const u of made){u.bandRef=null;u.alive=false;}
+    // ⚠ TWO, NOT ONE. The want-list always carried a single base "hold" entry, so a swept map still
+    // dealt ONE hold band and the first cut of this gate passed with the guard entry mutated out —
+    // it was asserting the base entry. What v134.5 adds is a hold band FOR WHAT IS HELD, on top of
+    // the ones asked for by what is still up for grabs, and a count is the only way to see it.
+    check("v134.5 guard: with all three squares held the doctrine asks for a band to KEEP them — "+
+      holds.length+" hold bands dealt, "+onSquare+" of them standing on a square this team owns. "+
+      "The want-list used to count only squares still up for grabs, so a swept map asked for the "+
+      "one base entry and everything else went raiding",
+      holds.length>=2&&onSquare>=2);
+  }
+
+  // --- 4. THE LAST GUARD IS NOT MARCHED OFF. Same staging as the v113 relief gate — a spent tour
+  //        and a cold field — but standing on a square this team HOLDS, with no other hold band.
+  {
+    const team=G.BLUE, D=G.directors[team], bands0=D.bands, NOWT=G.getT();
+    D.bands=D.bands.filter(b=>b.role!=="hold");
+    // ⚠ THE MAP HAS TO BE SWEPT FOR THE GUARD CASE TO EXIST AT ALL. The first cut staged one held
+    // square and two up for grabs, and bandHoldPoint quite rightly posted the band to one of the
+    // two it did NOT have — so it was never guarding anything and the tour marched it off exactly
+    // as it should. A band only guards when there is nothing left to take.
+    setOwn([team,team,team]);
+    const held=NM[0];
+    const cold=G.makeUnit(team,"clubman",held.x,held.z,{name:"Sentry45",bot:{role:"war"}});
+    const hb={id:9451,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,
+              laneZ:0,laneUntil:NOWT+999};
+    cold.bandRef=hb; D.bands.push(hb);
+    // HOLD_WATCH is 48: an enemy inside that resets the contact clock and the band is right not to
+    // be relieved. Isolating 40 left a band of them in the 40-48 ring on SMOKE_SEED=42 and the
+    // second half of this gate read a working contact rule as a broken tour.
+    const cellar=isolateArea(held.x,held.z,G.HOLD_WATCH+8,{team:1-team,keep:[cold]});
+    const capWas=NM.map(m=>({m,cap:m.cap,capTeam:m.capTeam}));
+    for(const m of NM){m.cap=0;m.capTeam=-1;}          // nothing mid-capture: only the guard rule
+    G.manageBands(D);
+    const stayed=hb.role==="hold"&&hb.point&&hb.point.baz&&hb.point.baz.owner===team;
+    // …and with a SECOND hold band on the board the tour runs as it always did
+    const cold2=G.makeUnit(team,"clubman",held.x+3,held.z+3,{name:"Sentry45b",bot:{role:"war"}});
+    const hb2={id:9452,role:"hold",members:[cold2],holdUntil:NOWT-1,lastContact:NOWT-9999,
+               laneZ:0,laneUntil:NOWT+999};
+    cold2.bandRef=hb2; D.bands.push(hb2);
+    G.manageBands(D);
+    const relieved=D.bands.filter(b=>(b===hb||b===hb2)&&b.role!=="hold").length;
+    cellar.restore();
+    for(const e of capWas){e.m.cap=e.cap;e.m.capTeam=e.capTeam;}
+    setOwn(own0);
+    D.bands=bands0; cold.alive=false; cold2.alive=false; cold.bandRef=null; cold2.bandRef=null;
+    check("v134.5 guard: the LAST band on a square we hold is not relieved by the tour clock ("+
+      (stayed?"held its ground":"WALKED OFF")+") — an unguarded bazaar looks exactly like quiet "+
+      "ground right up until somebody strolls onto it — and with a second hold band on the board "+
+      "the tour runs as usual ("+relieved+" of the two relieved)",
+      stayed&&relieved>=1);
+  }
+
+  // --- 5. THE PATROL WALKS THE SQUARES. Four waypoints in a box within 26 of the town centre, on
+  //        the safest ground on the map, while the thing that pays 12 a second sits out on the road.
+  {
+    const team=G.RED, D=G.directors[team];
+    setOwn([team,-1,team]);
+    const bd={id:9460,role:"patrol",members:[],laneZ:0,laneUntil:G.getT()+999};
+    const u=G.makeUnit(team,"clubman",130,-160,{name:"Walker",bot:{role:"war"}});
+    u.bandRef=bd; bd.members.push(u);
+    D.bands.push(bd);
+    G.manageBands(D);
+    const wps1=(bd.wps||[]).length;
+    let onSq=0;
+    for(const w of (bd.wps||[]))for(const m of NM)
+      if(m.owner===team&&Math.hypot(w.x-m.x,w.z-m.z)<0.01)onSq++;
+    // …and the round is rebuilt when the board changes: take the third square and it joins the walk
+    setOwn([team,team,team]);
+    G.manageBands(D);
+    const wps2=(bd.wps||[]).length;
+    setOwn(own0);
+    D.bands=D.bands.filter(b=>b!==bd);
+    u.bandRef=null; u.alive=false;
+    check("v134.5 patrol: the round takes in the squares this team holds ("+wps1+" waypoints, "+
+      onSq+" of them ON a held square) and is REBUILT when the board changes (took a third square: "+
+      wps1+" -> "+wps2+" waypoints). It was four points in a box within 26 of the town centre, set "+
+      "once for the life of the band",
+      onSq===2&&wps2===wps1+1);
   }
 }
 

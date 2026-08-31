@@ -1683,7 +1683,7 @@ function dealDamage(att,victim,dmg){
   // fleeing bots get poked awake
   if(victim.bot)victim.bot.lastHitT=T;
   // a worker under attack raises a DISTRESS call — the war room hears about it
-  if(victim.bot&&(victim.cls==="villager"||victim.bot.role==="cart")&&
+  if(victim.bot&&isWorker(victim)&& // v134.4: …and a yoked ox is a worker (role "citizen", trade class)
      att&&att.team!==undefined&&att.team!==victim.team&&
      !(att.bot&&att.bot.role==="creep")&& // camp creeps never bait rescue bands into the wilds — the AI leaves camps alone
      typeof directors!=="undefined"&&directors[victim.team]){
@@ -1702,7 +1702,7 @@ function dealDamage(att,victim,dmg){
     // not what should make a veteran, and camps already pay through campPayParticipants below.
     // Counted on the killer, so a bot that dies loses the part-progress with everything else.
     if(attU&&!isHuman(attU)&&hasProg(attU)&&attU.alive&&attU.team!==victim.team&&
-       victim.team!==NEUTRAL&&victim.cls!=="villager"&&!(victim.bot&&victim.bot.role==="cart")&&
+       victim.team!==NEUTRAL&&!isWorker(victim)&& // v134.4: an ox pays no veteran progress either
        typeof npcAdvance==="function"){
       // v134.2 the rate is the DIFFICULTY DIAL. diffFor() is the same routing the marshal's think
       // clock and train tempo already use, so a team holding a human advances at "normal" whatever

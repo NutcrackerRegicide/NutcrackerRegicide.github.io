@@ -385,7 +385,7 @@ function findPitSpotForFarms(team){ // no room left? plant a NEW pit a field's w
 function counterWeights(team,base){
   let eM=0,eA=0,eR=0,eC=0,eS=0;
   for(const e of units){
-    if(!e.alive||e.team!==1-team||e.isKing||e.cls==="villager")continue;
+    if(!e.alive||e.team!==1-team||e.isKing||isWorker(e))continue; // v134.4: carts are not a line to counter
     const l=CLS[e.cls].line;
     if(CLS[e.cls].mounted)eC++;
     else if(l==="melee")eM++;
@@ -474,8 +474,13 @@ function directorThink(D){
       }else if(!validFor(wt,s.x,s.z,team))D.wallPlaced++; // blocked ground: skip the segment
     }else{
       const anyWall=buildings.some(b=>b.team===team&&b.alive&&b.def.wall&&!b.def.gate);
-      if(!anyWall&&!D.wallRetry){ // the whole line was inside the town: step 14 paces farther out, once
-        D.wallRetry=1; D.wallFront=(D.wallFront||30)+14; D.wallPlan=null;
+      // v134.4: THREE steps, not one. This was !D.wallRetry — a single boolean — and on SMOKE_SEED
+      // =42 with the v134.4 economy a turtle at age 5 had all eight of its segments refused at 34
+      // and all eight again at 44, then set wallsDone with nothing standing. A bigger, older town
+      // needs the curtain further out than one step of fourteen; three steps reach 76 from the
+      // throne, and a turtle that cannot find room at any of them is genuinely full and stands down.
+      if(!anyWall&&(D.wallRetry||0)<3){ // the whole line was inside the town: step 14 paces out
+        D.wallRetry=(D.wallRetry||0)+1; D.wallFront=(D.wallFront||30)+14; D.wallPlan=null;
       }else{ // the curtain stands: set the gate into the segment nearest the Kings Road
         let g=null,gd=1e12;
         for(const b of buildings){
@@ -492,7 +497,7 @@ function directorThink(D){
   if(pendingBld(team).length<2&&countBld(team,"storage_pit")<Math.max(3,P.pits)&&affordKeep(team,BLD.storage_pit.cost,0,0)){
     const tc=TCPOS[team];
     for(const u of units){
-      if(!u.alive||u.team!==team||u.cls!=="villager"||!u.bot||!u.bot.node)continue;
+      if(!u.alive||u.team!==team||!isWorker(u)||!u.bot||!u.bot.node)continue; // v134.4: the ox counts — it works furthest out
       const n=u.bot.node;
       if(dist2(n.x,n.z,tc[0],tc[1])<55*55)continue; // close enough to walk
       let covered=false;
@@ -556,8 +561,52 @@ function directorThink(D){
       }else b.cartT=175; // wait for a slot to free up
     }
   }
+  // --- v134.4 the pit yokes an ox when timber is the shortage ---
+  // Deliberately shaped like the market's cart rule above rather than like the training pool: a
+  // count, a cap and a clock. The ox comes out of idleCitizen — the SAME pool that arms up — which
+  // is why OX_MIN_VILLS sits above the training floor rather than at it.
+  if(T>(D.oxT||0)&&countBld(team,"storage_pit")>0&&stock[team].wood<OX_WOOD_WANT){
+    let oxen=0,vills=0,cutters=0;
+    for(const u of units){
+      if(!u.alive||u.team!==team||!u.bot||u.isKing)continue;
+      if(u.cls==="oxcart")oxen++;
+      else if(u.cls==="villager")vills++;
+      if(u.bot.node&&u.bot.node.type==="wood")cutters++;
+    }
+    if(oxen<OX_MAX&&vills>=OX_MIN_VILLS&&cutters>=OX_MIN_CUTTERS&&
+       affordKeep(team,CLS.oxcart.cost,P.reserveF,P.reserveG)){
+      const c=idleCitizen(team);
+      if(c){
+        pay(team,CLS.oxcart.cost);
+        c.convertTo="oxcart"; c.convertAt="storage_pit"; // the same road a soldier walks to arm up
+        D.oxT=T+OX_EVERY;
+      }
+    }
+  }
+  // …and the yoke comes OFF when the stores are full. No refund — the 75 gold is spent — but the
+  // body goes back to the fields and the mines, which is where a marshal with five thousand wood in
+  // the stores and nothing to build needs it. Measured before this rule existed: two oxen filled a
+  // team's stores to 14,012 wood by the twentieth minute while that team AGED DOWN relative to the
+  // same seed without them — the timber was free and the two bodies were not. It keeps whatever is
+  // in the bed: the villager it becomes is over its carry cap on the first frame, so its next act
+  // is to walk it home.
+  if(T>(D.oxT||0)&&stock[team].wood>OX_WOOD_FULL){
+    for(const u of units){
+      if(!u.alive||u.team!==team||u.cls!=="oxcart"||!u.bot||u.remote||u.isPlayer)continue;
+      // ⚠ NOT WITH A LOADED BED. setClass does not move what is in it, so standing an ox down at
+      // 280 logs would leave a villager carrying fourteen times its own cap — and the deposit rule
+      // in this file is "no more telepathic deposits", so banking it from wherever it stands is not
+      // the answer either. It has an empty bed the instant after every haul; stand it down then.
+      if(u.carry.food+u.carry.gold+u.carry.stone+u.carry.wood>0)continue;
+      setClass(u,"villager");
+      u.bot.res="food"; u.bot.node=null; u.bot.haul=false;
+      D.oxT=T+OX_EVERY;
+      if(team===BLUE)msg("An ox is unyoked — the stores are full of timber.","blue");
+      break;
+    }
+  }
   // --- raid waves: the doctrine sets when, how many, and how often ---
-  const mil=units.filter(u=>u.alive&&u.team===team&&u.bot&&!u.isKing&&u.cls!=="villager");
+  const mil=units.filter(u=>u.alive&&u.team===team&&u.bot&&!u.isKing&&!isWorker(u)); // v134.4: an ox is not a raider
   if(T>D.nextRaid&&mil.length>=P.raidMin){
     D.nextRaid=T+(P.raidEvery+Math.random()*P.raidJit)*DF.raidMul;
     D.raidUntil=T+55;
@@ -583,6 +632,25 @@ function nearestEnemyOf(u,maxD){
   }
   return best;
 }
+// ---- v134.4 THE OX AT THE PIT ----
+// OX_MAX: oxen a team will yoke. Two is a deliberate floor-to-ceiling: each one costs a working
+//   body as well as 75 food and 75 gold, and a marshal that turns its workforce into carts has
+//   traded its army for timber it cannot spend.
+// OX_MIN_VILLS: …and it will not take that body from a small workforce.
+// OX_WOOD_WANT / OX_WOOD_FULL: only when TIMBER is the shortage, and off again when it is not.
+//   ⚠ THESE ARE READ OFF THE ACTUAL CURVE, not guessed. Sampled every minute of a twenty-minute
+//   campaign, a team's wood stock runs: 75 at the whistle, 10-25 by minute one (the opening
+//   buildings), 500-900 by two, 1500-2700 by four, then a plateau between 2600 and 4600. The first
+//   cut of this rule used 800, which is a window that closes at minute two — before the team has a
+//   Storage Pit to yoke at or 75 spare gold — and measured ZERO oxen across four campaigns. A
+//   threshold has to be picked against the curve the game actually produces.
+// OX_MIN_CUTTERS: …and only for a team that is genuinely working timber.
+// OX_EVERY: seconds between yokings, so a windfall does not buy the whole team at once.
+// OX_WOOD_FULL: …and it UNYOKES when the bed has done its job. Measured on a twenty-minute
+//   campaign: two oxen filled the stores to 7205 wood the marshal had nothing to spend on while
+//   the same two bodies were not farming or mining. An ox is a worker as well as a cart, and the
+//   hysteresis between WANT and FULL is what stops it flipping back and forth every think.
+const OX_MAX=2, OX_MIN_VILLS=10, OX_MIN_CUTTERS=3, OX_WOOD_WANT=3000, OX_WOOD_FULL=5000, OX_EVERY=45;
 function botFindNode(u,res){
   let best=null,bd=1e12;
   for(const n of nodes){
@@ -599,7 +667,7 @@ function botFindNode(u,res){
 const CHARGE_DIST=85; // how far F hurls the rallied line down the commander's gaze (a dial)
 function orderCharge(commander,yaw){
   // v95 PERSONAL WARBANDS: F hurls only the soldiers rallied by THIS commander
-  const mil=units.filter(v=>v.alive&&v.team===commander.team&&v.bot&&!v.isKing&&!v.remote&&v.rally&&(v.rallyBy===commander||!v.rallyBy)&&v.cls!=="villager");
+  const mil=units.filter(v=>v.alive&&v.team===commander.team&&v.bot&&!v.isKing&&!v.remote&&v.rally&&(v.rallyBy===commander||!v.rallyBy)&&!isWorker(v)); // v134.4
   if(!mil.length)return 0;
   const fx=-Math.sin(yaw),fz=-Math.cos(yaw);
   const sx=commander.root.position.x,sz=commander.root.position.z;
@@ -707,7 +775,7 @@ function bandTargetEcon(team){ // juiciest target: carts and working villagers, 
   for(const v of units){
     if(!v.alive||v.team!==et)continue;
     const cart=v.bot&&v.bot.role==="cart";
-    const vil=v.cls==="villager"&&dist2(v.root.position.x,v.root.position.z,TCPOS[et][0],TCPOS[et][1])>26*26;
+    const vil=isWorker(v)&&dist2(v.root.position.x,v.root.position.z,TCPOS[et][0],TCPOS[et][1])>26*26; // v134.4: a loaded wain most of all
     if(!cart&&!vil)continue;
     const d=dist2(v.root.position.x,v.root.position.z,TCPOS[team][0],TCPOS[team][1]);
     if(d<bd){bd=d;best=v;}
@@ -753,17 +821,38 @@ function bandCampTarget(D,team){
   }
   return best;
 }
-function bandHoldPoint(team,idx){ // an unheld SQUARE first, then a castle, then the road
+// ---- v134.5 WHAT A SQUARE IS WORTH, IN RESOURCES A SECOND, TO THIS TEAM, RIGHT NOW ----
+// BAZ_YIELD_BY_HELD is indexed by the COUNT held: 0/1/2/4 of each of three resources. The value of
+// one square is therefore a MARGIN and it moves as the board moves — your third is worth two of
+// your first, and one taken from the enemy pays your gain AND their loss on the same march.
+// ⚠ IT IS NOT A PROPERTY OF THE BUILDING. The Grand's premium ended at v132.27; what survived it
+// was a Grand-first sort in the posting, which spent most of this AI's square-seconds on the
+// hardest square of the three (11.4 of plaza, in the middle of the map) for identical pay.
+function bazaarWorth(team,m){
+  if(!m)return 0;
+  const B=BAZ_YIELD_BY_HELD, cap=B.length-1;
+  const at=(n)=>B[Math.max(0,Math.min(n,cap))]||0;
+  let mine=0,theirs=0;
+  for(const q of neutralMarkets){if(q.owner===team)mine++;else if(q.owner===1-team)theirs++;}
+  if(m.owner===team)return (at(mine)-at(mine-1))*3;      // what LOSING this one would cost us
+  const gain=at(mine+1)-at(mine);                        // …what taking it would pay
+  const deny=(m.owner===1-team)?(at(theirs)-at(theirs-1)):0; // …and what it costs them to lose it
+  return (gain+deny)*3;                                  // three resources, so three times over
+}
+function bandHoldPoint(team,idx){ // the square that pays most, held or not, then the road
   // v134.3 THE CASTLE USED TO COME FIRST, AND EVERY DOCTRINE BUILDS A CASTLE. From the moment the
   // first one finished, no band was ever posted to a bazaar again — which quietly retired the whole
   // v132.26 change below at about minute ten, and left squares paying 4 a second standing neutral
   // for a whole match (measured: seed 11, twenty minutes, one square never claimed by anybody).
   // Standing in your own courtyard is not worth more than the thing that pays. Once every square IS
   // yours the castle posting is right again, and that is exactly what this falls through to.
-  const _free=(typeof neutralMarkets!=="undefined")?neutralMarkets.filter(m=>m.owner!==team):[];
-  const own=buildings.filter(b=>b.alive&&b.built&&b.team===team&&b.type==="castle");
-  if(own.length&&!_free.length){const c=own[idx%own.length];const hr=(bSurf(c.def)+3)*0.7071; // +4,+4 was 5.66 out; a castle blocks to 19.8
-    return {x:c.x+hr,z:c.z+hr,why:"castle"};}
+  // v134.5 THE CASTLE POSTING IS GONE. v134.3 put the castle back for a swept map — "once every
+  // square is yours the castle posting is right again" — and that was wrong twice over: a swept map
+  // pays 12 a second, the largest income in the game, and the instant it is swept is the instant it
+  // is worth guarding. Measured on v134.4: blue took ten squares across three campaigns and lost
+  // five of them, because the doctrine asked for a hold band per square STILL UP FOR GRABS, so a
+  // team that held them all asked for none and the last band went home to stand in its courtyard.
+  // A castle guards itself; it has walls, towers and a garrison. A bazaar has a plinth.
   // v132.26 A BAZAAR IS WORTH TAKING NOW, AND THIS USED TO STAND THREE UNITS OUTSIDE IT. The old
   // line dealt bazaars round-robin by band index and posted the band at (m.x+3, m.z+3) — outside
   // the plaza on the small ones, so a hold band would have stood beside a capturable objective for
@@ -771,12 +860,20 @@ function bandHoldPoint(team,idx){ // an unheld SQUARE first, then a castle, then
   // square this team does not already hold: the Grand first, because it pays three times either of
   // the others, then whichever of the rest is nearest this throne.
   if(neutralMarkets.length){
-    const want=neutralMarkets.filter(m=>m.owner!==team);
-    const pool=want.length?want:neutralMarkets;
-    pool.sort((a,b)=>(b.grand?1:0)-(a.grand?1:0)||
-      dist2(a.x,a.z,TCPOS[team][0],TCPOS[team][1])-dist2(b.x,b.z,TCPOS[team][0],TCPOS[team][1]));
-    const m=pool[idx%pool.length];
-    return {x:m.x,z:m.z,why:"bazaar",baz:m};
+    // v134.5 RANKED BY WHAT IT PAYS, then by which one this throne can realistically keep. The old
+    // sort was (b.grand?1:0)-(a.grand?1:0) || nearest — Grand first, and the Grand has paid exactly
+    // what the other two pay since v132.27. On the three seeds measured it took 546 of blue's 921
+    // square-seconds, 971 of 1756 and 888 of 2925: most of this army's holding, spent on the one
+    // square hardest to hold, for no premium at all.
+    const _rank=(a,b)=>bazaarWorth(team,b)-bazaarWorth(team,a)||
+      dist2(a.x,a.z,TCPOS[team][0],TCPOS[team][1])-dist2(b.x,b.z,TCPOS[team][0],TCPOS[team][1]);
+    // …and the ones we do NOT hold are spoken for first: a band that takes a square earns more than
+    // a band that stands on one we already have. Guarding is what the spare bands are for.
+    const want=neutralMarkets.filter(m=>m.owner!==team).sort(_rank);
+    const mine=neutralMarkets.filter(m=>m.owner===team).sort(_rank);
+    const order=want.concat(mine);
+    const m=order[idx%order.length];
+    return {x:m.x,z:m.z,why:m.owner===team?"guard":"bazaar",baz:m};
   }
   const tc=TCPOS[team],et=TCPOS[1-team];
   return {x:tc[0]+(et[0]-tc[0])*0.35,z:tc[1]+(et[1]-tc[1])*0.35,why:"road"};
@@ -786,12 +883,12 @@ function manageBands(D){
   D.bands=D.bands||[];
   for(const bd of D.bands) // prune the dead, the possessed, the re-classed
     bd.members=bd.members.filter(v=>v.alive&&!v.remote&&v.team===team&&v.bot&&!v.isKing&&
-      v.cls!=="villager"&&v.bot.role!=="cart"&&CLS[v.cls].line!=="healer"&&v.bandRef===bd);
+      !isWorker(v)&&CLS[v.cls].line!=="healer"&&v.bandRef===bd); // v134.4: isWorker covers the cart role AND the ox
   D.bands=D.bands.filter(bd=>bd.members.length>0||bd.role==="kingsguard");
   const roster=[];
   for(const v of units){
     if(!v.alive||v.team!==team||!v.bot||v.isKing||v.remote)continue;
-    if(v.cls==="villager"||v.bot.role==="cart"||CLS[v.cls].line==="healer")continue;
+    if(isWorker(v)||CLS[v.cls].line==="healer")continue; // v134.4: no wain is dealt into a band
     if(!v.bandRef||!D.bands.includes(v.bandRef))roster.push(v);
   }
   // --- threat at the throne ---
@@ -836,9 +933,19 @@ function manageBands(D){
   if(roster.length>=20||D.raidUntil||((PB.assassins||0)&&roster.length>=10))wantRoles.push("assassin");
   // v134.3 ONE HOLD BAND PER SQUARE STILL UP FOR GRABS. Three bazaars pay 1, 2 and 4 a second of
   // food AND gold AND wood by count held; an army that fields one hold band can take one square.
-  {const _free=(typeof neutralMarkets!=="undefined")
-      ?neutralMarkets.filter(m=>m.owner!==team).length:0;
-   for(let i=1;i<_free&&wantRoles.length<9;i++)wantRoles.push("hold");}
+  {const _nm=(typeof neutralMarkets!=="undefined")?neutralMarkets:[];
+   const _free=_nm.filter(m=>m.owner!==team).length, _held=_nm.filter(m=>m.owner===team).length;
+   for(let i=1;i<_free&&wantRoles.length<9;i++)wantRoles.push("hold");
+   // v134.5 …AND ONE MORE WHEN THE NEXT SQUARE COMPLETES THE SWEEP. The table doubles at three
+   // (1/2/4), so the last square is worth two of the first — the one moment in this game where the
+   // marginal objective is worth MORE than the one before it, and the AI has been treating them
+   // all alike. Measured: the two armies together collected a mean of 1.84, 2.44 and 3.26 of a
+   // possible 4 over three campaigns, so the doubling was very nearly never collected by anybody.
+   if(_free>0&&_held===_nm.length-1&&wantRoles.length<9)wantRoles.push("hold");
+   // v134.5 …AND ONE TO GUARD WHAT IS ALREADY HELD. This list asked only for squares still up for
+   // grabs, so a team that held some asked for nothing to keep them and lost a third to a half of
+   // everything it took (10 taken, 5 lost, blue, three seeds).
+   if(_held>0&&wantRoles.length<9)wantRoles.push("hold");}
   // v134.3 …AND ONE BAND FOR THE WILDS, once there is an army to spare it from and the throne is
   // quiet. Nine camps, a 300-resource chest on a 180-second cycle, and since v134.2 a pack is
   // worth levels to whoever breaks it — and until now every one of them was a human prize by
@@ -848,7 +955,7 @@ function manageBands(D){
   // rarely that deep. This is also the one mission a trickle may NOT found — camps cost bodies, and
   // three soldiers walking into a pack of five is a donation.
   if(roster.length>=BAND_MIN&&threat<CAMP_MAX_THREAT&&
-     units.filter(v=>v.alive&&v.team===team&&v.bot&&!v.isKing&&v.cls!=="villager").length>=CAMP_MIN_MIL&&
+     units.filter(v=>v.alive&&v.team===team&&v.bot&&!v.isKing&&!isWorker(v)).length>=CAMP_MIN_MIL&& // v134.4
      bandCampTarget(D,team))wantRoles.push("camp");
   // v134.3 …AND THE PICKER CAN COUNT NOW. It used to be:
   //     let role=wantRoles[0],least=1e9;
@@ -921,7 +1028,7 @@ function manageBands(D){
         cx/=cn;cz/=cn;
         for(const e of units){ // only the ENEMY ARMY holds a posting — a nearby wild camp is
           // scenery, and letting creeps reset the clock is exactly how a band ends up parked forever
-          if(!e.alive||e.team===team||e.team===NEUTRAL||e.cls==="villager")continue;
+          if(!e.alive||e.team===team||e.team===NEUTRAL||isWorker(e))continue; // v134.4: a passing cart is not contact
           if(dist2(e.root.position.x,e.root.position.z,cx,cz)<HOLD_WATCH*HOLD_WATCH){bd.lastContact=T;break;}
         }
       }
@@ -930,7 +1037,12 @@ function manageBands(D){
       // marched off it at 59% would waste the whole tour and hand the square back.
       const _bz=bd.point&&bd.point.baz;
       const _taking=_bz&&(_bz.owner!==team)&&(_bz.capTeam===team||_bz.cap>0.02);
-      if(T>bd.holdUntil&&T-(bd.lastContact||0)>HOLD_QUIET&&!_taking){ // relieved — march on
+      // v134.5 …AND THE LAST GUARD ON A SQUARE WE HOLD DOES NOT WALK AWAY FROM IT. The tour clock
+      // exists so a band does not stand on quiet ground for ever, and quiet ground is exactly what
+      // an unguarded bazaar looks like right up until somebody strolls onto it. One band may be
+      // pinned this way, never more: with a second hold band on the board the tour runs as usual.
+      const _guard=_bz&&_bz.owner===team&&D.bands.filter(b=>b.role==="hold").length<=1;
+      if(T>bd.holdUntil&&T-(bd.lastContact||0)>HOLD_QUIET&&!_taking&&!_guard){ // relieved — march on
         // v134.3 …AND THE WILDS ARE ONE OF THE MISSIONS IT CAN TAKE. Measured: a marshal forms one
         // or two mission bands in a whole twenty-minute campaign — the kingsguard absorbs the army
         // (kgBase plus threat, up to 14) and the loose pool reaches five only five or six times a
@@ -977,9 +1089,20 @@ function manageBands(D){
       // the throne outranks the treasure, always — bd.defend is already set above from threat
     }
     if(bd.role==="patrol"){
-      if(!bd.wps){
+      // v134.5 THE PATROL SWEEPS THE SQUARES TOO. These four waypoints are a box within 26 of the
+      // town centre — a loop around ground that already has a Town Center, a kingsguard and every
+      // building this team owns standing on it. Meanwhile the thing that pays 12 a second sits out
+      // on the road with at most one band on it. A patrol is the cheapest defence in the game and
+      // it was walking circles in the safest place on the map.
+      // ⚠ AND THE LIST IS REBUILT WHEN THE BOARD CHANGES. bd.wps was set once and kept for the
+      // life of the band, so a square taken after the band formed would never have been walked.
+      const _hk=(typeof neutralMarkets!=="undefined")?neutralMarkets.map(m=>m.owner).join(""):"";
+      if(!bd.wps||bd.wpKey!==_hk){
         const tc=TCPOS[team];
         bd.wps=[{x:tc[0]+side*15,z:tc[1]+11},{x:tc[0]+side*22,z:tc[1]+16},{x:tc[0]+side*4,z:tc[1]-24},{x:tc[0]+side*26,z:tc[1]-6}];
+        if(typeof neutralMarkets!=="undefined")
+          for(const m of neutralMarkets)if(m.owner===team)bd.wps.push({x:m.x,z:m.z});
+        bd.wpKey=_hk;
         bd.wi=0;
       }
       const wp=bd.wps[bd.wi]; let near=0;
@@ -1024,7 +1147,7 @@ function manageBands(D){
   if(tcL){
     let foes=0,defs=0;
     for(const e of units){
-      if(!e.alive||e.cls==="villager"||e.isKing)continue;
+      if(!e.alive||isWorker(e)||e.isKing)continue; // v134.4: a stray cart does not raise the levy
       if(dist2(e.root.position.x,e.root.position.z,tcL.x,tcL.z)<34*34){
         if(e.team!==team)foes++; else defs++;
       }
@@ -1088,7 +1211,13 @@ function updateBot(u,dt){
         if(typeof Sound!=="undefined"&&u.team===MYTEAM)Sound.play("bazaarload",{x:u.root.position.x,z:u.root.position.z});
         if(typeof NET!=="undefined"&&NET.mode==="host"&&typeof teamHasHuman==="function"&&teamHasHuman(u.team))NET.bcast({t:"snd",k:"bazaarload",team:u.team,x:u.root.position.x,z:u.root.position.z});}
     }else{
-      if(moveToward(u,home.x+bSurf(home.def)+2,home.z,dt,bStand(home.def,home.def.r*0.5+2.5))){
+      // v134.4 …AND SO DID THE TRADE CART, which is the worst of the three: the aim point was a
+      // fixed EAST-of-the-market spot at bSurf+2 = 14.7 off centre against a stop of 11.60. Near
+      // side 6.20, far side 23.20. A cart whose bazaar lies west of its market could never deliver
+      // — it arrived, failed the test, and orbited its own market for the rest of the match with
+      // the gold still on board. v104 shipped it and nothing has ever measured it.
+      const _cdx=u.root.position.x-home.x,_cdz=u.root.position.z-home.z,_cl=Math.hypot(_cdx,_cdz)||1;
+      if(moveToward(u,home.x+_cdx/_cl*(bSurf(home.def)+1.2),home.z+_cdz/_cl*(bSurf(home.def)+1.2),dt,1.6)){
         const d=Math.hypot(home.x-u.tradeTarget.x,home.z-u.tradeTarget.z);
         const g=tradeGold(d);
         stock[u.team].gold+=g;
@@ -1116,7 +1245,9 @@ function updateBot(u,dt){
     return;
   }
   // CITIZENS
-  if(u.cls==="villager"){
+  // v134.4: …and the ox works this branch too. Without it a yoked ox falls through to the MILITARY
+  // branch below — 220 hp of timber wain trying to find something to hit.
+  if(isWorker(u)){
     const threat=nearestEnemyOf(u,9);
     if(threat){ // scatter AWAY from the attacker with a homeward drift — no more conga lines
       const tc=TCPOS[u.team];
@@ -1135,10 +1266,21 @@ function updateBot(u,dt){
         if(u.team===BLUE)updateResHud();
         u.convertTo=null;return;
       }
-      if(moveToward(u,bar.x+3,bar.z+3,dt,bStand(bar.def,4))){
+      // v134.4 …AND THE ARM-UP HAD THE SAME BUG, worse. This aimed at (bar.x+3, bar.z+3) — 4.24
+      // off centre, inside a barracks that blocks to 10.9 — and declared arrival within
+      // bStand(def,4) = 9.96. Near side 7.36 clears it; FAR SIDE 15.84 does not, so a citizen that
+      // walked up to its barracks from the wrong quarter stood outside it holding a paid-for
+      // conversion for the rest of the match. The team's food and gold were already spent.
+      const _adx=u.root.position.x-bar.x,_adz=u.root.position.z-bar.z,_al=Math.hypot(_adx,_adz)||1;
+      if(moveToward(u,bar.x+_adx/_al*(bSurf(bar.def)+1.2),bar.z+_adz/_al*(bSurf(bar.def)+1.2),dt,1.6)){
         setClass(u,u.convertTo);u.convertTo=null;u.convertAt=null;
+        // v134.4: the ox hauls TIMBER and nothing else — the same rule the human ox plays by
+        // (06-input.js:466, "the ox hauls TIMBER, nothing else"). Set here rather than at the
+        // decision, because until this frame the body was still a villager working its old face.
+        if(u.cls==="oxcart"&&u.bot){u.bot.res="wood";u.bot.node=null;u.bot.haul=false;}
         if(u.team===BLUE&&Math.random()<0.4&&dist(u,player)<50)
-          msg(u.name+" armed up as a "+CLS[u.cls].name+".","blue");
+          msg(u.cls==="oxcart"?(u.name+" yoked an ox at the Storage Pit.")
+                              :(u.name+" armed up as a "+CLS[u.cls].name+"."),"blue");
       }
       return;
     }
@@ -1177,17 +1319,36 @@ function updateBot(u,dt){
     // gather
     if(!b.node||b.node.amount<=0){
       b.node=botFindNode(u,b.res);
+      // v134.4 …BUT THE OX DOES NOT ROTATE. A villager whose seam runs out moves to the next
+      // resource; an ox that did would stand at a gold vein it cannot touch (06-input.js and
+      // driveRemote both refuse any node but wood), gathering nothing, forever.
+      if(!b.node&&u.cls==="oxcart")return; // no timber standing: the wain waits
       if(!b.node){b.res=b.res==="food"?"wood":b.res==="wood"?"gold":b.res==="gold"?"stone":"food";b.node=botFindNode(u,b.res);}
       if(!b.node)return; // the land is bare
       b.off={x:(Math.random()-0.5)*3.5,z:(Math.random()-0.5)*3.5};
     }
     // hands full? haul the load home — no more telepathic deposits
     const ctot=u.carry.food+u.carry.gold+u.carry.stone+u.carry.wood;
-    if(b.haul||ctot>=20){
+    // v134.4: the ox bed takes 300 (carryCap), and the whole point of it is the walking it saves —
+    // a wain that trudged home at 20 would be a slower villager that cost 75 gold.
+    const _cap=(u.cls==="oxcart")?carryCap(u):20;
+    if(b.haul||ctot>=_cap){
       b.haul=true;
       const dp=nearestDropoff(u);
       if(!dp)return;
-      if(moveToward(u,dp.x+2.5,dp.z+2,dt,bStand(dp.def,dp.type==="storage_pit"?6.5:9))){
+      // v134.4 STAND ON THE NEAR SIDE OF THE STORE, WHICHEVER SIDE THAT IS. This read
+      //     moveToward(u,dp.x+2.5,dp.z+2,dt,bStand(dp.def,dp.type==="storage_pit"?6.5:9))
+      // — a fixed corner of the building, three paces off centre and INSIDE its collider. A pit
+      // blocks to 6.9, so the nearest legal ground is 3.7 from that point on the north-east side
+      // and 10.1 from it on the south-west, against a tolerance of about 6.8. Come at the store
+      // from the wrong quarter and arrival is geometrically impossible: the hauler stalls nine
+      // paces out, the v134.0 watchdog sidesteps it, it walks back and stalls again, and it carries
+      // those twenty logs for the rest of the match. Benched at 0 wood banked in five minutes — and
+      // 0 on pristine v133 as well, so this is an old bug that v134.0 only changed the sound of.
+      // The builder's stand point three hundred lines up was given exactly this fix at v134.0.
+      const _rdx=u.root.position.x-dp.x, _rdz=u.root.position.z-dp.z, _rl=Math.hypot(_rdx,_rdz)||1;
+      const _sx=dp.x+_rdx/_rl*(bSurf(dp.def)+1.2), _sz=dp.z+_rdz/_rl*(bSurf(dp.def)+1.2);
+      if(moveToward(u,_sx,_sz,dt,1.6)){
         stock[u.team].food+=u.carry.food; stock[u.team].gold+=u.carry.gold;
         stock[u.team].stone+=u.carry.stone; stock[u.team].wood+=u.carry.wood;
         u.carry.food=0;u.carry.gold=0;u.carry.stone=0;u.carry.wood=0;
@@ -1200,8 +1361,12 @@ function updateBot(u,dt){
       u.facing=Math.atan2(b.node.x-u.root.position.x,b.node.z-u.root.position.z);
       b.gT=(b.gT||0)+dt;
       if(b.gT>0.75*(b.node.slow||1)){
-        b.gT=0;b.node.amount--;
-        u.carry[b.node.type]++;
+        // v134.4: FOUR at a swing for the ox — the same figure the human ox takes in 09-main.js
+        // ("v99: four swings' worth for the ox") and in driveRemote. The swing TIME is unchanged,
+        // so the axe is four times the villager's and the arithmetic lives in one place.
+        const _tk=Math.min((u.cls==="oxcart")?4:1,b.node.amount);
+        b.gT=0;b.node.amount-=_tk;
+        u.carry[b.node.type]+=_tk;
         u.swing=0.2;
         if(b.node.amount<=0){depleteNode(b.node);b.node=null;}
       }
@@ -1462,8 +1627,10 @@ function updateRoster(){
     // barbarians, wolves and vikings — into RED's column, and since no creep is a villager they
     // all landed on RED's military count. John's field shots showed a constant 73-vs-49 gap that
     // was exactly the wilds population. The wilds belong to nobody: count them for neither crown.
-    if(u.team===BLUE){u.cls==="villager"?bv++:bm++;}
-    else if(u.team===RED){u.cls==="villager"?rv++:rm++;}
+    // v134.4: ⚠ THIS NUMBER CHANGES ON SCREEN. A trade cart has always been counted in the MILITARY
+    // column here, and an ox would have been too. Neither carries a weapon.
+    if(u.team===BLUE){isWorker(u)?bv++:bm++;}
+    else if(u.team===RED){isWorker(u)?rv++:rm++;}
   }
   // v124.9: on a phone this line shows YOUR team only. Two reasons, and the second is the real one:
   // the age was already spelled out in its own segment two boxes to the left, and knowing the

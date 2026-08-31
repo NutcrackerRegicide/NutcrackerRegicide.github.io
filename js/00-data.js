@@ -893,13 +893,28 @@ function isHuman(u){return !!(u&&(u.isPlayer||u.remote));}
 // a trade cart cannot fight; the King is a win condition rather than a duellist; and the wilds keep
 // their own balance (CAMP_XP already pays the humans who clear them). A LEVIED villager qualifies
 // the moment it takes up arms, because from then on it is a soldier by every other rule here.
+// ---- v134.4 A CIVILIAN IS NOT A SOLDIER, AND "VILLAGER" STOPPED BEING THE ONLY KIND AT v99 ----
+// The trade line is tradecart, trader and oxcart: three classes that carry no weapon, hold no
+// posting and belong in no band. Every "cls!==\"villager\"" in 07-ai.js meant THIS, and said the
+// other thing. ⚠ It is a CLASS test, not a role test: the AI's ox drives on bot.role "citizen"
+// because it does a citizen's job, so the role tests that catch a trade cart do not catch it.
+function isWorker(u){
+  if(!u)return false;
+  if(u.cls==="villager")return true;
+  return !!(CLS[u.cls]&&CLS[u.cls].line==="trade");
+}
 function hasProg(u){
   if(!u)return false;
   if(u.isPlayer||u.remote)return true;
   if(!u.bot||u.isKing||u.team===NEUTRAL)return false;
   const r=u.bot.role;
   if(r==="creep"||r==="cart"||r==="king")return false;
-  return u.cls!=="villager";
+  // v134.4: …and no CIVILIAN does, whatever its role. A yoked ox runs on role "citizen", so the
+  // cart test above sails straight past it and it would have earned levels and blacksmith buffs
+  // off camp participation — 220 hp of timber wain with a Whetstone on it.
+  // ⚠ The isPlayer/remote line above still returns true, so a PERSON driving an ox keeps their
+  // level and their loadout, exactly as they do today.
+  return !isWorker(u);
 }
 // John: "a bot gains a level per every 3 soldier enemies killed, not one. One is too frequent."
 // The per-tier rates live in AI_DIFF.vetKills below; this is the fallback for a team with no

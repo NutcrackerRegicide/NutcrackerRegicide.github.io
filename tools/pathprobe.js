@@ -44,7 +44,7 @@ const order=["00-data","01-engine","02-world","03-buildings","04-units","05-comb
   "06-input","07-ai","08-ui","09-main","10-net","11-audio","12-touch","13-deskui"];
 let bundle=order.map(f=>fs.readFileSync(path.join(ROOT,"js",f+".js"),"utf8")).join("\n");
 bundle+="\n;global.__P={units,buildings,makeUnit,makeBuilding,moveToward,moveUnit,separate,tick,NET,nodes,updateBot,setGameOver,menuUp:()=>inMenu,CLS,isSiege,teamAge,stock,kings,isHuman,hasProg,"+
-  "clock,setAIDiff:v=>{aiDifficulty=v;},getAIDiff:()=>aiDifficulty,AI_DIFF,"+
+  "clock,setAIDiff:v=>{aiDifficulty=v;},getAIDiff:()=>aiDifficulty,AI_DIFF,neutralMarkets,bazaarYield,directors,campStates,"+
   "steerAroundBuildings,walkable,validFor,BLD,teamAge,MAP,BLUE,RED,advanceT:(s)=>{T+=s;},getT:()=>T,"+
   (fs.readFileSync(path.join(ROOT,"js","05-combat.js"),"utf8").indexOf("function pushOutOfBuildings")>=0
      ?"pushOutOfBuildings,pickDetour,detourFree,MOVE_STALL_T,":"")+
@@ -100,6 +100,24 @@ function runCampaign(){
   if(G.menuUp())G.NET.uiSolo();
   const MIN=+(process.env.PROBE_MIN||6);
   const samples=[]; let peak=0, insideUnitFrames=0, unitFrames=0, wedged=new Map();
+  let _bzNeutralSec=0,_bzYield=0,_bzHeld=0;
+  // v134.4 THE WOOD LEDGER. The ox cart is a WOOD engine (a 300 bed, four swings a chop) and the
+  // only honest way to see one working is income, not the pile at the whistle — a pile is what is
+  // left after the marshal spent, and a marshal that gathers twice as much and builds twice as much
+  // shows the same number. Income is summed from the POSITIVE deltas of stock.wood at 1 Hz, which
+  // is every deposit; the bazaars' standing wood yield is summed alongside so labour can be read
+  // apart from rent.
+  const _woodIn=[0,0], _woodBaz=[0,0], _woodPrev=[G.stock[0].wood,G.stock[1].wood];
+  // ⚠ AND OXEN ARE COUNTED IN SECONDS, NOT AT THE WHISTLE. The first cut of this counted
+  // units.filter(cls==="oxcart") at the end and reported "0 ever" on matches that ran two of them
+  // for a quarter of an hour: a dead ox RESPAWNS AS A VILLAGER, and a stood-down one is a villager
+  // by design, so the class is gone from the roster the moment either happens. Sampled at 1 Hz.
+  const _oxSec=[0,0], _oxPeak=[0,0];
+  // v134.5 THE SQUARES CHANGING HANDS. Mean-held says how much of the map an army sat on; it says
+  // nothing about whether it KEPT what it took. A flip counter separates "took two and held them"
+  // from "took six and lost four", which are the same average and a completely different AI.
+  const _bzOwnPrev=(G.neutralMarkets||[]).map(m=>m.owner);
+  const _took=[0,0], _lost=[0,0], _heldSec=[0,0], _grandSec=[0,0];
   const frames=Math.round(MIN*60*30);   // 30 fixed frames a second, per the clock above
   for(let f=0;f<frames;f++){
     G.setGameOver(false); G.tick();
@@ -112,6 +130,31 @@ function runCampaign(){
       if(anyInside(p.x,p.z)){ins++;wedged.set(u,(wedged.get(u)||0)+1);}
     }
     insideUnitFrames+=ins; unitFrames+=live; peak=Math.max(peak,ins);
+    // v134.3 the bazaars, sampled at 1 Hz: how long squares sit unclaimed, and the income the two
+    // armies actually drew. End-state ownership cannot tell a square taken at minute 2 from one
+    // taken at minute 19, and the whole value of a bazaar is the seconds you held it.
+    {const nm=G.neutralMarkets||[];
+     for(let i=0;i<nm.length;i++){
+       const now=nm[i].owner, was=_bzOwnPrev[i];
+       if(now!==was){
+         if(now===0||now===1)_took[now]++;
+         if(was===0||was===1)_lost[was]++;
+         _bzOwnPrev[i]=now;
+       }
+       if(now===0||now===1){_heldSec[now]++; if(nm[i].grand)_grandSec[now]++;}
+     }}
+    for(const t of [0,1]){
+      const _ox=G.units.filter(u=>u.alive&&u.team===t&&u.cls==="oxcart").length;
+      _oxSec[t]+=_ox; if(_ox>_oxPeak[t])_oxPeak[t]=_ox;
+      const w=G.stock[t].wood;
+      if(w>_woodPrev[t])_woodIn[t]+=w-_woodPrev[t];
+      _woodPrev[t]=w;
+      _woodBaz[t]+=G.bazaarYield(t);
+    }
+    {const nm=G.neutralMarkets||[];
+     for(const m of nm)if(m.owner!==0&&m.owner!==1)_bzNeutralSec++;
+     _bzYield+=G.bazaarYield(0)+G.bazaarYield(1);
+     _bzHeld+=nm.filter(m=>m.owner===0||m.owner===1).length;}
     if(f%(60*30*2)===0)samples.push(ins);              // one sample every 2 minutes
   }
   const pct=unitFrames?100*insideUnitFrames/unitFrames:0;
@@ -145,9 +188,47 @@ function runCampaign(){
       if(n){holders++;stacks+=n;} top=Math.max(top,u.lvl||0);}
     return {n:b.length,lv:lv.length,top,holders,stacks};
   };
+  // --- v134.3 the bazaars: who holds what, and how long they held it ---
+  {const nm=G.neutralMarkets||[];
+   say("  BAZAARS owner by site",nm.map(m=>(m.grand?"grand":"team")+":"+
+     (m.owner===0?"BLUE":m.owner===1?"RED":"neutral")).join("  "));
+   say("  BAZAARS yield blue/red (res per sec each of food/gold/wood)",
+     G.bazaarYield(0)+"/"+G.bazaarYield(1));
+   const secs=MIN*60;
+   say("  BAZAARS square-seconds left NEUTRAL (of "+(nm.length*secs)+")",_bzNeutralSec+
+     " ("+(100*_bzNeutralSec/Math.max(1,nm.length*secs)).toFixed(1)+"%)");
+   let wiped=0,chests=0;
+   for(const st of (G.campStates||[])){wiped+=(st._wipes|0);if(st.chest)chests++;}
+   say("  CAMPS wild packs standing / waiting",
+     (G.campStates||[]).filter(c=>!c.boss&&!c.waiting).length+" / "+
+     (G.campStates||[]).filter(c=>!c.boss&&c.waiting).length);
+   for(const t of [0,1]){const bs=G.directors[t].bands||[];
+     say("  BANDS team"+t,bs.map(b=>b.role+":"+b.members.length).join("  ")||"none");}
+   say("  CAMPS bands in the wilds blue/red",
+     (G.directors[0].bands||[]).filter(b=>b.role==="camp").length+"/"+
+     (G.directors[1].bands||[]).filter(b=>b.role==="camp").length);
+   say("  BAZAARS mean squares held / mean total yield",
+     (_bzHeld/Math.max(1,secs)).toFixed(2)+" / "+(_bzYield/Math.max(1,secs)).toFixed(2)+" per sec");}
   for(const t of [0,1]){const p=prog(t);
     say("  VETERANS team"+t,p.lv+"/"+p.n+" levelled (top LV "+p.top+"), "+
       p.holders+" carrying "+p.stacks+" stacks");}
+  // --- v134.5 the squares: taken, LOST, and how much of the holding was the Grand ---
+  for(const t of [0,1]){
+    say("  SQUARES team"+t,"took "+_took[t]+" · lost "+_lost[t]+" · held "+Math.round(_heldSec[t])+
+      " square-seconds (of which the Grand "+Math.round(_grandSec[t])+") · yield now "+
+      G.bazaarYield(t)+"/sec each of food, gold and wood");
+  }
+  // --- v134.4 the wood economy, and who is doing the hauling ---
+  for(const t of [0,1]){
+    const vil=G.units.filter(u=>u.alive&&u.team===t&&u.cls==="villager"&&!u.isPlayer).length;
+    const ox =G.units.filter(u=>u.alive&&u.team===t&&u.cls==="oxcart").length;
+    const oxEver=G.units.filter(u=>u.team===t&&u.cls==="oxcart").length;
+    const onWood=G.units.filter(u=>u.alive&&u.team===t&&u.bot&&u.bot.node&&u.bot.node.type==="wood").length;
+    say("  WOOD team"+t,"income "+Math.round(_woodIn[t])+" (of which bazaar rent "+
+      Math.round(_woodBaz[t])+") · banked "+Math.round(G.stock[t].wood)+
+      " · villagers "+vil+" ("+onWood+" at a tree) · oxen "+ox+" standing at the whistle, peak "+
+      _oxPeak[t]+", "+Math.round(_oxSec[t])+" ox-seconds of "+(MIN*60)+")");
+  }
 }
 
 // The bench scenarios below spawn and kill bodies, and a killed body is a body the game will
