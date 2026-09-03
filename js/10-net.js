@@ -2601,11 +2601,23 @@ NET.uiHowTo=function(show){
   };
   // NOTE: the hmPvp/hmCoop pair is gone with v128.9 — the shield IS the mode choice. pickPair is
   // guarded on both ids existing, so this simply no longer binds. NET.uiMode sets gameMode.
-  pickPair("sdEasy","sdHard",v=>{aiDifficulty=v?"easy":"hard";
-    // the two dials mirror each other — one setting, two doors
-    if(el("hdEasy")&&el("hdHard")){el("hdEasy").classList.toggle("on",v);el("hdHard").classList.toggle("on",!v);}});
-  pickPair("hdEasy","hdHard",v=>{aiDifficulty=v?"easy":"hard";
-    if(el("sdEasy")&&el("sdHard")){el("sdEasy").classList.toggle("on",v);el("sdHard").classList.toggle("on",!v);}});
+  // v134.7 THREE DOORS, NOT TWO — and the pair of dials still mirror each other, one setting shown
+  // in both rooms. NORMAL was always in AI_DIFF and was always what a team holding a HUMAN plays at
+  // (diffFor), so until now the one tier a player could not choose for the enemy was the tier his
+  // own bots were on. Written as one loop over both rows rather than three more pickPair calls:
+  // pickPair paints exactly two buttons and a third would leave the odd one lit.
+  {
+    const TIERS=["easy","normal","hard"];
+    const ROWS=[["sdEasy","sdNormal","sdHard"],["hdEasy","hdNormal","hdHard"]];
+    const paint=(tier)=>{for(const row of ROWS)for(let i=0;i<row.length;i++){
+      const b=el(row[i]); if(b)b.classList.toggle("on",TIERS[i]===tier);}};
+    for(const row of ROWS)for(let i=0;i<row.length;i++){
+      const b=el(row[i]); if(!b)continue;
+      const tier=TIERS[i];
+      b.onclick=()=>{aiDifficulty=tier;paint(tier);};
+    }
+    paint(aiDifficulty);   // …and the lit button is whatever the dial actually says on load
+  }
   pickPair("hvPub","hvPriv",v=>{NET.isPublic=v;
     const pw=el("hostpw"); if(pw)pw.style.display=v?"none":"block";
     if(!v&&pw)pw.focus();});

@@ -510,6 +510,30 @@ function directorThink(D){
       break;
     }
   }
+  // --- v134.6 a Guard Tower rises on each square this team holds ---
+  // The band standing on a square goes home when the tour is up; a tower does not. 400 hp, 9 damage
+  // at 18 — it will not hold a square against an army, and it is not meant to: it makes taking one
+  // cost something, which measured at nothing before this. Age 3 (BLD.tower.age), one site at a
+  // time, and a stone floor so the castle and the walls are not eaten by the frontier.
+  if(typeof neutralMarkets!=="undefined"&&(BLD.tower.age||0)<=ag&&pendingBld(team).length<2&&
+     !pendingBld(team).some(b=>b.type==="tower")&&
+     affordKeep(team,BLD.tower.cost,0,0)&&stock[team].stone>=BLD.tower.cost.stone+BAZ_TOWER_STONE){
+    for(const m of neutralMarkets){
+      if(m.owner!==team)continue;
+      let have=0;
+      for(const b of buildings)
+        if(b.alive&&b.team===team&&b.type==="tower"&&
+           dist2(b.x,b.z,m.x,m.z)<Math.pow((m.plaza||8.6)+BAZ_TOWER_GAP+BAZ_TOWER_OUT+2,2))have++;
+      if(have>=BAZ_TOWERS)continue;
+      const s=bazTowerSpot(team,m);
+      if(s){
+        pay(team,BLD.tower.cost);
+        makeBuilding(team,"tower",s.x,s.z,false);
+        if(team===BLUE)msg("A guard tower is raised over your bazaar.","blue");
+      }
+      break; // one square a think: the builders have to walk out there
+    }
+  }
   // --- crew the construction sites (2 builders each) ---
   for(const s of pendingBld(team)){
     let crew=0;
@@ -633,9 +657,11 @@ function nearestEnemyOf(u,maxD){
   return best;
 }
 // ---- v134.4 THE OX AT THE PIT ----
-// OX_MAX: oxen a team will yoke. Two is a deliberate floor-to-ceiling: each one costs a working
-//   body as well as 75 food and 75 gold, and a marshal that turns its workforce into carts has
-//   traded its army for timber it cannot spend.
+// OX_MAX: oxen a team will yoke. ONE, from John's first playtest of v134.4: "wood is being
+//   gathered extremely fast with two NPC oxcarts. Could reduce this to one." The bench said the
+//   same thing and I under-weighted it — an ox is four times the axe AND a fifteenth of the
+//   walking (300 in the bed against 20, so one trip where a villager makes fifteen), so a second
+//   one is not a second villager, it is closer to another fifteen of them on timber alone.
 // OX_MIN_VILLS: …and it will not take that body from a small workforce.
 // OX_WOOD_WANT / OX_WOOD_FULL: only when TIMBER is the shortage, and off again when it is not.
 //   ⚠ THESE ARE READ OFF THE ACTUAL CURVE, not guessed. Sampled every minute of a twenty-minute
@@ -650,7 +676,7 @@ function nearestEnemyOf(u,maxD){
 //   campaign: two oxen filled the stores to 7205 wood the marshal had nothing to spend on while
 //   the same two bodies were not farming or mining. An ox is a worker as well as a cart, and the
 //   hysteresis between WANT and FULL is what stops it flipping back and forth every think.
-const OX_MAX=2, OX_MIN_VILLS=10, OX_MIN_CUTTERS=3, OX_WOOD_WANT=3000, OX_WOOD_FULL=5000, OX_EVERY=45;
+const OX_MAX=1, OX_MIN_VILLS=10, OX_MIN_CUTTERS=3, OX_WOOD_WANT=3000, OX_WOOD_FULL=5000, OX_EVERY=45;
 function botFindNode(u,res){
   let best=null,bd=1e12;
   for(const n of nodes){
@@ -838,6 +864,38 @@ function bazaarWorth(team,m){
   const gain=at(mine+1)-at(mine);                        // …what taking it would pay
   const deny=(m.owner===1-team)?(at(theirs)-at(theirs-1)):0; // …and what it costs them to lose it
   return (gain+deny)*3;                                  // three resources, so three times over
+}
+// ---- v134.6 THE SQUARES GET TEETH ----
+// BAZ_TOWERS: Guard Towers a team will raise around each square it HOLDS. John asked for 3-4; the
+//   map holds 4,200 stone in six piles and a Guard Tower is 250 of it, so 3 each on a swept map is
+//   2,250 — 54% of every pile on the board, for one of the two armies. One each is 750, which a
+//   team can pay for out of a corner of its mining without giving up its castle. The number is
+//   here, alone on a line, when we know what one plays like.
+// BAZ_TOWER_GAP / BAZ_TOWER_OUT: where the ring sits, measured from the plaza's edge rather than
+//   the square's centre — the Grand's plaza is 11.4 and the pair on the Viking roads are 8.6, so a
+//   fixed radius would be inside one and out of range of the others. A Guard Tower reaches 18.
+// BAZ_TOWER_STONE: …and it keeps this much stone in the ground for everything else.
+const BAZ_TOWERS=1, BAZ_TOWER_GAP=3.5, BAZ_TOWER_OUT=7, BAZ_TOWER_STONE=150;
+function bazTowerSpot(team,m){
+  // a legal plot in the ring, preferring the side this throne is on: the villagers who build it
+  // walk from home, and a tower on the far face is a two-minute march through the enemy's half.
+  const tc=TCPOS[team], plaza=(m.plaza||8.6);
+  // ⚠ AND THE OUTER EDGE IS THE TOWER'S OWN REACH, not a fixed distance from the plaza. The Grand's
+  // plaza is 11.4 against 8.6 for the pair on the Viking roads, so plaza+3.5+7 puts a tower 21.9
+  // out — past the 18 it can shoot, guarding the square by standing near it and watching. Caught by
+  // the gate the moment it was written: "nearest 12.1, furthest 21.7 ... and a range of 18".
+  const inner=plaza+BAZ_TOWER_GAP;
+  const outer=Math.max(inner+1,Math.min(inner+BAZ_TOWER_OUT,(BLD.tower.atk.rng||18)-1.5));
+  let best=null,bd=1e12;
+  for(let i=0;i<36;i++){
+    const a=Math.random()*Math.PI*2, r=inner+Math.random()*(outer-inner);
+    const x=m.x+Math.cos(a)*r, z=m.z+Math.sin(a)*r;
+    if(Math.abs(x)>MAP.x-6||Math.abs(z)>MAP.z-6)continue;
+    if(!validFor("tower",x,z,team))continue;
+    const d=dist2(x,z,tc[0],tc[1]);
+    if(d<bd){bd=d;best={x,z};}
+  }
+  return best;
 }
 function bandHoldPoint(team,idx){ // the square that pays most, held or not, then the road
   // v134.3 THE CASTLE USED TO COME FIRST, AND EVERY DOCTRINE BUILDS A CASTLE. From the moment the

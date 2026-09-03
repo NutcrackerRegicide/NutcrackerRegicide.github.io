@@ -118,6 +118,11 @@ function runCampaign(){
   // from "took six and lost four", which are the same average and a completely different AI.
   const _bzOwnPrev=(G.neutralMarkets||[]).map(m=>m.owner);
   const _took=[0,0], _lost=[0,0], _heldSec=[0,0], _grandSec=[0,0];
+  // v134.7 …AND WHEN, IF EVER, ONE ARMY HELD ALL THREE. John, after his first game: "My team (blue)
+  // essentially was able to capture all 3 bazaars right off the bat which caused a steamroll, which
+  // is ok just need to test if this actually happens in every game." A mean tells you nothing about
+  // that; the question is the CLOCK — how early the sweep lands and how long it stands.
+  const _sweepAt=[-1,-1], _sweepSec=[0,0];
   const frames=Math.round(MIN*60*30);   // 30 fixed frames a second, per the clock above
   for(let f=0;f<frames;f++){
     G.setGameOver(false); G.tick();
@@ -134,6 +139,12 @@ function runCampaign(){
     // armies actually drew. End-state ownership cannot tell a square taken at minute 2 from one
     // taken at minute 19, and the whole value of a bazaar is the seconds you held it.
     {const nm=G.neutralMarkets||[];
+     for(const t of [0,1]){
+       if(nm.length&&nm.every(m=>m.owner===t)){
+         _sweepSec[t]++;
+         if(_sweepAt[t]<0)_sweepAt[t]=f/30;
+       }
+     }
      for(let i=0;i<nm.length;i++){
        const now=nm[i].owner, was=_bzOwnPrev[i];
        if(now!==was){
@@ -212,8 +223,26 @@ function runCampaign(){
   for(const t of [0,1]){const p=prog(t);
     say("  VETERANS team"+t,p.lv+"/"+p.n+" levelled (top LV "+p.top+"), "+
       p.holders+" carrying "+p.stacks+" stacks");}
+  // --- v134.6 the towers on the squares, and what the stone paid for them ---
+  {
+    const NMs=G.neutralMarkets||[];
+    for(const t of [0,1]){
+      const tw=G.buildings.filter(b=>b.alive&&b.team===t&&b.type==="tower");
+      const built=tw.filter(b=>b.built).length;
+      let onSq=0;
+      for(const b of tw)for(const m of NMs)
+        if(Math.hypot(b.x-m.x,b.z-m.z)<24){onSq++;break;}
+      say("  TOWERS team"+t,tw.length+" guard towers ("+built+" finished, "+onSq+
+        " standing over a square) · stone banked "+Math.round(G.stock[t].stone)+
+        " · 250 stone apiece of the 4,200 on the map");
+    }
+  }
   // --- v134.5 the squares: taken, LOST, and how much of the holding was the Grand ---
   for(const t of [0,1]){
+    say("  SWEEP team"+t,(_sweepAt[t]<0?"never held all three"
+      :("first held all three at "+Math.round(_sweepAt[t])+"s ("+(_sweepAt[t]/60).toFixed(1)+
+        " min), and held all three for "+Math.round(_sweepSec[t])+"s of "+(MIN*60)+
+        " ("+(100*_sweepSec[t]/(MIN*60)).toFixed(0)+"%)")));
     say("  SQUARES team"+t,"took "+_took[t]+" · lost "+_lost[t]+" · held "+Math.round(_heldSec[t])+
       " square-seconds (of which the Grand "+Math.round(_grandSec[t])+") · yield now "+
       G.bazaarYield(t)+"/sec each of food, gold and wood");

@@ -64,6 +64,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "bandCampTarget,CAMP_MIN_MIL,CAMP_MAX_THREAT,BAND_MIN,BAND_SEED,campStates,"+ // v134.3 the wilds
   "isWorker,OX_MAX,OX_MIN_VILLS,OX_MIN_CUTTERS,OX_WOOD_WANT,OX_WOOD_FULL,manageBands,"+ // v134.4 the ox
   "bazaarWorth,HOLD_TOUR,"+                            // v134.5 what the squares pay
+  "bazTowerSpot,BAZ_TOWERS,BAZ_TOWER_GAP,BAZ_TOWER_OUT,BAZ_TOWER_STONE,"+ // v134.6 towers on them
   // the bench drives moveToward directly, outside tick(), and both the watchdog and a detour's
   // lifetime are measured in T. A bench that leaves T frozen tests a world where no detour ever
   // expires — which is a different program, and it reads as "nobody ever arrives".
@@ -3144,8 +3145,13 @@ global.__G.setGameOver(false);
     // a corner of the map with nobody else in it — these tests stage duels, and `tryAttack`
     // scans every unit in the world, so a stray bystander would let them pass for the wrong
     // reason. Asserted, not assumed.
+    // v134.6 ⚠ AND NOT AT THE ORIGIN. The clamp test below reads "the rewound x is far from 0" as
+    // its proof that the ring returned the OLDEST SAMPLE rather than falling back to the world
+    // origin — and if the empty corner it stages in happens to be x=0 those two are the same point,
+    // so the gate cannot pass however correctly the ring behaves. SMOKE_SEED=1 found that corner.
     const spot=(()=>{
       for(let x=-120;x<=120;x+=15)for(let z=-120;z<=120;z+=15){
+        if(Math.abs(x)<30)continue;
         let clear=true;
         for(const v of G.units){if(v.alive&&G.dist2(v.root.position.x,v.root.position.z,x,z)<45*45){clear=false;break;}}
         if(clear)return {x,z};
@@ -6003,7 +6009,12 @@ global.__G.setGameOver(false);
       " motes aloft at the moment of death, "+orphans+" ownerless survivors one frame later, "+
       stillHis+" motes left alive in the entire scene. v132.50 let them drift out the rest of "+
       "their life instead, which is a light sitting where its owner is not",
-      beforeDeath>=25&&orphans===0&&stillHis===0);
+      // v134.6: orphans, not the whole sky. stillHis counts every mote alive ANYWHERE, and since
+      // v134.2 veteran bots hold blacksmith buffs — so one healthy aura-holder somewhere on the
+      // map, doing its job, failed a gate about a DEAD unit's cloud. Same correction as the
+      // v132.53 lit/deadLit gate took in v134.5. stillHis stays in the message, where it is
+      // informative, and comes out of the verdict, where it was somebody else's business.
+      beforeDeath>=25&&orphans===0);
     drain();
 
     // ---- 4. the LIGHT comes up early; the GOLD still arrives late ----
@@ -6767,6 +6778,12 @@ global.__G.setGameOver(false);
   //         unstuck. v133 measured realized displacement, so it would run this treadmill until
   //         the heat death of the universe without ever noticing.
   {
+    // v134.6: …AND THIS ONE CLEARS ITS GROUND AS WELL. Benches 1 and 2 were given clearGround at
+    // v134.4 and this one was missed. On SMOKE_SEED=1 the campaign now builds at (-120,-100), the
+    // treadmill body started INSIDE a collider, and pushOutOfBuildings shoved it 2.38 a frame —
+    // six times a villager's own step — so the bench measured a body being ejected from a wall
+    // rather than a body on a treadmill, and reported the watchdog as never firing.
+    const _twr=clearGround(-120,-100,24);
     const u=pGuy(-120,-100,"Treadmill");
     const home={x:u.root.position.x,z:u.root.position.z};
     let fired=0,secs=0,realMotion=0;
@@ -6781,7 +6798,7 @@ global.__G.setGameOver(false);
       "gains NO ground is unstuck within "+G.MOVE_STALL_T+"s (fired at "+
       (fired?fired.toFixed(2)+"s":"NEVER")+") — v133 watched displacement and never would",
       fired>0&&fired<=G.MOVE_STALL_T+0.3&&realMotion>0.1);
-    wipe();
+    _twr(); wipe();                                   // v134.6: the neighbours stand back up
   }
 
   // --- 3. OPEN GROUND. A watchdog that fires on a clear walk would thrash every unit in the game.
@@ -7258,6 +7275,18 @@ global.__G.setGameOver(false);
     for(const b of D.bands)if(b!==kg&&b!==keep)for(const v of b.members)v.alive=false;
     if(keep)for(const v of keep.members.slice(4))v.alive=false;
     G.manageBands(D);                          // …and the dead are pruned back out of the bands
+    // v134.6 …AND NOBODY IS LEFT LOOSE. The whole point of this staging is that THREE is below
+    // BAND_MIN, so the ordinary deal loop cannot fire and only the founding pass can answer. One
+    // stray campaign body loose on the board makes the trickle FOUR, the deal loop fires, and it
+    // reinforces the standing band because that band has room — which is correct behaviour and a
+    // dead gate. It went red the moment v134.5 made "hold" the deepest deficit: "the standing band
+    // went 4 -> 8". Park whatever is loose into the standing band first, then trickle exactly three.
+    if(keep)for(const v of G.units){
+      if(!v.alive||v.team!==team||!v.bot||v.isKing||G.isWorker(v))continue;
+      if(G.CLS[v.cls].line==="healer")continue;
+      if(v.bandRef&&D.bands.includes(v.bandRef))continue;
+      v.bandRef=keep; keep.members.push(v);
+    }
     const before=D.bands.filter(b=>b.role!=="kingsguard"&&b.role!=="siege").length;
     const kept=keep?keep.members.length:0;
     add(3,"tr"); G.manageBands(D);             // three men report for duty
@@ -7272,7 +7301,10 @@ global.__G.setGameOver(false);
       " -> "+grew+"; "+JSON.stringify(byRole)+"). Before this the straggler loop handed every "+
       "reinforcement to a band that already existed, so a twenty-minute campaign ended with one "+
       "mission band or none on both teams",
-      before===1&&after===2&&kept===4&&grew===4);
+      // v134.6: kept is whatever the staging ended up with — four of its own plus any strays it
+      // parked — so the verdict is that the standing band did not GROW, not that it holds a
+      // particular number. A literal 4 here was the staging leaking into the claim.
+      before===1&&after===2&&kept>=4&&grew===kept);
   }
 
   // --- 3. THE THRONE OUTRANKS THE TREASURE. Nothing goes hunting while the king is being hunted.
@@ -7675,6 +7707,157 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
       wps1+" -> "+wps2+" waypoints). It was four points in a box within 26 of the town centre, set "+
       "once for the life of the band",
       onSq===2&&wps2===wps1+1);
+  }
+}
+
+// ==================== v134.6 TOWERS ON THE SQUARES ====================
+{
+  const G=global.__G;
+  const NM=G.neutralMarkets, own0=NM.map(m=>m.owner);
+  const setOwn=(a)=>{for(let i=0;i<NM.length;i++)NM[i].owner=a[i];};
+
+  // --- 1. THE RING. A tower must stand OFF the plaza it guards and inside its own 18 of range.
+  //        validFor cannot see a bazaar at all — they are not in the buildings list — so nothing but
+  //        rule keeps a tower off the capture ground.
+  {
+    const team=G.BLUE;
+    let bad=0, tried=0, near=1e9, far=0;
+    for(const m of NM){
+      for(let i=0;i<12;i++){
+        const s=G.bazTowerSpot(team,m);
+        if(!s)continue;
+        tried++;
+        const d=Math.hypot(s.x-m.x,s.z-m.z), plaza=(m.plaza||8.6);
+        if(d<plaza+G.BAZ_TOWER_GAP-0.01)bad++;          // on the square itself
+        if(d>G.BLD.tower.atk.rng)bad++;                 // …or too far out to shoot over it
+        near=Math.min(near,d); far=Math.max(far,d);
+      }
+    }
+    check("v134.6 towers: every spot the marshal picks is OFF the plaza and inside the tower's own "+
+      "reach ("+tried+" spots sampled across the three squares, nearest "+near.toFixed(1)+
+      ", furthest "+far.toFixed(1)+", against plazas of "+NM.map(m=>(m.plaza||8.6)).join("/")+
+      " and a range of "+G.BLD.tower.atk.rng+"). validFor knows nothing about bazaars — they are "+
+      "not in the buildings list — so a tower on the capture ground is refused by this rule or by nothing",
+      tried>=6&&bad===0);
+  }
+
+  // --- 2. IT RAISES ONE OVER A SQUARE IT HOLDS, and stops at BAZ_TOWERS. Staged, because the
+  //        opportunity is rare: a Guard Tower is age 3 and a twenty-minute AI game ends at age 2.
+  {
+    const team=G.RED, D=G.directors[team];
+    const age0=G.teamAge[team], st0={food:G.stock[team].food,gold:G.stock[team].gold,
+      stone:G.stock[team].stone,wood:G.stock[team].wood};
+    const before=G.buildings.filter(b=>b.alive&&b.team===team&&b.type==="tower");
+    for(const b of before)b.alive=false;              // a clean board for the count
+    const pend=G.buildings.filter(b=>b.alive&&b.team===team&&!b.built);
+    for(const b of pend)b.built=true;                 // …and no queue in the way
+    G.teamAge[team]=Math.max(3,age0);
+    G.stock[team].stone=4000; G.stock[team].wood=4000; G.stock[team].food=4000; G.stock[team].gold=4000;
+    setOwn([team,-1,-1]);
+    const held=NM[0];
+    let raised=0;
+    for(let i=0;i<8;i++){ D.nextThink=0; G.directorThink(D); }
+    const mine=G.buildings.filter(b=>b.alive&&b.team===team&&b.type==="tower");
+    let onSq=0, offPlaza=true;
+    for(const b of mine){
+      const d=Math.hypot(b.x-held.x,b.z-held.z);
+      if(d<(held.plaza||8.6)+G.BAZ_TOWER_GAP-0.01)offPlaza=false;
+      if(d<(held.plaza||8.6)+G.BAZ_TOWER_GAP+G.BAZ_TOWER_OUT+2)onSq++;
+    }
+    raised=mine.length;
+    for(const b of mine)b.alive=false;
+    for(const b of before)b.alive=true;
+    for(const b of pend)b.built=false;
+    G.teamAge[team]=age0;
+    G.stock[team].food=st0.food; G.stock[team].gold=st0.gold;
+    G.stock[team].stone=st0.stone; G.stock[team].wood=st0.wood;
+    setOwn(own0);
+    check("v134.6 towers: a marshal holding a square raises a Guard Tower over it and STOPS at "+
+      G.BAZ_TOWERS+" ("+raised+" raised across eight think-clocks, "+onSq+" of them ringing the "+
+      "square, none on the plaza: "+offPlaza+"). 250 stone apiece against 4,200 on the whole map "+
+      "is why the cap is what it is",
+      raised>=1&&raised<=G.BAZ_TOWERS&&onSq>=1&&offPlaza);
+  }
+
+  // --- 3. THE OX CAP, which is John's dial and the reason this version exists. One ox, not two.
+  {
+    const team=G.RED, D=G.directors[team];
+    const st0={food:G.stock[team].food,gold:G.stock[team].gold,wood:G.stock[team].wood};
+    const standing=G.units.filter(u=>u.alive&&u.team===team&&u.cls==="oxcart");
+    for(const u of standing)u.alive=false;
+    const pit=G.makeBuilding(team,"storage_pit",164,-146,true);
+    const made=[]; const seam=G.nodes.find(n=>n.type==="wood"&&n.amount>0);
+    for(let i=0;i<14;i++){
+      const v=G.makeUnit(team,"villager",152+(i%7)*2,-146-((i/7)|0)*2,
+        {name:"Cap"+i,bot:{role:"citizen",res:"wood"}});
+      if(i<4)v.bot.node=seam;
+      made.push(v);
+    }
+    const ox=G.makeUnit(team,"oxcart",164,-150,{name:"CapOx",bot:{role:"citizen",res:"wood"}});
+    G.stock[team].food=4000; G.stock[team].gold=4000; G.stock[team].wood=G.OX_WOOD_WANT-200;
+    let ordered=0;
+    for(let i=0;i<6;i++){ D.oxT=0; G.stock[team].wood=G.OX_WOOD_WANT-200; G.directorThink(D);
+      ordered=G.units.filter(v=>v.alive&&v.team===team&&v.convertTo==="oxcart").length; }
+    for(const v of G.units)if(v.team===team&&v.convertTo==="oxcart"){v.convertTo=null;v.convertAt=null;}
+    ox.alive=false; pit.alive=false; for(const v of made)v.alive=false;
+    for(const u of standing)u.alive=true;
+    G.stock[team].food=st0.food; G.stock[team].gold=st0.gold; G.stock[team].wood=st0.wood;
+    check("v134.6 ox: with ONE ox already yoked and timber still short, the marshal orders no "+
+      "second ("+ordered+" ordered, cap "+G.OX_MAX+"). John, after the first playtest of v134.4: "+
+      "\"wood is being gathered extremely fast with two NPC oxcarts. Could reduce this to one\" — "+
+      "an ox is four times the axe AND a fifteenth of the walking, so the second one is worth "+
+      "closer to fifteen villagers than to one",
+      G.OX_MAX===1&&ordered===0);
+  }
+}
+
+// ==================== v134.7 THE MIDDLE DOOR ====================
+{
+  const G=global.__G;
+  // --- 1. THE ASYMMETRY, STATED. A team holding a human plays "normal" whatever the dial says, so
+  //        in solo the player's own bots have always been a tier above an enemy left on the default.
+  {
+    const D=G.AI_DIFF, e=D.easy, nm=D.normal, hd=D.hard;
+    // ⚠ STAGED, because by this point in the file the netcode gates have left NET.mode as "guest"
+    // and teamHasHuman refuses a guest's own body — quite rightly, a guest's team is the HOST's
+    // problem. In a solo game the mode is not "guest" and the player stands on BLUE, which is the
+    // case this rule is about; the first cut of this gate read the ambient state and reported
+    // "blue easy", i.e. it measured the harness rather than the rule.
+    const _mode=G.NET.mode, _pt=G.player?G.player.team:null;
+    G.NET.mode="solo"; if(G.player)G.player.team=G.BLUE;
+    const blue=G.diffFor(G.BLUE), red=G.diffFor(G.RED);
+    G.NET.mode=_mode; if(G.player&&_pt!==null)G.player.team=_pt;
+    check("v134.7 tiers: a team holding a HUMAN plays normal whatever the dial says (blue "+blue+
+      ", red "+red+" with the dial on "+G.getAIDiff()+") — so a solo player's own bots think every "+
+      nm.think+"s while an enemy on the default thinks every "+e.think+"s, trains x"+e.trainMul+
+      ", raids x"+e.raidMul+" as often with x"+e.raidFracMul+" the men, and needs "+e.vetKills+
+      " kills a level against "+nm.vetKills+". Hard thinks every "+hd.think+"s and counters: "+
+      hd.counter,
+      blue==="normal"&&e.think>nm.think&&nm.think>hd.think&&
+      e.trainMul>nm.trainMul&&nm.trainMul>hd.trainMul&&
+      e.vetKills>nm.vetKills&&nm.vetKills>hd.vetKills);
+  }
+
+  // --- 2. THE MIDDLE DOOR IS IN THE MENU AND WIRED TO THE MIDDLE TIER. Read the shipped markup and
+  //        the shipped handler: a gate that only set aiDifficulty="normal" by hand would pass on a
+  //        menu that has no button for it, which is exactly the bug this version fixes.
+  {
+    const fs2=require("fs"), path2=require("path");
+    const root=path2.join(__dirname,"..");
+    const html=fs2.readFileSync(path2.join(root,"index.html"),"utf8");
+    const net =fs2.readFileSync(path2.join(root,"js","10-net.js"),"utf8");
+    const ids=["sdEasy","sdNormal","sdHard","hdEasy","hdNormal","hdHard"];
+    const missing=ids.filter(id=>html.indexOf('id="'+id+'"')<0);
+    const wired=net.indexOf('["sdEasy","sdNormal","sdHard"]')>=0&&
+                net.indexOf('["hdEasy","hdNormal","hdHard"]')>=0&&
+                net.indexOf('const TIERS=["easy","normal","hard"]')>=0;
+    // …and the handler must PAINT from the live value, or the lit button lies about the dial
+    const paints=net.indexOf("paint(aiDifficulty)")>=0;
+    check("v134.7 menu: every tier has a door in BOTH rows ("+(missing.length?"MISSING: "+
+      missing.join(" · "):"six buttons, three tiers, two rows")+"), the handler carries all three ("+
+      wired+") and lights the one the dial is actually on ("+paints+"). AI_DIFF has had the normal "+
+      "row since v94; only the button was missing",
+      missing.length===0&&wired&&paints);
   }
 }
 
