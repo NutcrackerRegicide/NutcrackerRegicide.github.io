@@ -1207,13 +1207,21 @@ const AI_DIFF={
   // The variance between seeds dwarfs the tier, because whether a war really joins decides almost
   // everything — but the shape is clear, and so is the finding that 4 and 3 were INDISTINGUISHABLE.
   // A dial whose first two settings measure the same is not a dial, so the ladder is 6 : 3 : 1.
-  // EASY is deliberately the slowest: aiDifficulty defaults to "easy", and a default match should
-  // not get harder because a feature landed — it is still strictly more than v133's nothing.
+  // EASY is deliberately the slowest tier — a feature landing should never quietly raise the floor
+  // under somebody who never touched the dial, and at 6 kills a level it is still strictly more
+  // than v133's nothing.
+  // v134.8: it is no longer the DEFAULT. That rule was about side effects, and moving the dial on
+  // purpose is not one. diffFor gives any team holding a human "normal", so an enemy left on easy
+  // was a tier BELOW the player's own bots in every solo game ever played; v134.7 put the middle
+  // door in the menu and this walks through it. John, shown the asymmetry: default to NORMAL.
   easy:  {name:"Easy",  think:2.2, eco:1.0, raidMul:1.6,  raidFracMul:0.6, trainMul:1.6, buf:1.5, counter:false, vetKills:6},
   normal:{name:"Normal",think:1.0, eco:1.0, raidMul:1.0,  raidFracMul:1.0, trainMul:1.0, buf:1.0, counter:false, vetKills:3},
   hard:  {name:"Hard",  think:0.6, eco:1.2, raidMul:0.75, raidFracMul:1.1, trainMul:0.7, buf:0.8, counter:true,  vetKills:1}
 };
-let aiDifficulty="easy"; // the solo/co-op dial (EASY|HARD in the menus); human teams always run "normal"
+// v134.8 "normal", was "easy". The dial the solo and co-op menus set (EASY|NORMAL|HARD since
+// v134.7); a team holding a human ignores it and always runs "normal", so this now means a solo
+// match starts with both marshals thinking at the same rate instead of the enemy thinking at half.
+let aiDifficulty="normal";
 let MYTEAM=BLUE; // the LOCAL player's team — red guests flip this on join
 let inMenu=true, menuOrbitT=0; // v81: the war WAITS at the main menu — the world idles as a cinematic backdrop
 let siegeAim=false, lobTarget={x:0,z:0}, lobRing=null; // the catapult/trebuchet skill shot

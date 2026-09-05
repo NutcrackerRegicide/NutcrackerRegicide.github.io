@@ -351,11 +351,69 @@ function farmAnchors(team){ // everywhere farmAdjacent will bless a field
     if(!b.alive||b.team!==team)continue;
     // v134.1 the TC's annulus IS the farm ring now — 13-24 sampled ground the rule refuses, and
     // findFarmSpot only gets 60 tries before it gives up and plants a storage pit instead.
-    if(b.type==="towncenter")list.push({x:b.x,z:b.z,rMin:TC_FARM_MIN+0.5,rMax:TC_RING-1});
-    else if(b.built&&b.type==="storage_pit")list.push({x:b.x,z:b.z,rMin:13,rMax:19});
-    else if(b.built&&b.type==="castle")list.push({x:b.x,z:b.z,rMin:15,rMax:21});
+    // v134.8: each anchor now carries its own def, because farmFacing has to weigh anchors by how
+    // far their COLLIDER reaches and not by how far their centre is. Placement never reads it.
+    if(b.type==="towncenter")list.push({x:b.x,z:b.z,rMin:TC_FARM_MIN+0.5,rMax:TC_RING-1,def:b.def,type:b.type});
+    else if(b.built&&b.type==="storage_pit")list.push({x:b.x,z:b.z,rMin:13,rMax:19,def:b.def,type:b.type});
+    else if(b.built&&b.type==="castle")list.push({x:b.x,z:b.z,rMin:15,rMax:21,def:b.def,type:b.type});
   }
   return list;
+}
+// v134.8 THE BARN TURNS ITS BACK ON THE THING THE FIELD RINGS. A farm is `flat` — the plot is
+// walkable and the only collider it owns is the barn, two discs hanging off the field's local -z
+// face at (-4.75,-7.4) r 3.30 x BSCALE 0.6375. Because a farm was never rotated, that offset was
+// fixed in WORLD space: every field in the ring pointed its barn the same way, and the ones on the
+// wrong arc drove it into the Town Center's box. Measured, the least farm-centre distance clearing
+// that box runs 23.45 / 20.80 / 23.75 / 26.75 / 22.20 by age against a ring minimum of 21 — clear
+// at age 2 alone. Turned, the same five ages need 13.40 / 10.60 / 13.50 / 15.90 / 11.95.
+//
+// The transform is the collider's (05-combat.js:2251): local (0,-1) lands at (-sin r, -cos r), so
+// rot = -(bearing + PI/2) sends the barn out along the bearing. Pure arithmetic on (x,z) — no
+// random draw, so the seeded window is untouched.
+//
+// MEASURED, NOT GUESSED, once a town has more than one anchor. "Away" is ambiguous the moment a
+// field rings both the throne and a Storage Pit, and the obvious rule — face away from the NEAREST
+// anchor — is worse than not turning at all: a field ringing a pit just outside TC_RING is nearer
+// the pit than the throne, so it turns its back on the pit and drives its barn into the box. Swept
+// over every legal plot in the ring with a pit at 30 from the throne, against the box at all five
+// ages: unrotated laps 101 of 5,760, nearest-anchor 104, nearest-COLLIDER 26, and the rule below
+// none. So the barn does not pick an anchor by distance; it TRIES each anchor's facing and keeps
+// the one that leaves it the most room against all of them.
+//
+// …with the throne as a hard gate rather than one vote among several. Turning away from the Town
+// Center always clears the Town Center — that is the second table above, 15.90 needed at the worst
+// age against a ring of 21 — so a legal answer always exists, and a facing that would put the barn
+// in the throne's box is disqualified however much room it leaves elsewhere. Without that gate a
+// mature town (throne, two pits, a castle) still lapped 9 plots in 11,520.
+//
+// EVERY blockPart, ignoring the age gates: a field planted at Bronze grows a dovecote at Medieval
+// and a horse-gin at Enlightenment, and this rotation is chosen ONCE, at placement.
+//
+// +1.0 ON EVERY REACH because bSurf returns the UNPADDED corner while the collider pads each face
+// by 0.7 — a padded box reaches 0.97 further at its corner than bSurf says, and those nine plots
+// lived in exactly that shell.
+function farmFacing(team,x,z){
+  const anch=farmAnchors(team);
+  if(!anch.length)return 0;                    // no anchor yet: leave it as it always was
+  const PARTS=BLD.farm.blockParts||[], bs=(typeof BSCALE!=="undefined"&&BSCALE.farm)||1;
+  let best=0,bestS=-1e9;
+  for(const a of anch){
+    const rot=-(Math.atan2(z-a.z,x-a.x)+Math.PI/2);
+    const c=Math.cos(rot), sn=Math.sin(rot);
+    let room=1e9, throne=1e9;
+    for(const q of PARTS){
+      const qx=q.x*bs, qz=q.z*bs, qr=q.r*bs+0.7;
+      const wx=x+qx*c+qz*sn, wz=z-qx*sn+qz*c;  // the collider's own local -> world
+      for(const b of anch){
+        const g=Math.hypot(wx-b.x,wz-b.z)-(b.def?bSurf(b.def)+1:0)-qr;
+        if(g<room)room=g;
+        if(b.type==="towncenter"&&g<throne)throne=g;
+      }
+    }
+    const sc=(throne<0)?room-1000:room;        // the throne's box is not one vote among several
+    if(sc>bestS){bestS=sc;best=rot;}
+  }
+  return best;
 }
 function findFarmSpot(team){ // sample rings around every anchor, not just the TC
   const anchors=farmAnchors(team);
@@ -432,7 +490,9 @@ function directorThink(D){
     if(need("barracks",barCap,0,0))want="barracks";
     else if(need("farm",farmCap,40,0)){
       const fs=findFarmSpot(team); // TC ring, pit rings, castle rings
-      if(fs){pay(team,BLD.farm.cost);makeBuilding(team,"farm",fs.x,fs.z,false);}
+      // v134.8: …facing out. makeBuilding has taken a rot since walls needed one; a farm is the
+      // first thing to ask for it that is not a wall.
+      if(fs){pay(team,BLD.farm.cost);makeBuilding(team,"farm",fs.x,fs.z,false,farmFacing(team,fs.x,fs.z));}
       else if(need("storage_pit",P.pits,80,0)){ // no room for fields: plant a pit to anchor a NEW cluster
         const ps=findPitSpotForFarms(team);
         if(ps){pay(team,BLD.storage_pit.cost);makeBuilding(team,"storage_pit",ps.x,ps.z,false);}
@@ -1419,10 +1479,16 @@ function updateBot(u,dt){
       u.facing=Math.atan2(b.node.x-u.root.position.x,b.node.z-u.root.position.z);
       b.gT=(b.gT||0)+dt;
       if(b.gT>0.75*(b.node.slow||1)){
-        // v134.4: FOUR at a swing for the ox — the same figure the human ox takes in 09-main.js
-        // ("v99: four swings' worth for the ox") and in driveRemote. The swing TIME is unchanged,
-        // so the axe is four times the villager's and the arithmetic lives in one place.
-        const _tk=Math.min((u.cls==="oxcart")?4:1,b.node.amount);
+        // v134.4: FOUR at a swing for the ox — the same figure the human ox takes in 09-main.js:120
+        // and a guest's in 10-net.js:1245. The swing TIME is unchanged, so the axe is four times the
+        // villager's. Three copies of one number, and they now agree on the clamp as well.
+        // v134.8 …AND NEVER MORE THAN THE BED HAS ROOM FOR. This clamped against the SEAM alone.
+        // 300 is exactly 75 bites of four so a full load lands on the cap dead-on — until a tree
+        // runs dry mid-load and truncates one bite to 3. The ox is then on 299 and the next full
+        // bite makes 303. Found on SMOKE_SEED=99, bounded at 3, and the only flat rule the economy
+        // gates have. The other two copies have clamped on `cap - carry` since v99; this one did not.
+        const _room=carryCap(u)-(u.carry.food+u.carry.gold+u.carry.stone+u.carry.wood);
+        const _tk=Math.max(0,Math.min((u.cls==="oxcart")?4:1,b.node.amount,_room));
         b.gT=0;b.node.amount-=_tk;
         u.carry[b.node.type]+=_tk;
         u.swing=0.2;

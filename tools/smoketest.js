@@ -65,6 +65,7 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "isWorker,OX_MAX,OX_MIN_VILLS,OX_MIN_CUTTERS,OX_WOOD_WANT,OX_WOOD_FULL,manageBands,"+ // v134.4 the ox
   "bazaarWorth,HOLD_TOUR,"+                            // v134.5 what the squares pay
   "bazTowerSpot,BAZ_TOWERS,BAZ_TOWER_GAP,BAZ_TOWER_OUT,BAZ_TOWER_STONE,"+ // v134.6 towers on them
+  "farmFacing,"+                                       // v134.8 which way a barn faces
   // the bench drives moveToward directly, outside tick(), and both the watchdog and a detour's
   // lifetime are measured in T. A bench that leaves T frozen tests a world where no detour ever
   // expires — which is a different program, and it reads as "nobody ever arrives".
@@ -139,6 +140,18 @@ console.log("all scripts loaded");
       if(b.type==="towncenter"&&!b.alive){b.alive=true;b.hp=Math.max(1,(b.def&&b.def.hp||1000)*0.5);}
     return _rawTick(dt);
   };
+  // v134.8 …AND ROUND dealDamage ITSELF, which is where the note above was heading. The tick wrap
+  // clears the flag on the way IN, so a regicide landing inside a tick leaves it set on the way
+  // out, and every staged kill between that tick and the next is silently a no-op. On
+  // SMOKE_SEED=20260827 that gap is four lines wide — land the raid, check the landing, kill the
+  // eleven raiders — and the eleven survived 999,999 damage apiece. Both bindings are wrapped: the
+  // export for the 26 G.dealDamage sites, and the bundle's own global function declaration for the
+  // bare ones. This only covers the space BETWEEN frames, where nothing but this harness acts, so
+  // it cannot let the campaign run on the way the rejected "hold it down globally" fix did.
+  const _rawDmg=global.__G.dealDamage;
+  const _armed=function(){ global.__G.setGameOver(false); return _rawDmg.apply(null,arguments); };
+  global.__G.dealDamage=_armed;
+  try{ global.dealDamage=_armed; }catch(e){}
 }
 const {units,buildings,neutralMarkets,buildingMesh,makeBuilding,makeUnit,tradeGold,tick,
   teamAge,stock,updateBot,tryMeleeAttack,lineUnitFor,CLS,clock,isSiege,nodes,BLD}=global.__G;
@@ -907,24 +920,31 @@ check("AI still builds farms with doubled footprint ("+farms+")",farms>=2);
 // v134.0's push-out and idle sweep resolve bodies out of the sliver — the "nobody standing IN a
 // wall" gate measures exactly that on this same campaign and reads 0.00 deep.
 //
-// THE REAL CURE, when someone wants it: rotate each field so its barn faces AWAY from the Town
-// Center. The barn's offset is fixed in world space only because a farm is never rotated;
-// makeBuilding already takes a rot and the collider, the apron and the mesh all honour it. Then the
-// overlap vanishes at any distance, TC_FARM_MIN can stay where it is, and the barns face the town —
-// which is also how a farm ought to look. It needs a shot before it ships, not a derivation.
+// THE REAL CURE, TAKEN IN v134.8: each field turns its barn AWAY from the thing it rings
+// (farmFacing, 07-ai.js). The barn's offset was fixed in world space only because a farm was never
+// rotated; makeBuilding has always taken a rot and the collider, the apron and the mesh all honour
+// it — shot from three angles before it shipped, in shots/farm-rotation-side-by-side.png. So the
+// paragraph above is now HISTORY, not policy: it is why TC_FARM_MIN is 21 and why it did not have
+// to become 27, and the two tables below say what each choice buys. The compromise is gone and the
+// bound on the campaign's overlap is no longer "small" — it is zero.
 {
   const G=global.__G, P=G.BLD.farm.blockParts||[], bs=G.BSCALE.farm||1;
   const tcDef=G.BLD.towncenter;
-  const clearAt=(A)=>{ // the least farm-centre distance with no barn disc touching the TC box
+  // v134.8: the same solver, now asked BOTH questions. `rotOf` is the field's rotation as a
+  // function of its bearing from the Town Center — () => 0 is a farm as v134.7 built them, and
+  // -(th+PI/2) is what farmFacing computes. One solver, two answers, so the pair cannot drift.
+  const clearAt=(A,rotOf)=>{ // the least farm-centre distance with no barn disc touching the TC box
     const hx=((tcDef.fxA&&tcDef.fxA[A])||tcDef.fx)+0.7, hz=((tcDef.fzA&&tcDef.fzA[A])||tcDef.fz)+0.7;
-    for(let D=16;D<=44;D+=0.05){
+    for(let D=6;D<=44;D+=0.05){
       let ok=true;
       for(let i=0;i<720&&ok;i++){
         const th=i/720*Math.PI*2, fx=Math.cos(th)*D, fz=Math.sin(th)*D;
+        const rot=rotOf(th), c=Math.cos(rot), sn=Math.sin(rot);
         for(const q of P){
           if(q.minAge!==undefined&&A<q.minAge)continue;
           if(q.maxAge!==undefined&&A>q.maxAge)continue;
-          const wx=fx+q.x*bs, wz=fz+q.z*bs, qr=q.r*bs+0.7;
+          const qx=q.x*bs, qz=q.z*bs, qr=q.r*bs+0.7;
+          const wx=fx+qx*c+qz*sn, wz=fz-qx*sn+qz*c;  // the collider's own local -> world
           const gx=Math.max(0,Math.abs(wx)-hx), gz=Math.max(0,Math.abs(wz)-hz);
           if(gx*gx+gz*gz<qr*qr){ok=false;break;}
         }
@@ -933,7 +953,7 @@ check("AI still builds farms with doubled footprint ("+farms+")",farms>=2);
     }
     return 99;
   };
-  const tbl=[1,2,3,4,5].map(A=>({A,d:clearAt(A)}));
+  const tbl=[1,2,3,4,5].map(A=>({A,d:clearAt(A,()=>0)}));
   const shown=tbl.map(r=>"age"+r.A+" "+r.d.toFixed(2)).join(" · ");
   // The table is the pin. Rescale the farm model, move a blockPart, or change the Town Center's
   // fxA/fzA and these numbers move and this goes red — which is the only way the sentence
@@ -948,35 +968,61 @@ check("AI still builds farms with doubled footprint ("+farms+")",farms>=2);
   // clears more ages — rotating the barns would clear all five — this goes red and whoever reads it
   // gets to delete a caveat instead of inheriting a stale one.
   const shortAt=tbl.filter(r=>G.TC_FARM_MIN<r.d).map(r=>"age"+r.A);
-  check("v134.1 barn: TC_FARM_MIN ("+G.TC_FARM_MIN+") clears the box at age 2 ALONE — short at "+
-    shortAt.join(",")+", because clearing them all needs 26.75 against a ring of "+G.TC_RING+
-    ". The overlap is bounded below, no body ends up in it, and the cure is to rotate the barns "+
-    "to face away — which needs a shot before it ships",
-    shortAt.join(",")==="age1,age3,age4,age5");
+  // v134.8 THE SECOND TABLE. Same solver, the field turned so its local -z — the barn's face —
+  // points out along its own bearing. Both tables are pinned, because the interesting number is
+  // the DIFFERENCE and a pin on one half of a comparison is not a pin.
+  const away=(th)=>-(th+Math.PI/2);
+  const tbl2=[1,2,3,4,5].map(A=>({A,d:clearAt(A,away)}));
+  const shown2=tbl2.map(r=>"age"+r.A+" "+r.d.toFixed(2)).join(" · ");
+  const expect2={1:13.40,2:10.60,3:13.50,4:15.90,5:11.95};
+  const drift2=tbl2.filter(r=>Math.abs(r.d-expect2[r.A])>0.1)
+                   .map(r=>"age"+r.A+" "+r.d.toFixed(2)+" not "+expect2[r.A]);
+  const worstNow=Math.max(...tbl.map(r=>r.d)), worstAway=Math.max(...tbl2.map(r=>r.d));
+  check("v134.8 barn: turning the barn outward drops the clearance the ring needs from "+
+    worstNow.toFixed(2)+" to "+worstAway.toFixed(2)+" ("+shown2+") — so TC_FARM_MIN ("+G.TC_FARM_MIN+
+    ") clears the Town Center's box at EVERY age with "+(G.TC_FARM_MIN-worstAway).toFixed(2)+
+    " to spare, where AS BUILT it was short at "+shortAt.join(",")+". That is why the fields turn: "+
+    "the alternative was TC_FARM_MIN 27 inside a TC_RING of 30, a three-unit band for a field "+
+    "thirteen wide"+(drift2.length?" — DRIFTED: "+drift2.join(" · "):""),
+    drift2.length===0&&worstAway<=G.TC_FARM_MIN&&shortAt.join(",")==="age1,age3,age4,age5");
   // …and whatever overlap the ring does permit stays inside what a farm at its inner edge can
   // reach. A deeper one would mean the RING leaked, not the barn.
-  let worst=0;
+  // v134.8 AT EVERY AGE THE THRONE WILL REACH, and that is the whole change here. Read at the
+  // town's CURRENT age this measured 0.00 on every seed tried — on v134.7 as well as on v134.8 —
+  // so as a claim about the rotation it had no teeth at all: the bound of 2.81 was the deepest a
+  // field at the ring's inner edge COULD reach, not a depth anything had been observed at, and a
+  // ten-farm town rarely lands one in the 2.4% of the legal ring that laps. But a Town Center's
+  // box GROWS: 8.50x7.75 at Classical, 11.88x11.90 at Medieval. A field planted at Bronze that
+  // clears today is standing in the walls two ages later, and its rotation was chosen once, at
+  // placement. Swept over all five ages the same campaign reads 0.47 deep on two part-ages with
+  // the rotation removed and 0.00 with it in — so this now discriminates, which the version it
+  // replaces did not.
+  let worst=0, lapped=0;
   for(const t of [0,1]){
     const tc=G.buildings.find(b=>b.alive&&b.team===t&&b.type==="towncenter"); if(!tc)continue;
-    const A=Math.max((tc.def.age||0),Math.min(5,G.teamAge[t]||0));
-    const hx=((tc.def.fxA&&tc.def.fxA[A])||tc.def.fx)+0.7, hz=((tc.def.fzA&&tc.def.fzA[A])||tc.def.fz)+0.7;
-    for(const f of G.buildings){
-      if(!f.alive||f.team!==t||f.type!=="farm")continue;
-      const rot=f.rot||0, c=Math.cos(rot), sn=Math.sin(rot);
-      for(const q of P){
-        if(q.minAge!==undefined&&A<q.minAge)continue;
-        if(q.maxAge!==undefined&&A>q.maxAge)continue;
-        const qx=q.x*bs, qz=q.z*bs, qr=q.r*bs+0.7;
-        const wx=f.x+qx*c+qz*sn, wz=f.z-qx*sn+qz*c;   // the same local->world as the collider
-        const gx=Math.max(0,Math.abs(wx-tc.x)-hx), gz=Math.max(0,Math.abs(wz-tc.z)-hz);
-        const ov=qr-Math.hypot(gx,gz);
-        if(ov>worst)worst=ov;
+    for(const A of [1,2,3,4,5]){
+      const hx=((tc.def.fxA&&tc.def.fxA[A])||tc.def.fx)+0.7, hz=((tc.def.fzA&&tc.def.fzA[A])||tc.def.fz)+0.7;
+      for(const f of G.buildings){
+        if(!f.alive||f.team!==t||f.type!=="farm")continue;
+        const rot=f.rot||0, c=Math.cos(rot), sn=Math.sin(rot);
+        for(const q of P){
+          if(q.minAge!==undefined&&A<q.minAge)continue;
+          if(q.maxAge!==undefined&&A>q.maxAge)continue;
+          const qx=q.x*bs, qz=q.z*bs, qr=q.r*bs+0.7;
+          const wx=f.x+qx*c+qz*sn, wz=f.z-qx*sn+qz*c;   // the same local->world as the collider
+          const gx=Math.max(0,Math.abs(wx-tc.x)-hx), gz=Math.max(0,Math.abs(wz-tc.z)-hz);
+          const ov=qr-Math.hypot(gx,gz);
+          if(ov>0.0001)lapped++;
+          if(ov>worst)worst=ov;
+        }
       }
     }
   }
-  check("v134.1 barn: the worst overlap the campaign produced is "+worst.toFixed(2)+", within what "+
-    "a farm at the ring's inner edge can reach (2.81) — deeper would mean the ring leaked",
-    worst<=2.81);
+  check("v134.1/v134.8 barn: not one field either campaign planted laps its own Town Center at ANY "+
+    "age that throne will reach ("+lapped+" lapping part-ages, worst "+worst.toFixed(2)+"). Read at "+
+    "the CURRENT age this was 0.00 on v134.7 too and said nothing; the box grows with the age and "+
+    "a field's rotation is chosen once, at placement",
+    worst<=0.0001);
 }
 // v134.0 …AND NOBODY IS STANDING INSIDE ONE. A pure read of the world the campaign above just
 // built — no ticks, no bodies added, nothing perturbed. Run against the shipped v133 game code
@@ -1694,6 +1740,12 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   strayer.alive=false;
   // walk INTO the north-mid pocket: allowed — and the pack answers
   const north=CS.find(s=>s.x===0&&s.z>0);
+  // v134.8: MUSTER IT FIRST. The wave-size check three lines up calls campNewWave on the FIRST
+  // camp and this test walks into the NORTH one, which a passing army is free to have wiped —
+  // `waiting` with an empty pack — twenty minutes of campaign earlier. On SMOKE_SEED=1 under the
+  // v134.8 economy it had been, and "the pack savages an intruder" measured an empty pocket and
+  // reported -0 hp. The claim is about the pack, so the pack is staged.
+  G.campNewWave(north);
   const intruder=G.makeUnit(0,"clubman",0,MAPh.z-2,{name:"Intruder",bot:{role:"citizen"}});
   intruder.hp=intruder.maxHp=100000; intruder.bot=null; // stand and take it (and never bot-wander)
   intruder.root.position.set(north.x,0,north.z); // step onto the camp's heart
@@ -1967,15 +2019,53 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   G.NET.mode="host";
   const pl=units.find(u=>u.isPlayer);
   const ox=pl.root.position.x,oz=pl.root.position.z;
-  pl.alive=true; pl.root.position.set(-60,0,-90); // open southern ground
+  // v134.8 SCOUT THE LANE, DO NOT ASSUME IT. This was a hardcoded (-60,-90) "open southern
+  // ground", and it was open on the seeds anyone happened to run. A charge is an ATTACK-move:
+  // engageNearest(16) is checked before the mark, so one enemy patrol standing near the start
+  // drags all three chargers away and the bench reports that a charge does not raze or hold —
+  // which is a statement about the neighbourhood, not about the charge. Measured on the v134.8
+  // campaign, seed 0x5E1F: six red soldiers at (-71..-75,-93) against a start of (-64..-58,-96),
+  // and the line chased them 78 units past its own mark. Clearance is generous because the
+  // corridor is 85 long and the world keeps moving for 23 sim-seconds after the scout runs.
+  const CLEAR_MIN=26, CD=G.CHARGE_DIST;
+  const segD=(px,pz,ax,az,bx,bz)=>{ // point to segment, the only geometry this needs
+    const vx=bx-ax,vz=bz-az, L2=vx*vx+vz*vz||1;
+    let t=((px-ax)*vx+(pz-az)*vz)/L2; t=t<0?0:(t>1?1:t);
+    return Math.hypot(px-(ax+vx*t),pz-(az+vz*t));
+  };
+  // The EMPTIEST corridor on the map, not the first one over a threshold — so the bench degrades by
+  // reporting a number instead of by falling off a cliff, and so a busier world (v134.8 put the
+  // enemy marshal on NORMAL, which fields a bigger army) moves the lane rather than losing it.
+  let lane=null;
+  for(let lz=-135;lz<=135;lz+=15)for(let lx=-190;lx<=110;lx+=20){
+    const ax=lx-8, bx=lx+CD+8;
+    if(Math.abs(bx)>G.MAP.x-12||Math.abs(ax)>G.MAP.x-12)continue;
+    let ground=true;
+    for(let k=0;k<=20&&ground;k++)if(!G.walkable(ax+(bx-ax)*k/20,lz))ground=false; // …and it is ground
+    if(!ground)continue;
+    let m=1e9;
+    for(const u of units){ if(!u.alive||u.isPlayer)continue;
+      m=Math.min(m,segD(u.root.position.x,u.root.position.z,ax,lz,bx,lz)); if(m<=0)break; }
+    if(m>0)for(const b of buildings){ if(!b.alive)continue;
+      m=Math.min(m,segD(b.x,b.z,ax,lz,bx,lz)-G.bSurf(b.def)); if(m<=0)break; }
+    if(m>0)for(const C of G.CREEP_SITES) m=Math.min(m,segD(C.x,C.z,ax,lz,bx,lz)-C.r);
+    if(!lane||m>lane.m)lane={x:lx,z:lz,m};
+  }
+  if(!lane)lane={x:-60,z:-90,m:-1}; // the old fixed lane, and the check below says so
+  check("the charge bench fights on the emptiest corridor on the map ("+lane.x+","+lane.z+
+    ", nearest anything "+lane.m.toFixed(1)+" against a floor of "+CLEAR_MIN+")",lane.m>=CLEAR_MIN);
+  const LX=lane.x, LZ=lane.z;
+  pl.alive=true; pl.root.position.set(LX,0,LZ);
   check("F with no rally raises no army (orderCharge refuses)",G.orderCharge(pl,-Math.PI/2)===0||units.every(v=>!v.rally));
   const troop=[];
-  for(let i=0;i<3;i++){const s=G.makeUnit(0,"clubman",-64+i*3,-96,{name:"Charger"+i,bot:{role:"citizen"}});
+  for(let i=0;i<3;i++){const s=G.makeUnit(0,"clubman",LX-4+i*3,LZ-6,{name:"Charger"+i,bot:{role:"citizen"}});
     s.rally=true; s.spread=(i-1)*3; s.hp=s.maxHp=5000; troop.push(s);} // hardy: stray armies must not decide this test
-  const shack=G.makeBuilding(1,"house",-25,-90,true); // a red shack squats in the charge lane
+  const shack=G.makeBuilding(1,"house",LX+35,LZ,true); // a red shack squats in the charge lane
   const n=G.orderCharge(pl,-Math.PI/2); // gaze due EAST: fx=-sin(-π/2)=1
-  check("the horn sounds: "+n+" rallied soldiers take a charge order east",
-    n>=3&&troop.every(v=>v.chargeTo&&Math.abs(v.chargeTo.x-25)<1&&Math.abs(v.chargeTo.z+90)<1));
+  const MX=LX+CD, MZ=LZ; // the mark: CHARGE_DIST down the gaze, and the scout proved it walkable
+  check("the horn sounds: "+n+" rallied soldiers take a charge order east ("+MX.toFixed(0)+","+
+    MZ.toFixed(0)+")",
+    n>=3&&troop.every(v=>v.chargeTo&&Math.abs(v.chargeTo.x-MX)<1&&Math.abs(v.chargeTo.z-MZ)<1));
   let razedAt=-1;
   // v134.5 …AND THE MARSHAL DOES NOT RE-TASK THE HORN MID-CHARGE. These three are ordinary bots
   // with a role, so across 1400 frames the war room is free to deal them into a band and march
@@ -1992,7 +2082,7 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   // v93: the mark can land beside (or inside) a campaign building since the 2.2 gap
   // sprawled the towns — holders park around obstructions, so allow a wider ring and
   // let ONE straggler get body-blocked without failing the whole line (was 3/3 within 10).
-  const held=troop.filter(v=>v.alive&&Math.hypot(v.root.position.x-25,v.root.position.z+90)<16).length;
+  const held=troop.filter(v=>v.alive&&Math.hypot(v.root.position.x-MX,v.root.position.z-MZ)<16).length;
   check("the line HOLDS the far ground after the path is cleared ("+held+"/3 within 16 of the mark)",held>=2);
   check("holding troops keep their charge order until recalled",troop.every(v=>v.chargeTo));
   G.toggleRally(); // G: a fresh rally recalls the line — the charge dissolves
@@ -2224,7 +2314,17 @@ check("team selection: a RED request yields a RED body",redBody&&redBody.team===
  check("the name screen names the warrior (myName='"+NET.myName+"')",NET.myName==="John T");
  NET.myName="Warrior";}
 // v93: hostAct buff — a guest's pick is validated against the standing table + the forge's yard
-{const bu=global.__G.makeUnit(0,"clubman",-118,60,{name:"Chooser",bot:null}); bu.remote="smith-peer";
+// v134.8: AT the forge, wherever the campaign put it. hostAct's buff branch refuses any pick from
+// a body that is not within bSurf(blacksmith)+4.6 of a BUILT blacksmith — "Stand at the Blacksmith
+// to trade XP for steel" — and this bench stood its chooser on a hardcoded (-118,60) and hoped.
+// On SMOKE_SEED=42 with the v134.8 economy blue's forge was not there, and a bench about
+// VALIDATION reported that a legal pick had been refused. If the town has no forge at all, stage
+// one and take it away again.
+{const _G=global.__G;
+ const _forge=_G.buildings.find(b=>b.alive&&b.built&&b.team===0&&b.type==="blacksmith")||null;
+ const _tmp=_forge?null:_G.makeBuilding(0,"blacksmith",-118,60,true);
+ const _fg=_forge||_tmp;
+ const bu=_G.makeUnit(0,"clubman",_fg.x+_G.bSurf(_G.BLD.blacksmith)+2,_fg.z,{name:"Chooser",bot:null}); bu.remote="smith-peer";
  const fr={unit:bu,conn:{open:true,sent:[],send(o){this.sent.push(o);}},name:"Chooser"};
  bu.xp=2; bu.smithOffer=null;
  NET.mode="host";
@@ -2235,7 +2335,7 @@ check("team selection: a RED request yields a RED body",redBody&&redBody.team===
  NET.mode="guest";
  check("hostAct buff: a bogus pick is denied; the offered pick is granted (stack "+global.__G.buffSt(bu,off[1])+", xp "+bu.xp+")",
    denied&&global.__G.buffSt(bu,off[1])===1&&bu.xp===1);
- bu.alive=false;}
+ bu.alive=false; if(_tmp)_tmp.alive=false;}
 if(redBody){redBody.remote=null;delete NET.remotes["red-friend"];NET.conns=NET.conns.filter(c=>c!==fakeConn);}
 
 // THE PISTOL: six rounds through the REAL tryAttack, then dry clicks
@@ -4098,8 +4198,15 @@ global.__G.setGameOver(false);
       // a gate had silently left the building because the code got better, and only the count would
       // ever have said so. A conditional gate is a gate that can disappear.
       const _bzOwn=G2.neutralMarkets.map(m=>m.owner);
-      if(!G2.neutralMarkets.some(m=>m.owner!==team)&&G2.neutralMarkets.length)
-        G2.neutralMarkets[0].owner=1-team;
+      // v134.8: EVERY square unheld, not merely one of them. The exemption under test is
+      // `_taking`, and _taking is false on a square the team ALREADY OWNS however far along its
+      // capture bar is — an owned square is covered by the separate v134.5 _guard rule instead,
+      // which only pins ONE band. bandHoldPoint has dealt owned squares into the pool since
+      // v134.5 (want.concat(mine)), so which square this band drew depended on how many hold
+      // bands the campaign happened to have: on SMOKE_SEED=3 it drew one blue already held, was
+      // relieved into a camp mission, and a gate about capture reported on the deal. Making the
+      // whole board contested is the staging the sentence describes.
+      for(const m of G2.neutralMarkets)m.owner=1-team;
       const bz=G2.neutralMarkets.find(m=>m.owner!==team);
       if(bz){
         const hb3={id:9003,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,laneZ:0,laneUntil:NOWT+999};
@@ -7378,8 +7485,17 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
     const u=G.makeUnit(0,"villager",pit.x-13,pit.z,{name:"FarHauler",bot:{role:"citizen",res:"wood"}});
     u.carry.wood=20; u.bot.haul=true; u.bot.node=null;
     const w0=G.stock[0].wood;
-    run(u,45);
-    const banked=G.stock[0].wood-w0, d=Math.hypot(u.root.position.x-pit.x,u.root.position.z-pit.z);
+    // v134.8 STOP AT THE DEPOSIT. `run(u,45)` kept ticking for forty-odd seconds after the logs
+    // landed — u.bot.node is null, so the villager goes looking for a fresh seam — and every
+    // sidestep of that search was charged to an approach that had already finished. Same budget,
+    // same zero-sidestep bar, measured over the walk this sentence is about.
+    let banked=0, d=0;
+    for(let i=0;i<30*45;i++){
+      G.updateBot(u,1/30); G.advanceT(1/30);
+      banked=G.stock[0].wood-w0;
+      if(banked>=20)break;
+    }
+    d=Math.hypot(u.root.position.x-pit.x,u.root.position.z-pit.z);
     const steps=u._stkT||0;
     u.alive=false; pit.alive=false; restore();
     check("v134.4 far side: a hauler standing WEST of a Storage Pit banks its twenty logs ("+
@@ -7397,7 +7513,13 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
     const bar=G.makeBuilding(0,"barracks",spot.x,spot.z,true);
     const u=G.makeUnit(0,"villager",bar.x-16,bar.z,{name:"FarRecruit",bot:{role:"citizen",res:"food"}});
     u.convertTo="clubman"; u.convertAt="barracks";
-    run(u,30);
+    // v134.8 STOP AT THE CONVERSION — see the note on the haul above. On SMOKE_SEED=777 this one
+    // armed inside the first second and then wandered for twenty-nine more among twelve villagers,
+    // booking six sidesteps against a walk that was over.
+    for(let i=0;i<30*30;i++){
+      G.updateBot(u,1/30); G.advanceT(1/30);
+      if(u.cls!=="villager")break;
+    }
     const cls=u.cls, d=Math.hypot(u.root.position.x-bar.x,u.root.position.z-bar.z);
     const steps=u._stkT||0;
     u.alive=false; bar.alive=false; restore();
@@ -7467,6 +7589,34 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
       cartWorker+" / clubman "+soldier+". Every 'cls!==villager' in the marshal's file meant this, "+
       "and a trade cart has quietly failed four of these tests since v99",
       !drafted&&!prog&&worker&&cartWorker&&!soldier);
+  }
+
+  // --- 4b. THE BED HAS A BOTTOM. v134.8: the bite was clamped against the SEAM alone, so an ox on
+  //         299 of 300 took a full four and ended on 303. It needs a dying tree to get to 299 —
+  //         300 is exactly 75 bites of four, so only a truncated bite leaves an odd number — which
+  //         is why the campaign sweep found it on one seed in eight. Staged, it is arithmetic.
+  {
+    const seam=G.nodes.find(n=>n.type==="wood"&&n.amount>60);
+    const a0=seam.amount;
+    const mk=(carried)=>{
+      const ox=G.makeUnit(0,"oxcart",seam.x+1.5,seam.z+1.5,{name:"CapOx",bot:{role:"citizen",res:"wood"}});
+      ox.bot.node=seam; ox.bot.off={x:0.5,z:0.5}; ox.carry.wood=carried;
+      const before=seam.amount, held=ox.carry.wood;
+      for(let i=0;i<30*4&&ox.carry.wood===held;i++){G.updateBot(ox,1/30);G.advanceT(1/30);}
+      const bite=ox.carry.wood-held, load=ox.carry.wood;
+      seam.amount=before; ox.alive=false;
+      return {bite,load};
+    };
+    const cap=G.carryCap({cls:"oxcart",buffs:null,carry:{food:0,gold:0,stone:0,wood:0}});
+    const brim=mk(cap-1), empty=mk(0);
+    seam.amount=a0;
+    check("v134.8 ox: a bed with one log's room left takes ONE log ("+brim.bite+", ending on "+
+      brim.load+" of "+cap+"), and an empty one still takes FOUR ("+empty.bite+"). The bite was "+
+      "clamped against the seam alone, so a tree running dry mid-load left the ox on 299 and the "+
+      "next full bite made 303 — bounded at 3, found on SMOKE_SEED=99, and the only flat rule the "+
+      "economy gates have. 09-main.js:120 and 10-net.js:1245 have clamped on the room left since "+
+      "v99; the marshal's copy did not",
+      brim.bite===1&&brim.load<=cap&&empty.bite===4);
   }
 
   // --- 5. THE OX AT WORK: four logs a swing into a bed of 300, and it will not touch anything else.
@@ -7858,6 +8008,184 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
       wired+") and lights the one the dial is actually on ("+paints+"). AI_DIFF has had the normal "+
       "row since v94; only the button was missing",
       missing.length===0&&wired&&paints);
+  }
+}
+
+// ==================== v134.8 A SOLO GAME STARTS SYMMETRIC ====================
+{
+  const G=global.__G;
+  const fs2=require("fs"), path2=require("path");
+  const data=fs2.readFileSync(path2.join(__dirname,"..","js","00-data.js"),"utf8");
+  const m=data.match(/let aiDifficulty="([a-z]+)"/);
+  const boot=m?m[1]:null;
+  const _dial=G.getAIDiff(), _mode=G.NET.mode, _pt=G.player?G.player.team:null;
+  G.NET.mode="solo"; if(G.player)G.player.team=G.BLUE;
+  if(boot)G.setAIDiff(boot);
+  const blue=G.diffFor(G.BLUE), red=G.diffFor(G.RED);
+  G.setAIDiff(_dial); G.NET.mode=_mode; if(G.player&&_pt!==null)G.player.team=_pt;
+  const nm=G.AI_DIFF.normal, e=G.AI_DIFF.easy;
+  check("v134.8 default: a solo game boots with the dial on "+boot+", so the player's bots ("+blue+
+    ") and the enemy's ("+red+") are on the SAME tier. It was easy — think "+e.think+"s against "+
+    nm.think+", train x"+e.trainMul+" against x"+nm.trainMul+", "+e.vetKills+" kills a level "+
+    "against "+nm.vetKills+" — because diffFor gives any team holding a human 'normal' whatever "+
+    "the dial says, so the one tier a player could not pick for his enemy was his own. EASY is "+
+    "unchanged and one click away in both rooms (v134.7)",
+    boot==="normal"&&blue===red&&blue==="normal");
+}
+
+// ==================== v134.8 THE BARNS TURN OUT ====================
+{
+  const G=global.__G;
+  const P=G.BLD.farm.blockParts||[], bs=G.BSCALE.farm||1;
+  const tc=G.teamTC(0);
+  // Does a field planted at this bearing, turned the way farmFacing turns it, put any barn disc
+  // inside the Town Center's box? `rotOf` lets the same sweep ask the question of a rule that is
+  // NOT the shipped one, which is the only way the pit trap below can show its teeth.
+  //
+  // EVERY AGE, not the age this seed's town happens to have reached. A Town Center's box is
+  // 11.26x10.75 at Stone, 8.50x7.75 at Classical, 11.88x11.90 at Medieval and 9.10 at
+  // Enlightenment, so a field that laps at age 4 clears at age 2 — and a rotation is chosen ONCE,
+  // at placement, for a field that stands through all of them. The first cut read teamAge and
+  // reported 2 lapping plots on a seed whose blue was young against 23 on one whose blue was not,
+  // which made a statement about geometry depend on how the campaign went.
+  const RADII=[G.TC_FARM_MIN+0.5,24,26.5,G.TC_RING-1];
+  const NPROBE=72*RADII.length*5;                 // …times all five ages
+  const lap=(rotOf)=>{
+    let bad=0;
+    for(const A of [1,2,3,4,5]){
+      const hx=((tc.def.fxA&&tc.def.fxA[A])||tc.def.fx)+0.7,
+            hz=((tc.def.fzA&&tc.def.fzA[A])||tc.def.fz)+0.7;
+      for(let i=0;i<72;i++)for(const r of RADII){
+        const th=i/72*Math.PI*2;
+        const fx=tc.x+Math.cos(th)*r, fz=tc.z+Math.sin(th)*r;
+        const rot=rotOf(fx,fz), c=Math.cos(rot), sn=Math.sin(rot);
+        for(const q of P){
+          if(q.minAge!==undefined&&A<q.minAge)continue;
+          if(q.maxAge!==undefined&&A>q.maxAge)continue;
+          const qx=q.x*bs, qz=q.z*bs, qr=q.r*bs+0.7;
+          const wx=fx+qx*c+qz*sn, wz=fz-qx*sn+qz*c;
+          const gx=Math.max(0,Math.abs(wx-tc.x)-hx), gz=Math.max(0,Math.abs(wz-tc.z)-hz);
+          if(gx*gx+gz*gz<qr*qr){bad++;break;}
+        }
+      }
+    }
+    return bad;
+  };
+  // "Face away from the NEAREST anchor" — the rule farmFacing does NOT use, evaluated over a
+  // CONTROLLED set of anchors rather than whatever this seed's campaign built. That matters: on
+  // SMOKE_SEED=20260827 blue already had a pit closer to the relevant arc than a staged one, so
+  // the naive rule lapped nothing and a gate about the RULE reported on the town instead.
+  const nearestOf=(anch)=>(x,z)=>{
+    let ax=null,az=null,best=1e12;
+    for(const an of anch){
+      const d=Math.hypot(x-an.x,z-an.z);
+      if(d<best){best=d;ax=an.x;az=an.z;}
+    }
+    return ax===null?0:-(Math.atan2(z-az,x-ax)+Math.PI/2);
+  };
+  // …and the shipped rule written out: try each anchor's facing, keep the one with the most room.
+  // `gate` is the design decision itself — with it, a facing that would put the barn in the
+  // THRONE's box is disqualified however much room it leaves elsewhere; without it, the throne is
+  // one vote among several. This is a transcription of farmFacing (07-ai.js) and the second check
+  // below asserts it agrees with the shipped function over the same anchors, so the copy cannot
+  // quietly drift from the original — which is also what makes dropping the gate in the real
+  // function visible from here.
+  const roomiestOf=(anch,gate)=>(x,z)=>{
+    let best=0,bestS=-1e9;
+    for(const a of anch){
+      const rot=-(Math.atan2(z-a.z,x-a.x)+Math.PI/2), c=Math.cos(rot), sn=Math.sin(rot);
+      let room=1e9,throne=1e9;
+      for(const q of P){
+        const qx=q.x*bs, qz=q.z*bs, qr=q.r*bs+0.7;
+        const wx=x+qx*c+qz*sn, wz=z-qx*sn+qz*c;
+        for(const b of anch){
+          const g=Math.hypot(wx-b.x,wz-b.z)-(b.def?G.bSurf(b.def)+1:0)-qr;
+          if(g<room)room=g;
+          if(b.type==="towncenter"&&g<throne)throne=g;
+        }
+      }
+      const sc=(gate&&throne<0)?room-1000:room;
+      if(sc>bestS){bestS=sc;best=rot;}
+    }
+    return best;
+  };
+
+  // --- 1. THE RING SWEEP. Every legal bearing at the ring's inner edge, against the live town.
+  {
+    const turned=lap((x,z)=>G.farmFacing(0,x,z));
+    const flat=lap(()=>0);
+    check("v134.8 sweep: over "+NPROBE+" plot-ages in the live town's ring (72 bearings x radii "+
+      RADII.map(r=>r.toFixed(1)).join("/")+" x all five ages), "+turned+" put a barn disc inside "+
+      "the Town Center's box. As v134.7 built them — barn fixed in world space — it is "+flat+
+      " (by age 4 / 0 / 6 / 23 / 2). The ring's inner "+
+      "edge finally means what the v134.1 comment always claimed it meant",
+      turned===0&&flat>0);
+  }
+
+  // --- 2. THE TRAP TOWN: the design decision, made measurable, on ground we control.
+  {
+    // Three buildings staged around the live throne — a Storage Pit at the ring's edge (the
+    // closest one may legally stand: findSpot samples TC_RING+1 .. TC_RING+18), a second pit and a
+    // castle — and every OTHER anchor of blue's hidden for the duration, so farmAnchors returns
+    // exactly this set and the comparison below is about the RULE rather than about whatever this
+    // seed's campaign happened to build. Staged instant and retired again, the way the mill-layout
+    // bench retires its ring.
+    const hid=[];
+    for(const b of G.buildings){
+      if(!b.alive||b.team!==0)continue;
+      if(b===tc)continue;
+      if(b.type==="storage_pit"||b.type==="castle"||b.type==="towncenter"){b.alive=false;hid.push(b);}
+    }
+    const st=[G.makeBuilding(0,"storage_pit",tc.x+G.TC_RING+1,tc.z,true),
+              G.makeBuilding(0,"storage_pit",tc.x-8,tc.z+33,true),
+              G.makeBuilding(0,"castle",tc.x+20,tc.z-36,true)];
+    const TOWN=G.farmAnchors(0).map(an=>({x:an.x,z:an.z,def:an.def,type:an.type}));
+    const shipped=lap((x,z)=>G.farmFacing(0,x,z));
+    const naive  =lap(nearestOf(TOWN));
+    const nogate =lap(roomiestOf(TOWN,false));
+    const gated  =lap(roomiestOf(TOWN,true));
+    const flat   =lap(()=>0);
+    // …and the transcription IS the shipped function, over these same anchors. Without this the
+    // paragraph below would be about code that is not running.
+    let apart=0, worstD=0;
+    for(let i=0;i<72;i++)for(const r of RADII){
+      const th=i/72*Math.PI*2;
+      const x=tc.x+Math.cos(th)*r, z=tc.z+Math.sin(th)*r;
+      const d=Math.abs((((roomiestOf(TOWN,true)(x,z)-G.farmFacing(0,x,z))%(Math.PI*2))+Math.PI*3)%(Math.PI*2)-Math.PI);
+      if(d>1e-9){apart++; worstD=Math.max(worstD,d);}
+    }
+    for(const b of st)b.alive=false;
+    for(const b of hid)b.alive=true;
+    check("v134.8 anchors: a throne, a Storage Pit at TC_RING+1, a second pit and a castle — every "+
+      "other anchor hidden so the rule is what is being measured. Over "+NPROBE+" plot-ages: not "+
+      "turning at all laps "+flat+", turning away from the NEAREST anchor laps "+naive+" (WORSE — "+
+      "the fields between the pit and the throne are nearer the PIT, so they turn their backs on "+
+      "it and drive their barns into the box), trying every anchor's facing and keeping the "+
+      "roomiest laps "+nogate+", and doing that with the throne's box as a HARD GATE rather than "+
+      "one vote among several laps "+gated+". The shipped farmFacing laps "+shipped,
+      shipped===0&&gated===0&&flat>0&&naive>0&&nogate>0);
+    check("v134.8 anchors: …and the rule written out above IS farmFacing — same answer on all "+
+      NPROBE/5+" plots of that town's ring over its "+TOWN.length+" anchors (worst disagreement "+
+      worstD.toExponential(1)+" rad)",apart===0);
+  }
+
+  // --- 3. THE PLAYER'S FIELDS TURN TOO.
+  {
+    const fs2=require("fs"), path2=require("path");
+    const inp=fs2.readFileSync(path2.join(__dirname,"..","js","06-input.js"),"utf8");
+    // In updateGhostFollow, so it re-aims as he walks around the town; guarded by rotManual, so R
+    // takes it back; and R must SET that flag or the ghost snaps home the moment he lets go.
+    const inGhost=inp.indexOf('if(placing.type==="farm"&&!placing.rotManual)placing.rot=farmFacing(MYTEAM,')>=0;
+    const rKey=/placing\.rot=\(\(placing\.rot\|\|0\)\+Math\.PI\/4\)[\s\S]{0,400}?placing\.rotManual=true/.test(inp);
+    // …and the value has to land in placing.rot rather than straight on the mesh, because that is
+    // the field the commit and the guest's build request both read (06-input.js:850/856).
+    const commits=inp.indexOf('makeBuilding(MYTEAM,placing.type,x,z,false,placing.rot||0)')>=0;
+    const guest=inp.indexOf('NET.guestAct({act:"build",type:placing.type,x:x,z:z,rot:placing.rot||0})')>=0;
+    check("v134.8 ghost: a player's farm turns itself the same way the AI's do — in "+
+      "updateGhostFollow ("+inGhost+"), overridable with R ("+rKey+"), and carried on placing.rot "+
+      "so the host's own commit ("+commits+") and a guest's build request ("+guest+") both ship "+
+      "the rotation without a second code path",
+      inGhost&&rKey&&commits&&guest);
   }
 }
 

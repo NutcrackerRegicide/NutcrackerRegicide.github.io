@@ -202,6 +202,10 @@ addEventListener("keydown",e=>{
   }
   if(placing&&k==="r"){ // rotate the foundation
     placing.rot=((placing.rot||0)+Math.PI/4)%(Math.PI*2);
+    // v134.8: and from here on this placement is HIS. A farm's ghost turns its barn outward on
+    // every frame (updateGhostFollow), which without this flag would snap back the instant he let
+    // go of the key — an auto-orientation that cannot be overridden is a bug, not a convenience.
+    placing.rotManual=true;
     if(ghost)ghost.rotation.y=placing.rot;
     return;
   }
@@ -597,7 +601,9 @@ document.getElementById("classmenu").addEventListener("click",e=>{
 function pickBuild(type){
   if((BLD[type].age||0)>teamAge[MYTEAM]){msg(BLD[type].name+" requires the "+AGES[BLD[type].age].name+". (T at your Town Center to advance)");return;}
   if(!canAfford(MYTEAM,bldCost(player,type))){msg("Not enough resources for a "+BLD[type].name+".");return;}
-  if(type==="farm")msg("Farms must border your Town Center or a Storage Pit.");
+  // v134.8: say the second half out loud. Auto-orientation the player cannot see the reason for
+  // reads as the game fighting his mouse.
+  if(type==="farm")msg("Farms must border your Town Center or a Storage Pit. The barn turns itself outward — R overrides.");
   // v134.1: and the inverse, for everything else — the ring is invisible, so it has to be spoken.
   else if(!BLD[type].wall)msg("Keep it clear of the Town Center — that ground is for farms.");
   cancelPlacing(); // never stack a second ghost
@@ -695,6 +701,13 @@ function updateGhostFollow(){ // shared by host frame and guest frame
     return;
   }
   // stage-0 marker and every ordinary building: the classic follow
+  // v134.8 …and a FARM turns its barn away from whatever it is ringing, exactly as the AI's do.
+  // The ring binds the player identically — validFor is the one choke point — so his barns lap the
+  // same Town Center box, and a field he plants beside the AI's should not be the one facing the
+  // wrong way. Recomputed per frame because the anchor changes as he walks around the town; R
+  // stops it (rotManual), and the value lands in placing.rot so the commit and the guest's
+  // build request both carry it without a second code path.
+  if(placing.type==="farm"&&!placing.rotManual)placing.rot=farmFacing(MYTEAM,a.x,a.z);
   ghost.position.set(a.x,terrainHeight(a.x,a.z),a.z);
   ghost.rotation.y=placing.rot||0;
   const ok=placementValid(a.x,a.z);
