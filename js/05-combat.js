@@ -1356,6 +1356,10 @@ function bazaarTick(dt){
 // announced on both machines: the host calls this from bazaarTick, a guest from applySnap when the
 // owner byte it receives disagrees with the one it is drawing.
 function bazaarTaken(m,team,was){
+  // v134.10 THE LEDGER, kept where the flip actually happens rather than sampled by anyone who
+  // wants it. `was` is already the previous owner — it was being passed in and used for nothing.
+  // A square a marshal keeps losing is a square it should be garrisoning harder (bazTowerWant).
+  if(was===0||was===1){ if(!m.lost)m.lost=[0,0]; m.lost[was]=(m.lost[was]||0)+1; }
   const who=(m.what==="grand")?"the Grand Bazaar":(m.what==="blue"?"the western bazaar":"the eastern bazaar");
   const mine=(team===MYTEAM);
   if(typeof msg==="function")
@@ -1925,7 +1929,11 @@ function respawnUnit(u){
   if(typeof revokeProg==="function")revokeProg(u);
   u.alive=true; u.root.visible=true; u.warned=false;
   u.corpse=false; u.body.rotation.x=0; // stand the reborn villager back up (buildBodyFor clears meshes but not the toppled tilt)
-  u.chargeTo=null; u.rally=false; u.rallyBy=null; // the dead answer no horn — a respawned villager forgets the band
+  // v134.9 …AND THE BAND, WHICH THIS LINE HAS CLAIMED SINCE IT WAS WRITTEN. bandRef was not
+  // cleared, so a respawned soldier came back pointing at a band whose roster had pruned him while
+  // he was dead — and manageBands' loose pool skips anyone whose bandRef names a LIVE band, so he
+  // was never dealt anywhere again. One soldier lost per death, compounding all match.
+  u.chargeTo=null; u.rally=false; u.rallyBy=null; u.bandRef=null; // the dead answer no horn — a respawned villager forgets the band
   if(u.isPlayer){
     document.getElementById("deathoverlay").style.display="none";
     updatePlayerHud();

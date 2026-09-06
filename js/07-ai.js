@@ -299,10 +299,32 @@ function mkDirector(team){ // v94: every marshal rolls a PERSONALITY
 }
 const directors=[mkDirector(BLUE),mkDirector(RED)];
 function countBld(team,type){let n=0;for(const b of buildings)if(b.alive&&b.built&&b.team===team&&b.type===type)n++;return n;}
+// v134.9 THE TOWN'S OWN TOWERS, WHICH IS NOT THE SAME SET AS "every Guard Tower this team owns".
+// A tower raised over a square (v134.6) carries bazTower and is paid for out of a different
+// allowance with a different stone floor; counting it against P.towers spends the town's budget on
+// the frontier's building. Includes sites still under construction, exactly as countBld does —
+// a marshal that has one going up should not order a second.
+function countScreenTowers(team){
+  let n=0;
+  for(const b of buildings)if(b.alive&&b.team===team&&b.type==="tower"&&!b.bazTower)n++;
+  return n;
+}
 function pendingBld(team){return buildings.filter(b=>b.alive&&b.team===team&&!b.built);}
 function affordKeep(team,cost,rf,rg){
   return stock[team].food>=(cost.food||0)+rf&&stock[team].gold>=(cost.gold||0)+rg&&
     stock[team].stone>=(cost.stone||0)&&stock[team].wood>=(cost.wood||0);
+}
+// v134.9 WHERE THE KINGS ROAD IS, AT A GIVEN x. roadPoint's x is LINEAR in t — it interpolates
+// TCPOS[0][0] to TCPOS[1][0] — so t is recoverable by division and the z falls straight out of the
+// same function the plazas, the tree-clearing corridor and the bazaar sites already share. The AI
+// used to carry the answer as the literal 6, which was right for a map two reworks ago; it is 7.98
+// at the wall line the turtle plans first and 13.64 at the last of its three retries. Two
+// derivations of one number is how a gate ends up somewhere the road isn't.
+function roadZAt(x){
+  const A0=TCPOS[0],B0=TCPOS[1];
+  const span=(B0[0]-A0[0])||1;
+  const t=Math.max(0,Math.min(1,(x-A0[0])/span));
+  return roadPoint(t).z;
 }
 function findSpot(team,type){
   const tc=TCPOS[team];
@@ -314,8 +336,21 @@ function findSpot(team,type){
     // building — the 00-data.js note at BLD.castle records that exact failure costing a release —
     // so the samplers are moved rather than left to fail. Areas are kept comparable: the old
     // general annulus spanned 1248 units of r-squared, the new one 1360.
-    if(type==="tower"){ // towers screen the approach to the base, from outside the fields
-      x=tc[0]+(team===BLUE?1:-1)*(TC_RING+2+Math.random()*24); z=(Math.random()-0.5)*66;
+    if(type==="tower"){
+      // v134.9 A SCREEN STANDS WHERE THEY WALK. This was z = (random-0.5)*66, i.e. anywhere in
+      // -33..+33 on a map 304 deep, and a Guard Tower reaches 18. Measured over four seeded
+      // campaigns, enemy soldiers crossing the defender's own wall line fall within |z| 33 only
+      // 31.9% of the time and within 25 of a LANE_Z 93.9% of the time — the lanes ARE the traffic,
+      // because assignLane deals every raid and every band one of the five. Counting sightings
+      // actually inside a built tower's reach, the shipped screen intercepted 11.9%.
+      // DEALT, NOT SAMPLED: LANE_Z is ordered centre-out [0, 48, -48, 106, -106], so the first
+      // tower screens the Kings Road, the next two the flanks, and a turtle's last two reach the
+      // far lanes. Random placement clusters; a deal spreads. The jitter keeps two towers on one
+      // lane from stacking when the count laps the table.
+      // Two draws here, two before — the seeded window (invariant #2) cannot move on a count.
+      const _lane=LANE_Z[countScreenTowers(team)%LANE_Z.length];
+      x=tc[0]+(team===BLUE?1:-1)*(TC_RING+2+Math.random()*24);
+      z=_lane+(Math.random()-0.5)*20;   // LANE_Z is MAP z, not town-relative — laneTarget reads it the same way
     }else if(type==="farm"){ // the fields ARE the ring
       const a=Math.random()*Math.PI*2,r=TC_FARM_MIN+0.5+Math.random()*(TC_RING-TC_FARM_MIN-1.5);
       x=tc[0]+Math.cos(a)*r; z=tc[1]+Math.sin(a)*r;
@@ -484,7 +519,10 @@ function directorThink(D){
   if(sites.length<(D.pers==="expand"?3:2)){
     let want=null;
     const barCap=T>240?2:1;
-    const need=(type,cap,rf,rg)=>(BLD[type].age||0)<=ag&&countBld(team,type)<cap&&
+    // v134.9 `have` overrides the count for the one type whose buildings come out of two
+    // different purses. Everything else keeps countBld.
+    const need=(type,cap,rf,rg,have)=>(BLD[type].age||0)<=ag&&
+      ((have===undefined?countBld(team,type):have)<cap)&&
       !sites.some(x=>x.type===type)&&affordKeep(team,BLD[type].cost,rf,rg);
     const farmCap=P.farmsBase+P.farmsPerAge*ag;
     if(need("barracks",barCap,0,0))want="barracks";
@@ -507,7 +545,10 @@ function directorThink(D){
     else if(need("watch_tower",2,80,0))want="watch_tower";
     else if(need("castle",P.castles,350,120))want="castle";
     else if(need("market",Math.min(P.markets,(ag>=5?5:ag>=4?3:1)),200,100))want="market";
-    else if(need("tower",Math.min(P.towers,Math.floor(T/95)),150+ag*40,60))want="tower";
+    // v134.9: …counting the town's OWN towers. This read countBld(team,"tower") through need, so
+    // every Guard Tower raised over a square since v134.6 spent one of these. Measured: across four
+    // seeded campaigns and eight armies, findSpot placed no screen tower at all.
+    else if(need("tower",Math.min(P.towers,Math.floor(T/95)),150+ag*40,60,countScreenTowers(team)))want="tower";
     if(want){
       const s=findSpot(team,want);
       if(s){pay(team,BLD[want].cost);makeBuilding(team,want,s.x,s.z,false);}
@@ -522,7 +563,14 @@ function directorThink(D){
       // a wall plan one floating-point rounding away from being refused is a wall plan that will be
       // refused on some machine and not others.
       const tc=TCPOS[team], front=tc[0]+(team===BLUE?1:-1)*(D.wallFront||34);
-      D.wallPlan=wallLineSegments(wt,front,tc[1]-48,front,tc[1]+48).slice(0,P.walls);
+      // v134.9 AS LONG AS THE WALL HE CAN AFFORD, NOT 96 UNITS AND A SLICE. wallLineSegments cuts a
+      // line into round(L/10.9) pieces, so a 96-unit plan became NINE segments and .slice(0,8) then
+      // threw the ninth away: a turtle that built every wall it had still ended with a
+      // segment-wide hole at one end, every game, by construction. Deriving the length from
+      // P.walls makes the plan and the purse the same number — eight walls, eight segments, no
+      // truncation. 10.9 is wallLineSegments' own step; keep them together.
+      const _half=P.walls*10.9/2;
+      D.wallPlan=wallLineSegments(wt,front,tc[1]-_half,front,tc[1]+_half).slice(0,P.walls);
       D.wallPlaced=0;
     }
     if(D.wallPlaced<D.wallPlan.length){
@@ -545,7 +593,11 @@ function directorThink(D){
         let g=null,gd=1e12;
         for(const b of buildings){
           if(b.team!==team||!b.alive||!b.built||!b.def.wall||b.def.gate)continue;
-          const d=Math.abs(b.z-6); // the road runs ~z 6 at the wall line
+          // v134.9: was Math.abs(b.z-6), "the road runs ~z 6 at the wall line". It runs at 7.98
+          // there and at 13.64 at the last of the three retry fronts, and segments are 10.9 apart —
+          // so at the far fronts the literal picked the neighbouring segment and the Kings Road ran
+          // through a wall instead of through the gate. roadZAt inverts roadPoint; one source.
+          const d=Math.abs(b.z-roadZAt(b.x));
           if(d<gd){gd=d;g=b;}
         }
         if(g&&affordKeep(team,BLD[gt].cost,0,0)){pay(team,BLD[gt].cost);placeGateOnWall(g,gt,team);D.wallsDone=true;}
@@ -584,11 +636,14 @@ function directorThink(D){
       for(const b of buildings)
         if(b.alive&&b.team===team&&b.type==="tower"&&
            dist2(b.x,b.z,m.x,m.z)<Math.pow((m.plaza||8.6)+BAZ_TOWER_GAP+BAZ_TOWER_OUT+2,2))have++;
-      if(have>=BAZ_TOWERS)continue;
+      if(have>=bazTowerWant(team,m))continue; // v134.10: two, plus one a capture, to four
       const s=bazTowerSpot(team,m);
       if(s){
         pay(team,BLD.tower.cost);
-        makeBuilding(team,"tower",s.x,s.z,false);
+        // v134.9 TAGGED AT BIRTH, not inferred from geometry later: a square changes hands and a
+        // tower's distance to it does not, so a budget that re-derives "is this a bazaar tower?"
+        // from position would reclassify buildings as the map turns. See countScreenTowers.
+        makeBuilding(team,"tower",s.x,s.z,false).bazTower=true;
         if(team===BLUE)msg("A guard tower is raised over your bazaar.","blue");
       }
       break; // one square a think: the builders have to walk out there
@@ -935,7 +990,25 @@ function bazaarWorth(team,m){
 //   the square's centre — the Grand's plaza is 11.4 and the pair on the Viking roads are 8.6, so a
 //   fixed radius would be inside one and out of range of the others. A Guard Tower reaches 18.
 // BAZ_TOWER_STONE: …and it keeps this much stone in the ground for everything else.
-const BAZ_TOWERS=1, BAZ_TOWER_GAP=3.5, BAZ_TOWER_OUT=7, BAZ_TOWER_STONE=150;
+// v134.10 TWO TO FOUR, ON THE PRESSURE. John: "they should prioritize towering up at least two to
+// four towers to defend their own bazaar depending on … how many times their bazaar has been
+// captured during the game. If they are losing their bazaar a lot they should be more inclined to
+// protect it." Measured over four seeded 20-minute campaigns, a team loses a given square 0 to 3
+// times — the Grand is where the churn is — so the ramp is scaled over that and not over a guess:
+// two on a square you hold, and one more for each time you have had it taken off you, to four.
+const BAZ_TOWERS_MIN=2, BAZ_TOWERS_MAX=4;
+// …and the reserve moves with it. 150 was set when the whole feature was one tower a square; a
+// garrison that can want twelve would eat the keep behind it, and a CASTLE is 500 stone. Derived
+// from the castle rather than typed, so the two cannot drift apart.
+const BAZ_TOWER_GAP=3.5, BAZ_TOWER_OUT=7;
+const BAZ_TOWER_STONE=(BLD.castle.cost&&BLD.castle.cost.stone)||500;
+// kept for the exporter and the older gates: the FLOOR is what "how many towers a square gets"
+// meant when it was one number.
+const BAZ_TOWERS=BAZ_TOWERS_MIN;
+function bazTowerWant(team,m){ // how big a garrison this square has earned
+  const lost=(m&&m.lost&&m.lost[team])||0;
+  return Math.max(BAZ_TOWERS_MIN,Math.min(BAZ_TOWERS_MAX,BAZ_TOWERS_MIN+lost));
+}
 function bazTowerSpot(team,m){
   // a legal plot in the ring, preferring the side this throne is on: the villagers who build it
   // walk from home, and a tower on the far face is a two-minute march through the enemy's half.
@@ -946,16 +1019,48 @@ function bazTowerSpot(team,m){
   // the gate the moment it was written: "nearest 12.1, furthest 21.7 ... and a range of 18".
   const inner=plaza+BAZ_TOWER_GAP;
   const outer=Math.max(inner+1,Math.min(inner+BAZ_TOWER_OUT,(BLD.tower.atk.rng||18)-1.5));
-  let best=null,bd=1e12;
+  // v134.10 …AND ROUND THE SQUARE, NOT IN A HUDDLE. Keeping the spot nearest home is right for ONE
+  // tower and wrong for four: they would all land on the same home-facing arc and leave the far
+  // face of the plaza covered by nothing. Each tower wants its share of the ring and will accept
+  // 0.6 of it; home stays the TIE-BREAK among the spots that clear that bar, so the v134.6 reason
+  // for preferring home — the villagers walk out from there — still decides between equals.
+  const want=bazTowerWant(team,m);
+  const held=[];
+  for(const b of buildings)
+    if(b.alive&&b.team===team&&b.type==="tower"&&dist2(b.x,b.z,m.x,m.z)<Math.pow(outer+3,2))
+      held.push(Math.atan2(b.z-m.z,b.x-m.x));
+  // MAXIMISE the separation rather than threshold it. A pass/fail bar ("at least 0.6 of your
+  // share") has a failure mode with teeth: three towers land at 112/124/124 degrees, the fourth
+  // needs a 62-degree slot, the bar refuses everything and the square gets three. Scoring by
+  // separation puts each new tower in the MIDDLE of the widest gap, which is where four fit.
+  // Home is the tie-break, weighted so it decides between equals and never overrides the ring:
+  // a throne is ~200 units away, so 0.0008 rad a unit is about nine degrees of pull.
+  let best=null,bs=-1e12, near=null,nd=1e12;
+  // ⚠ AND THE RING IS SWEPT, NOT SPRINKLED. 36 independent random bearings cover a ring the way
+  // buckshot covers a wall, and once one tower stands, validFor refuses everything within 14 of it
+  // (r 4 + r 4 + the 6.0 spacing cap) — so the second call would look at 36 lucky-dip bearings and
+  // come back empty. The gate caught it on its first run: "1 of 4 towers". A swept bearing with a
+  // one-slot jitter visits every part of the ring exactly once. Two draws an iteration either way,
+  // so the count is unchanged.
   for(let i=0;i<36;i++){
-    const a=Math.random()*Math.PI*2, r=inner+Math.random()*(outer-inner);
+    const a=(i/36)*Math.PI*2+(Math.random()-0.5)*(Math.PI*2/36);
+    const r=inner+Math.random()*(outer-inner);
     const x=m.x+Math.cos(a)*r, z=m.z+Math.sin(a)*r;
     if(Math.abs(x)>MAP.x-6||Math.abs(z)>MAP.z-6)continue;
     if(!validFor("tower",x,z,team))continue;
     const d=dist2(x,z,tc[0],tc[1]);
-    if(d<bd){bd=d;best={x,z};}
+    if(d<nd){nd=d;near={x,z};}                       // …the old rule, kept as the fallback
+    let sep=Math.PI;
+    for(const t of held){
+      const g=Math.abs(((a-t+Math.PI*3)%(Math.PI*2))-Math.PI);
+      if(g<sep)sep=g;
+    }
+    const score=sep-Math.sqrt(d)*0.0008;
+    if(score>bs){bs=score;best={x,z};}
   }
-  return best;
+  // …and if the ring is so hemmed in that nothing legal was found at all, the old rule still
+  // answers: a marshal that builds nothing because it cannot build TIDILY is worse than a huddle.
+  return best||near;
 }
 function bandHoldPoint(team,idx){ // the square that pays most, held or not, then the road
   // v134.3 THE CASTLE USED TO COME FIRST, AND EVERY DOCTRINE BUILDS A CASTLE. From the moment the
@@ -999,9 +1104,19 @@ function bandHoldPoint(team,idx){ // the square that pays most, held or not, the
 function manageBands(D){
   const team=D.team;
   D.bands=D.bands||[];
-  for(const bd of D.bands) // prune the dead, the possessed, the re-classed
-    bd.members=bd.members.filter(v=>v.alive&&!v.remote&&v.team===team&&v.bot&&!v.isKing&&
+  for(const bd of D.bands){ // prune the dead, the possessed, the re-classed
+    const _keep=bd.members.filter(v=>v.alive&&!v.remote&&v.team===team&&v.bot&&!v.isKing&&
       !isWorker(v)&&CLS[v.cls].line!=="healer"&&v.bandRef===bd); // v134.4: isWorker covers the cart role AND the ox
+    // v134.9 …AND LEAVING A BAND'S ROSTER RELEASES THE SOLDIER. This filtered and stopped. A body
+    // dropped here kept bandRef pointing at a band it was no longer in, and the roster below is
+    // built from `!v.bandRef || !D.bands.includes(v.bandRef)` — so a pointer at a live band it
+    // is not a member of makes a soldier INVISIBLE to every deal for the rest of the match.
+    // Measured on SMOKE_SEED=777: BLUE ended with 16 of 23 soldiers holding a bandRef to a camp
+    // band that listed six of them, and a kingsguard that listed none. The death/respawn round trip
+    // is the common path (see respawnUnit) but the re-class and the wain reach it without dying.
+    for(const v of bd.members)if(_keep.indexOf(v)<0&&v.bandRef===bd)v.bandRef=null;
+    bd.members=_keep;
+  }
   D.bands=D.bands.filter(bd=>bd.members.length>0||bd.role==="kingsguard");
   const roster=[];
   for(const v of units){
@@ -1217,7 +1332,20 @@ function manageBands(D){
       const _hk=(typeof neutralMarkets!=="undefined")?neutralMarkets.map(m=>m.owner).join(""):"";
       if(!bd.wps||bd.wpKey!==_hk){
         const tc=TCPOS[team];
-        bd.wps=[{x:tc[0]+side*15,z:tc[1]+11},{x:tc[0]+side*22,z:tc[1]+16},{x:tc[0]+side*4,z:tc[1]-24},{x:tc[0]+side*26,z:tc[1]-6}];
+        // v134.9 OUTSIDE THE CORN. These four were (15,11) (22,16) (4,-24) (26,-6) from the
+        // throne — the furthest 27.20 out against a TC_RING of 30 — so the whole loop ran INSIDE
+        // the farm ring, through this team's own fields, past its own kingsguard. The offsets
+        // predate the ring: v134.1 pushed every other sampler out with it and missed this one,
+        // exactly as it found the curtain's middle segment sitting on the ring. Derived from
+        // TC_RING now, so it moves when the ring does, and shortened on the rear leg (0.85) so the
+        // long side of the loop is the side an attacker crosses. ⚠ 0.85, not 0.5: the first cut
+        // weighted it 2:1 and put the rear waypoint at 18 from the throne — back inside the corn,
+        // which is the very thing this change is about. The gate caught it.
+        const _pr=TC_RING+6;
+        bd.wps=[{x:tc[0]+side*_pr,      z:tc[1]},
+                {x:tc[0]+side*_pr*0.7,  z:tc[1]+_pr*0.7},
+                {x:tc[0]-side*_pr*0.85, z:tc[1]},
+                {x:tc[0]+side*_pr*0.7,  z:tc[1]-_pr*0.7}];
         if(typeof neutralMarkets!=="undefined")
           for(const m of neutralMarkets)if(m.owner===team)bd.wps.push({x:m.x,z:m.z});
         bd.wpKey=_hk;

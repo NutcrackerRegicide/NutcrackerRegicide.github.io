@@ -554,7 +554,10 @@ const NEUTRAL_MARKET_SITES=[];
     // v132.26 …and the record carries the ownership state. Fields on an object literal cost no
     // Math.random() and no uuid, so this stays inside the seeded window for free, exactly as the
     // note above says of PROP_FEET.
-    neutralMarkets.push({x,z,grand:!!B.grand,plaza:B.plaza,owner:-1,cap:0,capTeam:-1,
+    // v134.10 `lost` is how many times each team has had this square taken off it — the pressure
+    // signal the garrison size reads (bazTowerWant). Two integers, no random draw, so the seeded
+    // window is untouched; host-side AI memory, nothing the wire carries.
+    neutralMarkets.push({x,z,grand:!!B.grand,plaza:B.plaza,owner:-1,cap:0,capTeam:-1,lost:[0,0],
                          what:B.what,i:neutralMarkets.length});
   }
 })();

@@ -65,7 +65,9 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "isWorker,OX_MAX,OX_MIN_VILLS,OX_MIN_CUTTERS,OX_WOOD_WANT,OX_WOOD_FULL,manageBands,"+ // v134.4 the ox
   "bazaarWorth,HOLD_TOUR,"+                            // v134.5 what the squares pay
   "bazTowerSpot,BAZ_TOWERS,BAZ_TOWER_GAP,BAZ_TOWER_OUT,BAZ_TOWER_STONE,"+ // v134.6 towers on them
+  "bazTowerWant,BAZ_TOWERS_MIN,BAZ_TOWERS_MAX,bazaarTaken,"+              // v134.10 the garrison
   "farmFacing,"+                                       // v134.8 which way a barn faces
+  "roadZAt,countScreenTowers,countBld,"+               // v134.9 the road, and the town's OWN towers
   // the bench drives moveToward directly, outside tick(), and both the watchdog and a detour's
   // lifetime are measured in T. A bench that leaves T frozen tests a world where no detour ever
   // expires — which is a different program, and it reads as "nobody ever arrives".
@@ -1594,12 +1596,35 @@ for(const D of directors){
   const who=D.team===0?"BLUE":"RED";
   check("warband system alive for "+who+" ("+D.bands.length+" bands: "+
     [...new Set(D.bands.map(b=>b.role))].join("/")+")",D.bands&&D.bands.length>=1);
-  const kg=D.bands.find(b=>b.role==="kingsguard");
-  const survivors=units.filter(v=>v.team===D.team&&v.alive&&!v.isPlayer&&v.dmg>0&&v.cls!=="villager").length;
-  check(who+" kingsguard never disbands ("+(kg?kg.members.length:0)+" strong, "+survivors+" soldiers left)",
+  let kg=D.bands.find(b=>b.role==="kingsguard");
+  // v134.9 ONE MORE THINK FIRST. On SMOKE_SEED=777 with the v134.9 AI, BLUE ended the campaign
+  // with a kingsguard band that existed, had a living king, and held nobody — 23 soldiers on the
+  // field and no think left in which to deal them. "Never disbands" is a claim about what
+  // manageBands does, not about the frame the campaign happened to stop on, so it is asked to do
+  // it. The bar is unchanged: a living army must end with a manned guard.
+  global.__G.manageBands(D);
+  kg=D.bands.find(b=>b.role==="kingsguard");
+  // v134.10 THE ROSTER'S OWN PREDICATE, not a lookalike. This counted dmg>0 && cls!=="villager",
+  // which includes REMOTE bodies and staged botless ones that manageBands skips by construction —
+  // so on SMOKE_SEED=42 it read "4 soldiers left" for a BLUE whose four survivors were all
+  // botless, three of them remote, and called a correctly empty guard a disbanded one. The bar is
+  // unchanged: an army the marshal can deal must end with a manned kingsguard.
+  const survivors=units.filter(v=>v.team===D.team&&v.alive&&!v.isPlayer&&v.bot&&!v.remote&&
+    !v.isKing&&!global.__G.isWorker(v)&&global.__G.CLS[v.cls].line!=="healer"&&
+    v.dmg>0&&v.cls!=="villager").length;
+  check(who+" kingsguard never disbands ("+(kg?kg.members.length:0)+" strong, "+survivors+
+    " DEALABLE soldiers left — botless and remote bodies are not the band system's to garrison)",
     (kg&&kg.members.length>=1)||survivors===0); // wiped-out armies are excused
-  check(who+" band membership is consistent",
-    D.bands.every(bd=>bd.members.every(v=>v.team===D.team&&v.bandRef===bd)));
+  // v134.9 BOTH DIRECTIONS. This checked members -> bandRef and nothing else, so a soldier
+  // carrying a bandRef to a live band that does not list him was invisible to it — which is the
+  // whole of the orphan leak: manageBands' loose pool skips anyone whose bandRef names a band in
+  // D.bands, so an orphan is never dealt anywhere again. On SMOKE_SEED=777 before the fix, BLUE
+  // ended with 16 of 23 soldiers pointing at a camp band that listed six.
+  const _orph=units.filter(v=>v.alive&&v.team===D.team&&v.bot&&!v.isKing&&!v.remote&&
+    v.bandRef&&D.bands.includes(v.bandRef)&&v.bandRef.members.indexOf(v)<0);
+  check(who+" band membership is consistent BOTH WAYS — every member points at its band, and no "+
+    "soldier points at a band that does not list him ("+_orph.length+" orphans)",
+    D.bands.every(bd=>bd.members.every(v=>v.team===D.team&&v.bandRef===bd))&&_orph.length===0);
 }
 const allRoles=new Set([...Object.keys(directors[0].rolesSeen||{}),...Object.keys(directors[1].rolesSeen||{})]);
 check("mission variety across the campaign, both armies ("+[...allRoles].join("/")+")",allRoles.size>=3);
@@ -1796,7 +1821,25 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   wounded.hp=wounded.maxHp*0.4; // bloody one by hand — the camp is calm, so it must knit
   const wh=wounded.hp;
   const regenT0=global.__G.getT();
+  // v134.9 …AND THE PACK IS NOT REPLACED UNDERNEATH IT. On SMOKE_SEED=3 this reported "-99 hp,
+  // cleared 0, still in ring 0, alive false": nothing was near it and nothing killed it — the
+  // camp's own respawn came due inside these 90 ticks, campNewWave built a fresh pack, and the body
+  // being watched was left behind by the camp it belonged to. v127 taught this bench to stand a
+  // body up when the pack was wiped; this stops the pack being swapped mid-measurement. Restored
+  // straight afterwards, because a camp that never respawns is a different world for what follows.
+  const _wv=north.respawnAt, _wt=north.waiting;
+  north.waiting=false; north.respawnAt=1e9;
+  // …and a circle round the BODY, not only round the camp. A creep on its leash stands up to 26
+  // from the centre, so the camp's 31.5 leaves the rim of its own wander unguarded: on
+  // SMOKE_SEED=3 the wounded creep sat 29.6 out with four red musketeers two to four units away,
+  // and both of the bench's own diagnostics — "cleared 0" and "still in ring 0" — were reporting
+  // on the camp while the shooting happened at the creep. 45 covers a musket and three seconds of
+  // approach.
+  const calmBody=isolateArea(wounded.root.position.x,wounded.root.position.z,45,
+    {keep:north.creeps,keepNeutral:true});
   warTicks(90);
+  calmBody.restore();
+  north.respawnAt=_wv; north.waiting=_wt;
   // v127 DIAGNOSTIC: when this fails it takes ten checks with it, so the message has to say WHY
   // rather than leaving the next person to guess. `T+` proves the sim ran at all (gameOver gates
   // the whole of tickBody); `in ring` is the aggro test the regen branch actually depends on.
@@ -1809,7 +1852,8 @@ global.__G.setGameOver(false); // an accidental regicide in a prior staged fight
   }
   check("calm creeps regenerate"+(_revived?" (PACK WAS DEAD — one stood back up for this)":"")+
     " (+"+Math.round(wounded.hp-wh)+" hp of "+Math.round(wounded.maxHp)+
-    ", T+"+(global.__G.getT()-regenT0).toFixed(1)+"s, cleared "+calm.moved+", still in ring "+inRing+
+    ", T+"+(global.__G.getT()-regenT0).toFixed(1)+"s, cleared "+calm.moved+" round the camp and "+
+    calmBody.moved+" round the body, still in ring "+inRing+
     (ringWho?" ["+ringWho+"]":"")+", alive "+(!!wounded.alive)+")",
     wounded.hp>wh+wounded.maxHp*0.12); // 8%/s over 3 sim-seconds is ~24% — assert against maxHp, not a flat 20 that a low-hp wolf can miss
   calm.restore();
@@ -3249,16 +3293,23 @@ global.__G.setGameOver(false);
     // its proof that the ring returned the OLDEST SAMPLE rather than falling back to the world
     // origin — and if the empty corner it stages in happens to be x=0 those two are the same point,
     // so the gate cannot pass however correctly the ring behaves. SMOKE_SEED=1 found that corner.
+    // v134.10 ⚠ AND EMPTY OF BUILDINGS. Two of the four duels below are ARROWS, and an arrow stops
+    // at a collider. On SMOKE_SEED=1 this corner had a storage pit five units away: the melee half
+    // passed (a swing does not care what is standing nearby) and both projectile checks failed with
+    // the target untouched, which is the signature of something in the flight path rather than of a
+    // broken rewind. The search says "an empty corner" and looked only for people.
     const spot=(()=>{
       for(let x=-120;x<=120;x+=15)for(let z=-120;z<=120;z+=15){
         if(Math.abs(x)<30)continue;
         let clear=true;
         for(const v of G.units){if(v.alive&&G.dist2(v.root.position.x,v.root.position.z,x,z)<45*45){clear=false;break;}}
+        if(clear)for(const b of G.buildings){if(b.alive&&G.dist2(b.x,b.z,x,z)<45*45){clear=false;break;}}
         if(clear)return {x,z};
       }
       return null;
     })();
-    check("v128.5 setup: an empty corner exists to stage the duels in (no bystander can score them)",!!spot);
+    check("v128.5 setup: an empty corner exists to stage the duels in — no bystander to score them "+
+      "and no collider to eat an arrow"+(spot?(" ("+spot.x+","+spot.z+")"):""),!!spot);
     const SX=spot?spot.x:0, SZ=spot?spot.z:0;
     // --- the ring itself ---
     {
@@ -4155,7 +4206,7 @@ global.__G.setGameOver(false);
     // field hot and the band rightly held — and the check then reported that correct behaviour as
     // a failure. The HOT case five lines below is staged deliberately; this one has to be too, or
     // the pair is the same test run twice with different luck.
-    const cellar=isolateArea(-200,-118,30,{team:1-team,keep:[cold]});
+    const cellar=isolateArea(-200,-118,(global.__G.HOLD_WATCH||48)+6,{team:1-team,keep:[cold]});
     // v134.0 …AND THE SQUARE IS PART OF THE FIELD. bandHoldPoint posts a hold band ON a bazaar, and
     // manageBands refuses to relieve a band standing on one that is mid-capture (the v132.26
     // `_taking` rule) — by EITHER side, because a square the enemy is taking under your feet is not
@@ -4172,8 +4223,12 @@ global.__G.setGameOver(false);
     G2.manageBands(D);
     cellar.restore();
     for(const e of bazHold){e.m.cap=e.cap;e.m.capTeam=e.capTeam;e.m.owner=e.owner;} // v134.5: owners too
+    // v134.9: the radius is HOLD_WATCH+6, not 30. manageBands resets the contact clock from any
+    // enemy within HOLD_WATCH of the band's centre, so clearing 30 of it left an 18-unit annulus
+    // where one raider standing still made the field hot — measured on SMOKE_SEED=12345 as
+    // quiet=0.0 against a HOLD_QUIET of 18, with every other clause of the relief rule satisfied.
     check("v113 relief: a hold band with a spent tour and a cold field takes a new mission ("+hb.role+
-      ", field cleared of "+cellar.moved+")",
+      ", field cleared of "+cellar.moved+" within "+((global.__G.HOLD_WATCH||48)+6)+")",
       // v134.3: …and "camp" is one of the missions now. This whitelist was written at v113, when
       // the relief branch chose between three roles; the wilds became the fourth this version and
       // this line was not updated with it. On the default seed the marshal happened not to pick it
@@ -4215,7 +4270,7 @@ global.__G.setGameOver(false);
         for(const m of G2.neutralMarkets)if(m.owner!==team){m.cap=0.6;m.capTeam=team;} // v134.3:
         bz.cap=0.6; bz.capTeam=team;               // whichever square it is posted to, it is ours
                                                    // and six tenths of the way in
-        const cell3=isolateArea(-200,-118,30,{team:1-team,keep:[cold]});
+        const cell3=isolateArea(-200,-118,(global.__G.HOLD_WATCH||48)+6,{team:1-team,keep:[cold]});
         cold.bandRef=hb3; D.bands.push(hb3);
         G2.manageBands(D);
         cell3.restore();
@@ -4224,7 +4279,7 @@ global.__G.setGameOver(false);
         // same everything, with the capture wound back to zero, IS relieved.
         const hb4={id:9004,role:"hold",members:[cold],holdUntil:NOWT-1,lastContact:NOWT-9999,laneZ:0,laneUntil:NOWT+999};
         for(const m of G2.neutralMarkets){m.cap=0;m.capTeam=-1;}
-        const cell4=isolateArea(-200,-118,30,{team:1-team,keep:[cold]});
+        const cell4=isolateArea(-200,-118,(global.__G.HOLD_WATCH||48)+6,{team:1-team,keep:[cold]});
         cold.bandRef=hb4; D.bands.push(hb4);
         G2.manageBands(D);
         cell4.restore();
@@ -7591,12 +7646,35 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
       !drafted&&!prog&&worker&&cartWorker&&!soldier);
   }
 
+  // v134.9 A SEAM AN OX CAN ACTUALLY WORK. Both benches below took nodes.find(type==="wood" &&
+  // amount>60) — the first in the array, wherever it is. On SMOKE_SEED=777 that is (0,-54), which
+  // is walkable, has no building within 14 and is in no camp, and an ox placed beside it drifted to
+  // (-7.0,-57.8) and never came within the 0.9 the gather test wants. Both benches then reported
+  // that an ox does not gather, which is a claim about that seam. Their real claim is the BITE —
+  // four a swing, never more than the bed has room for — so the seam is chosen by trial and named
+  // in the message. An ox that can work none of the candidates still fails, loudly.
+  const oxSeam=(()=>{
+    const cands=G.nodes.filter(n=>n.type==="wood"&&n.amount>60).slice(0,20);
+    for(const n of cands){
+      const t=G.makeUnit(0,"oxcart",n.x+1.5,n.z+1.5,{name:"SeamScout",bot:{role:"citizen",res:"wood"}});
+      t.bot.node=n; t.bot.off={x:0.5,z:0.5};
+      const a0=n.amount;
+      for(let i=0;i<60&&n.amount===a0;i++){G.updateBot(t,1/30);G.advanceT(1/30);}
+      const worked=n.amount<a0;
+      n.amount=a0; t.alive=false;
+      if(worked)return n;
+    }
+    return cands[0]||null;
+  })();
+  check("the ox benches found a seam an ox can work"+(oxSeam?" ("+oxSeam.x.toFixed(0)+","+
+    oxSeam.z.toFixed(0)+", "+oxSeam.amount+" left)":" — NONE of the candidates"),!!oxSeam);
+
   // --- 4b. THE BED HAS A BOTTOM. v134.8: the bite was clamped against the SEAM alone, so an ox on
   //         299 of 300 took a full four and ended on 303. It needs a dying tree to get to 299 —
   //         300 is exactly 75 bites of four, so only a truncated bite leaves an odd number — which
   //         is why the campaign sweep found it on one seed in eight. Staged, it is arithmetic.
   {
-    const seam=G.nodes.find(n=>n.type==="wood"&&n.amount>60);
+    const seam=oxSeam;
     const a0=seam.amount;
     const mk=(carried)=>{
       const ox=G.makeUnit(0,"oxcart",seam.x+1.5,seam.z+1.5,{name:"CapOx",bot:{role:"citizen",res:"wood"}});
@@ -7621,7 +7699,7 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
 
   // --- 5. THE OX AT WORK: four logs a swing into a bed of 300, and it will not touch anything else.
   {
-    const wood=G.nodes.find(n=>n.type==="wood"&&n.amount>60);
+    const wood=oxSeam;
     const gold=G.nodes.find(n=>n.type==="gold"&&n.amount>0);
     const ox=G.makeUnit(0,"oxcart",wood.x+1.5,wood.z+1.5,{name:"WorkOx",bot:{role:"citizen",res:"wood"}});
     ox.bot.node=wood; ox.bot.off={x:0.5,z:0.5};
@@ -7922,11 +8000,16 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
     G.stock[team].food=st0.food; G.stock[team].gold=st0.gold;
     G.stock[team].stone=st0.stone; G.stock[team].wood=st0.wood;
     setOwn(own0);
-    check("v134.6 towers: a marshal holding a square raises a Guard Tower over it and STOPS at "+
-      G.BAZ_TOWERS+" ("+raised+" raised across eight think-clocks, "+onSq+" of them ringing the "+
-      "square, none on the plaza: "+offPlaza+"). 250 stone apiece against 4,200 on the whole map "+
-      "is why the cap is what it is",
-      raised>=1&&raised<=G.BAZ_TOWERS&&onSq>=1&&offPlaza);
+    // v134.10: the cap is no longer one number for every square — it is what THIS square has
+    // earned (bazTowerWant). Held and never lost, that is BAZ_TOWERS_MIN; the ramp is gated
+    // separately below. Written against the want so the two cannot drift.
+    const _capHere=G.bazTowerWant(team,held);
+    check("v134.6/v134.10 towers: a marshal holding a square raises Guard Towers over it and stops "+
+      "at the garrison that square has earned — "+_capHere+" here, it having been lost "+
+      ((held.lost&&held.lost[team])||0)+" times ("+raised+" raised across eight think-clocks, "+
+      onSq+" of them ringing the square, none on the plaza: "+offPlaza+"). 250 stone apiece against "+
+      "4,200 on the whole map is why there is a cap at all",
+      raised>=1&&raised<=_capHere&&onSq>=1&&offPlaza);
   }
 
   // --- 3. THE OX CAP, which is John's dial and the reason this version exists. One ox, not two.
@@ -8008,6 +8091,351 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
       wired+") and lights the one the dial is actually on ("+paints+"). AI_DIFF has had the normal "+
       "row since v94; only the button was missing",
       missing.length===0&&wired&&paints);
+  }
+}
+
+// ==================== v134.10 WHAT IT COSTS TO KEEP A SQUARE ====================
+{
+  const G=global.__G;
+  const NM=G.neutralMarkets;
+  const fs4=require("fs"), path4=require("path");
+  const ai4=fs4.readFileSync(path4.join(__dirname,"..","js","07-ai.js"),"utf8")
+    .split(String.fromCharCode(10)).map(l=>{const i=l.indexOf("//");return i<0?l:l.slice(0,i);})
+    .join(String.fromCharCode(10));
+
+  // --- 1. THE LEDGER, written by the flip itself.
+  {
+    const m=NM[0];
+    const keep={owner:m.owner,cap:m.cap,capTeam:m.capTeam,lost:(m.lost||[0,0]).slice()};
+    m.lost=[0,0];
+    // blue holds it; red takes it. The loss is BLUE's and only blue's.
+    G.bazaarTaken(m,G.RED,G.BLUE);
+    const afterRedTook=[m.lost[0],m.lost[1]];
+    // …and blue takes it back off red.
+    G.bazaarTaken(m,G.BLUE,G.RED);
+    const afterBlueTook=[m.lost[0],m.lost[1]];
+    // …and a NEUTRAL square being claimed is nobody's loss.
+    G.bazaarTaken(m,G.BLUE,-1);
+    const afterNeutral=[m.lost[0],m.lost[1]];
+    m.owner=keep.owner; m.cap=keep.cap; m.capTeam=keep.capTeam; m.lost=keep.lost;
+    check("v134.10 ledger: a capture is charged to the team that LOST the square and to nobody "+
+      "else — red takes it off blue ["+afterRedTook.join(",")+"], blue takes it back ["+
+      afterBlueTook.join(",")+"], and claiming a NEUTRAL square costs nobody anything ["+
+      afterNeutral.join(",")+"]. `was` was already being passed to bazaarTaken and used for nothing",
+      afterRedTook[0]===1&&afterRedTook[1]===0&&
+      afterBlueTook[0]===1&&afterBlueTook[1]===1&&
+      afterNeutral[0]===1&&afterNeutral[1]===1);
+  }
+
+  // --- 2. THE RAMP. John's ask, as arithmetic.
+  {
+    const m=NM[0], keep=(m.lost||[0,0]).slice();
+    const row=[];
+    for(let n=0;n<=4;n++){ m.lost=[n,0]; row.push(G.bazTowerWant(G.BLUE,m)); }
+    m.lost=[3,0];
+    const otherTeam=G.bazTowerWant(G.RED,m);   // blue's losses are not red's problem
+    m.lost=keep;
+    check("v134.10 garrison: a square this team has lost 0/1/2/3/4 times wants ["+row.join(", ")+
+      "] towers — two on one you hold, one more for each time it has been taken off you, to "+
+      G.BAZ_TOWERS_MAX+". Measured over four seeded 20-minute campaigns a team loses a given square "+
+      "0 to 3 times (the Grand is where the churn is), so the ramp is scaled over what the map "+
+      "actually produces. And one side's losses do not size the other's garrison ("+otherTeam+
+      " for the team that never lost it)",
+      row[0]===G.BAZ_TOWERS_MIN&&row[1]===3&&row[2]===4&&row[3]===4&&row[4]===4&&
+      otherTeam===G.BAZ_TOWERS_MIN&&G.BAZ_TOWERS_MIN===2&&G.BAZ_TOWERS_MAX===4);
+  }
+
+  // --- 3. THE RING IS A RING, not a huddle on the home-facing arc.
+  {
+    // Deal one square its full garrison through the shipped spot-finder, standing each tower as it
+    // is returned so the next call can see it. Then measure the closest pair of bearings.
+    const team=G.BLUE, m=NM.find(q=>!q.grand)||NM[0];
+    const own0=NM.map(q=>q.owner), lost0=NM.map(q=>(q.lost||[0,0]).slice());
+    // ⚠ AND THE GROUND ROUND THE SQUARE IS CLEARED FIRST. The first cut of this gate reported "0 of
+    // 4" and the probe said why: an earlier bench had left a TOWN CENTRE standing 22 units from the
+    // west bazaar, and tcRingReason refuses every non-farm plot within TC_RING of one — which is the
+    // whole ring, so all 36 swept bearings came back illegal. The claim here is about the
+    // spot-finder, not about what the benches above happened to leave lying around. Same trick the
+    // v134.4 far-side benches use, and the radius is TC_RING past the ring's outer edge because
+    // that is the reach of the rule that bit.
+    const _plaza=(m.plaza||8.6);
+    const _outer=Math.max(_plaza+G.BAZ_TOWER_GAP+1,
+      Math.min(_plaza+G.BAZ_TOWER_GAP+G.BAZ_TOWER_OUT,((G.BLD.tower.atk&&G.BLD.tower.atk.rng)||18)-1.5));
+    const _hid=[];
+    for(const b of G.buildings)
+      if(b.alive&&Math.hypot(b.x-m.x,b.z-m.z)<_outer+G.TC_RING+6){b.alive=false;_hid.push(b);}
+    // ⚠ AND THE AGE IS STAGED, because the ring's CAPACITY depends on it. A Guard Tower's footprint
+    // grows at Enlightenment — BLD.tower.fxA/fzA go from 4.20x6.30 to 8.96x9.03 — and validFor
+    // spaces buildings by 0.75 of the smaller one's width. Swept offline at 720 bearings x 9 radii
+    // with the ground clear, a bazaar ring holds FOUR towers at ages 3 and 4 and TWO at age 5.
+    // Reading whatever age the campaign happened to reach made this gate a coin flip; it is asked
+    // at age 4, where the answer is four, and the age-5 case is asserted separately below.
+    const _age0=[G.teamAge[0],G.teamAge[1]];
+    G.teamAge[0]=4; G.teamAge[1]=4;
+    for(const q of NM)q.owner=-1;
+    m.owner=team; m.lost=[2,0];                       // lost twice -> a garrison of four
+    const want=G.bazTowerWant(team,m);
+    const put=[];
+    for(let i=0;i<want;i++){
+      const sp=G.bazTowerSpot(team,m);
+      if(!sp)break;
+      put.push(G.makeBuilding(team,"tower",sp.x,sp.z,true));
+    }
+    const bear=put.map(b=>Math.atan2(b.z-m.z,b.x-m.x));
+    const sepOf=(list)=>{
+      let worst=Math.PI;
+      for(let i=0;i<list.length;i++)for(let j=i+1;j<list.length;j++){
+        const g=Math.abs(((list[i]-list[j]+Math.PI*3)%(Math.PI*2))-Math.PI);
+        if(g<worst)worst=g;
+      }
+      return list.length>1?worst:Math.PI;
+    };
+    const sep=sepOf(bear)*180/Math.PI;
+    // ⚠ THE BAR IS THREE QUARTERS OF AN EVEN SHARE, and it has to be, because validFor's own
+    // spacing already forces some separation for free: with the scoring reverted to "nearest home
+    // wins" (falsify b_huddle) four towers still land 56 degrees apart, so a bar of 0.6 (54) would
+    // have been satisfied by the bug and the gate would have been resting entirely on its source
+    // read. Measured: 82 degrees with the scoring in, 56 with it out, against a bar of 67.5.
+    const minSep=0.75*(360/Math.max(1,want));
+    // …and every one of them still off the plaza and inside its own reach, which v134.6 asked for
+    const plaza=(m.plaza||8.6), rng=(G.BLD.tower.atk&&G.BLD.tower.atk.rng)||18;
+    let offPlaza=true, inReach=true;
+    for(const b of put){
+      const d=Math.hypot(b.x-m.x,b.z-m.z);
+      if(d<plaza+G.BAZ_TOWER_GAP-0.01)offPlaza=false;
+      if(d>rng-1.4)inReach=false;
+    }
+    // …and the same ring at Enlightenment, where the tower is twice the building. The marshal must
+    // take what fits and not stall: bazTowerSpot returns null and the war room moves on.
+    for(const b of put)b.alive=false;
+    G.teamAge[0]=5; G.teamAge[1]=5;
+    const put5=[];
+    for(let i=0;i<want;i++){
+      const sp=G.bazTowerSpot(team,m);
+      if(!sp)break;
+      put5.push(G.makeBuilding(team,"tower",sp.x,sp.z,true));
+    }
+    const fit5=put5.length;
+    for(const b of put5)b.alive=false;
+    G.teamAge[0]=_age0[0]; G.teamAge[1]=_age0[1];
+    for(const b of _hid)b.alive=true;
+    for(let i=0;i<NM.length;i++){NM[i].owner=own0[i];NM[i].lost=lost0[i];}
+    const spreads=ai4.indexOf("const score=sep-Math.sqrt(d)*0.0008;")>=0;
+    const fallback=ai4.indexOf("return best||near;")>=0;
+    check("v134.10 ring: a square lost twice is given "+put.length+" of "+want+" towers ("+
+      _hid.length+" buildings stood aside first) and they "+
+      "stand ROUND it — closest pair "+sep.toFixed(0)+"deg against a bar of "+minSep.toFixed(0)+
+      "deg, three quarters of an even share (the spacing rule alone gives 56)"+
+      ", all off the plaza ("+offPlaza+") and inside a tower's own reach of "+rng+" ("+inReach+
+      "). Keeping the spot nearest home is right for ONE tower and would put four on the same "+
+      "home-facing arc; separation is MAXIMISED now — each tower goes in the middle of the widest "+
+      "gap — with home as the tie-break ("+spreads+"), and the old rule kept as the fallback so a "+
+      "marshal that cannot build tidily still builds ("+fallback+")",
+      put.length===want&&sep>=minSep&&offPlaza&&inReach&&spreads&&fallback);
+    check("v134.10 ring: …and at Enlightenment the same ring holds "+fit5+", not "+want+" — a Guard "+
+      "Tower's footprint goes from 4.20x6.30 to 8.96x9.03 at age 5 and validFor spaces buildings by "+
+      "0.75 of the smaller one's width, so a 12.1-to-16.5 ring runs out of room. Swept offline at "+
+      "720 bearings x 9 radii on clear ground: four fit at ages 3 and 4, two at age 5. The marshal "+
+      "takes what fits and does not stall — bazTowerSpot answers null and the war room moves on",
+      fit5>=1&&fit5<want);
+  }
+
+  // --- 4. THE RESERVE IS THE KEEP'S OWN PRICE.
+  {
+    const castle=(G.BLD.castle.cost&&G.BLD.castle.cost.stone)||0;
+    const tower=(G.BLD.tower.cost&&G.BLD.tower.cost.stone)||0;
+    check("v134.10 reserve: BAZ_TOWER_STONE is the CASTLE's own stone cost ("+G.BAZ_TOWER_STONE+
+      " against "+castle+"), so a garrison that can want "+(3*G.BAZ_TOWERS_MAX)+" towers at "+tower+
+      " stone apiece cannot eat the keep behind it. It was 150 — a floor set when the feature was "+
+      "one tower a square and 750 was the most it could ever cost. Derived, so the two cannot drift",
+      G.BAZ_TOWER_STONE===castle&&castle>0&&G.BAZ_TOWER_STONE>tower/2);
+  }
+}
+
+// ==================== v134.9 A SOLDIER WHO DIES COMES BACK TO THE ARMY ====================
+{
+  const G=global.__G;
+  const team=G.RED, D=G.directors[team];
+  const bands0=D.bands, nt0=D.nextThink;
+  D.bands=[];
+  // a full band's worth, so the deal has something to do and the kingsguard does not swallow them
+  const made=[];
+  for(let i=0;i<12;i++)made.push(G.makeUnit(team,"clubman",150+(i%6)*2,120+((i/6)|0)*2,
+    {name:"Orphan"+i,bot:{role:"war"}}));
+  for(const u of made)u.bandRef=null;
+  G.manageBands(D);
+  const dealt=made.filter(u=>u.bandRef&&D.bands.includes(u.bandRef)).length;
+  // …now kill one of them, let the marshal tidy up, and bring him back.
+  const v=made.find(u=>u.bandRef);
+  const hisBand=v.bandRef;
+  v.alive=false;
+  G.manageBands(D);                       // the prune drops a dead member
+  const refAfterPrune=v.bandRef;          // …and must have released him
+  G.respawnUnit(v);                       // he comes back
+  const refAfterRespawn=v.bandRef;
+  // ⚠ AND HE COMES BACK A VILLAGER, by design since v134.2 (revokeProg, "used to come back a
+  // villager holding a veteran's whole loadout") — and isWorker keeps villagers out of bands, quite
+  // rightly. The first cut of this gate stopped here and reported that a respawned soldier is not
+  // dealt back in, which is true and is not this bug. He takes up arms again, and THEN the deal
+  // must be able to see him.
+  G.setClass(v,"clubman");
+  G.manageBands(D);                       // the next deal must be able to see him
+  const backInABand=!!(v.bandRef&&D.bands.includes(v.bandRef)&&v.bandRef.members.indexOf(v)>=0);
+  const orphans=made.filter(u=>u.alive&&u.bandRef&&D.bands.includes(u.bandRef)&&
+    u.bandRef.members.indexOf(u)<0).length;
+  // …and the respawn half on its own. In the sequence above the prune has already released him
+  // before respawnUnit runs, so removing the respawn line changes nothing and no gate could see it
+  // (falsify m_respawn: 0 failures on the first cut of this). manageBands always prunes before it
+  // builds the roster, so the prune IS the fix; the respawn line is belt and braces and the reason
+  // the comment beside it — "a respawned villager forgets the band" — is now true. This is the case
+  // it covers, asked directly: a death and a respawn with no think in between.
+  const w=made.find(u=>u!==v&&u.bandRef);
+  w.alive=false; G.respawnUnit(w);
+  const respawnClears=(w.bandRef===null);
+  for(const u of made){u.bandRef=null;u.alive=false;}
+  D.bands=bands0; D.nextThink=nt0;
+  check("v134.9 orphans: a soldier dealt into a band ("+dealt+" of 12 dealt), killed, pruned and "+
+    "respawned (as a villager, per v134.2) then re-armed is dealt back in — released by the prune ("+
+    (refAfterPrune===null)+"), cleared by the respawn ("+(refAfterRespawn===null)+"), and back in a "+
+    "band the band itself lists ("+backInABand+"), with "+orphans+" orphans left behind — and a "+
+    "death with NO think in between still clears the pointer ("+respawnClears+"). Before this, the prune dropped him from "+
+    "the roster without clearing bandRef and respawnUnit did not clear it either, so he came back "+
+    "pointing at a live band that no longer held him — and manageBands' loose pool skips exactly "+
+    "that, so he was invisible to every deal for the rest of the match. One soldier per death, and "+
+    "the band economy v134.3 fixed was being drained underneath it",
+    dealt>=8&&refAfterPrune===null&&refAfterRespawn===null&&backInABand&&orphans===0&&
+    respawnClears&&hisBand!==undefined);
+}
+
+// ==================== v134.9 THE SCREEN FACES THE LANES ====================
+{
+  const G=global.__G;
+  const {LANE_Z,TCPOS,roadPoint,roadZAt,TC_RING,PERSONALITIES,wallLineSegments}=G;
+  const fs3=require("fs"), path3=require("path");
+  // ⚠ COMMENTS STRIPPED FIRST. Every source read below asks whether a form is PRESENT or GONE,
+  // and the comments in that file quote the forms they replaced — the first cut of this gate went
+  // red on its own explanation. A line-comment strip is enough here (the file has no "//" inside a
+  // string literal on any of the lines these searches touch) and it is the honest instrument: a
+  // read that a comment can satisfy is a read that a comment can also defeat.
+  const ai=fs3.readFileSync(path3.join(__dirname,"..","js","07-ai.js"),"utf8")
+    .split(String.fromCharCode(10)).map(l=>{const i=l.indexOf("//");return i<0?l:l.slice(0,i);})
+    .join(String.fromCharCode(10));
+
+  // --- 1. THE ROAD, WHERE IT ACTUALLY IS.
+  {
+    // The fronts the turtle plans at: 34, then +14 a retry, three retries (v134.4).
+    const FRONTS=[34,48,62,76];
+    const zs=FRONTS.map(f=>roadZAt(TCPOS[0][0]+f));
+    const shown=FRONTS.map((f,i)=>f+":"+zs[i].toFixed(2)).join(" · ");
+    const expect=[7.98,10.53,12.43,13.64];
+    const drift=zs.map((z,i)=>Math.abs(z-expect[i])>0.05?(FRONTS[i]+" "+z.toFixed(2)+" not "+expect[i]):null).filter(Boolean);
+    // …and it MUST be roadPoint's own answer, not a second copy of the curve. x is linear in t.
+    let apart=0;
+    for(let x=-170;x<=170;x+=7){
+      const t=(x-TCPOS[0][0])/(TCPOS[1][0]-TCPOS[0][0]);
+      if(Math.abs(roadZAt(x)-roadPoint(t).z)>1e-9)apart++;
+    }
+    // the literal this replaces, and by how much it was wrong — the reason the change exists
+    const worst=Math.max(...zs.map(z=>Math.abs(z-6)));
+    check("v134.9 road: roadZAt is roadPoint inverted — same answer at all 49 sampled x ("+apart+
+      " disagreements) — and the Kings Road crosses the wall line at "+shown+", against the "+
+      "literal 6 it replaces (worst error "+worst.toFixed(2)+" on a segment pitch of 10.9, i.e. "+
+      "most of a segment: the gate went into the wrong one and the road ran through a wall)"+
+      (drift.length?" — DRIFTED: "+drift.join(" · "):""),
+      apart===0&&drift.length===0&&worst>1);
+    // …and the marshal reads it rather than carrying its own copy
+    check("v134.9 road: the wall planner asks roadZAt and no longer carries the number itself",
+      ai.indexOf("Math.abs(b.z-roadZAt(b.x))")>=0&&ai.indexOf("Math.abs(b.z-6)")<0);
+  }
+
+  // --- 2. THE SCREEN STANDS ON THE LANES.
+  {
+    // The deal, exactly as findSpot computes it: LANE_Z[nth tower % LANE_Z.length].
+    const dealt=[]; for(let n=0;n<LANE_Z.length;n++)dealt.push(LANE_Z[n%LANE_Z.length]);
+    const distinct=new Set(dealt).size;
+    // …and the shipped source must be doing that, not sampling a band. findSpot is not exported;
+    // this is the same source read the v134.7 menu gate uses, and for the same reason.
+    const dealsLanes=ai.indexOf('const _lane=LANE_Z[countScreenTowers(team)%LANE_Z.length];')>=0;
+    const oldSampler=ai.indexOf("z=(Math.random()-0.5)*66")>=0;
+    // What the two rules cover, in the only unit that matters — a Guard Tower's reach.
+    const RNG=(G.BLD.tower.atk&&G.BLD.tower.atk.rng)||18;
+    const spanLanes=(LANE_Z.length?Math.max(...LANE_Z)-Math.min(...LANE_Z):0)+2*RNG;
+    check("v134.9 screen: five towers are dealt "+distinct+" DIFFERENT lanes centre-out ["+
+      dealt.join(", ")+"], reaching "+RNG+" apiece — a screened frontage of "+spanLanes+
+      " against the "+66+" the old sampler scattered them across. Measured over four seeded "+
+      "campaigns, enemy soldiers at the defender's wall line fall inside |z| 33 only 31.9% of the "+
+      "time and within 25 of a LANE_Z 93.9%; sightings actually inside a built tower's reach were "+
+      "11.9%. Source: deals the lanes "+dealsLanes+", old band sampler gone "+!oldSampler,
+      distinct===LANE_Z.length&&dealsLanes&&!oldSampler&&spanLanes>66);
+  }
+
+  // --- 3. THE CURTAIN HAS NO HOLE IN IT.
+  {
+    // Replay the planner's own arithmetic for every personality that walls.
+    const rows=[];
+    let bad=[];
+    for(const k in PERSONALITIES){
+      const P=PERSONALITIES[k]; if(!P.walls)continue;
+      const half=P.walls*10.9/2;
+      const segs=wallLineSegments("stone_wall",-141,-half,-141,half);
+      rows.push(k+" walls "+P.walls+" -> "+segs.length+" segments over "+(half*2).toFixed(1));
+      if(segs.length!==P.walls)bad.push(k+" plans "+segs.length+" for "+P.walls+" walls");
+      // and what the old 96-unit line did, for the record
+    }
+    const old=wallLineSegments("stone_wall",-141,-48,-141,48).length;
+    // ⚠ AND THE SHIPPED PLANNER MUST BE THE ONE DOING IT. The first cut of this gate replayed the
+    // arithmetic from PERSONALITIES and nothing else — a pure function of a data table, which is
+    // true whatever the planner does. Restoring the 96-unit line left it green (falsify m_curtain:
+    // 0 failures). A gate that cannot see the code it is about is a gate that has never been run.
+    const derives=ai.indexOf("const _half=P.walls*10.9/2;")>=0;
+    const oldSpan=ai.indexOf("tc[1]-48,front,tc[1]+48")>=0;
+    check("v134.9 curtain: every walling personality plans exactly as many segments as it can pay "+
+      "for ("+(rows.join(" · ")||"none wall")+") — the 96-unit line cut into "+old+
+      " and .slice(0,8) threw the last away, so a turtle that built every wall it had still left a "+
+      "segment-wide hole at one end, every game. Source: derives the length ("+derives+
+      "), fixed 96-unit line gone ("+!oldSpan+")"+(bad.length?" — BROKEN: "+bad.join(" · "):""),
+      bad.length===0&&old>8&&derives&&!oldSpan);
+  }
+
+  // --- 5. THE SQUARE'S TOWERS ARE NOT THE TOWN'S TOWERS.
+  {
+    // Two Guard Towers, one of them a bazaar tower. The town's budget must see one.
+    // ⚠ A DELTA, NOT TWO ABSOLUTES. The first cut asserted all===2 && own===1 and went red at
+    // "countBld sees 3, countScreenTowers sees 2": the campaign had already raised one of its own.
+    // What this gate is about is that ONE tagged tower is excluded, which is a difference.
+    const tc0=G.teamTC(0);
+    const base=G.countBld(0,"tower"), baseOwn=G.countScreenTowers(0);
+    const t1=G.makeBuilding(0,"tower",tc0.x+60,tc0.z+70,true);
+    const t2=G.makeBuilding(0,"tower",tc0.x+62,tc0.z-70,true); t2.bazTower=true;
+    const all=G.countBld(0,"tower")-base, own=G.countScreenTowers(0)-baseOwn;
+    t1.alive=false; t2.alive=false;
+    const tagged=ai.indexOf('makeBuilding(team,"tower",s.x,s.z,false).bazTower=true')>=0;
+    const budgets=ai.indexOf('countScreenTowers(team)))want="tower"')>=0;
+    check("v134.9 towers: a Guard Tower raised over a SQUARE is not charged to the town's own "+
+      "budget — of two staged, countBld counts "+all+" and countScreenTowers "+own+" (on top of "+
+      base+" the campaign already owned). Since v134.6 the war room "+
+      "gated its screen on countBld, so one bazaar tower spent one of a rush's two and holding a "+
+      "square quietly disarmed the town behind it. Tagged at birth ("+tagged+"), budget reads the "+
+      "narrow count ("+budgets+")",
+      all===2&&own===1&&tagged&&budgets);
+  }
+
+  // --- 4. THE PATROL WALKS OUTSIDE ITS OWN CORN.
+  {
+    // The waypoints the shipped source builds, replayed at the throne.
+    const pr=TC_RING+6, side=1, tc=TCPOS[0];
+    const wps=[{x:tc[0]+side*pr,z:tc[1]},{x:tc[0]+side*pr*0.7,z:tc[1]+pr*0.7},
+               {x:tc[0]-side*pr*0.85,z:tc[1]},{x:tc[0]+side*pr*0.7,z:tc[1]-pr*0.7}];
+    const ds=wps.map(w=>Math.hypot(w.x-tc[0],w.z-tc[1]));
+    const inside=ds.filter(d=>d<TC_RING).length;
+    const derives=ai.indexOf("const _pr=TC_RING+6;")>=0;
+    const oldBox=ai.indexOf("{x:tc[0]+side*15,z:tc[1]+11}")>=0;
+    check("v134.9 patrol: the base loop is a ring at TC_RING+6 — distances "+
+      ds.map(d=>d.toFixed(1)).join("/")+" from the throne, "+inside+" of 4 inside the farm ring. "+
+      "It was (15,11) (22,16) (4,-24) (26,-6), furthest 27.20 against a ring of 30, so every "+
+      "waypoint sat among this team's own fields. Derived from TC_RING now ("+derives+"), old box "+
+      "gone ("+!oldBox+")",
+      inside===0&&derives&&!oldBox&&Math.abs(Math.max(...ds)-(TC_RING+6))<0.01);
   }
 }
 
