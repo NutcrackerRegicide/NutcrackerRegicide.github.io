@@ -40,7 +40,7 @@ try{(0,eval)(fs.readFileSync(path.join(ROOT,"assets/anims.js"),"utf8"));}catch(e
 const order=["00-data","01-engine","02-world","03-buildings","04-units","05-combat",
   "06-input","07-ai","08-ui","09-main","10-net","11-audio","12-touch","13-deskui"];
 let bundle=order.map(f=>fs.readFileSync(path.join(ROOT,"js",f+".js"),"utf8")).join("\n");
-bundle+="\n;global.__M={MAP,TCPOS,roadPoint,LANE_Z,LANE_EDGE,TC_RING,BAZAAR_SITES,CREEP_SITES,neutralMarkets,walkable,buildings,BLD,wallLineSegments,validFor,units,tick,setGameOver,getT:()=>T,NET,menuUp:()=>inMenu,clock,directors,manageBands,directors,setAIDiff:v=>{aiDifficulty=v;},getAIDiff:()=>aiDifficulty,isWorker,CLS};";
+bundle+="\n;global.__M={MAP,TCPOS,roadPoint,LANE_Z,LANE_EDGE,TC_RING,BAZAAR_SITES,CREEP_SITES,neutralMarkets,walkable,buildings,BLD,wallLineSegments,validFor,units,tick,setGameOver,getT:()=>T,NET,menuUp:()=>inMenu,clock,directors,manageBands,stock,nodes,BAZ_TOWERS,teamAge,directors,setAIDiff:v=>{aiDifficulty=v;},getAIDiff:()=>aiDifficulty,isWorker,CLS,bSpace,bSurf,makeBuilding,BAZ_TOWER_GAP,BAZ_TOWER_OUT,bazTowerSpot,bazTowerWant};";
 try{(0,eval)(bundle);}catch(e){console.error("LOAD FAIL:",e.message);process.exit(1);}
 const M=global.__M;
 const {MAP,TCPOS,roadPoint,LANE_Z,LANE_EDGE}=M;
@@ -106,6 +106,17 @@ if(M.menuUp())M.NET.uiSolo();   // the war WAITS at the main menu (Trap #12)
 const BUCK=20, NB=Math.ceil(MAP.z*2/BUCK);
 const hist=[ new Array(NB).fill(0), new Array(NB).fill(0) ];
 const raw=[[],[]];
+// v134.10 the question John asked: how often does a square actually change hands, and can the
+// stone pay for two-to-four towers on each one?
+const _mk=M.neutralMarkets||[];
+const _own=_mk.map(m=>m.owner);
+const _lost=_mk.map(()=>[0,0]), _took=_mk.map(()=>[0,0]), _held=_mk.map(()=>[0,0]);
+const _stoneIn=[0,0], _stonePrev=[M.stock[0].stone,M.stock[1].stone];
+// v134.11 …AND WHEN EACH TEAM REACHES EACH AGE, because a Guard Tower is an AGE 3 building and
+// nothing above measures whether a marshal ever gets there. Four seeded twenty-minute campaigns
+// found one team of eight at age 3 and two still at age 0: the whole bazaar garrison, and the
+// castle, and the stone wall, exist only in games that run long enough to unlock them.
+const _ageAt=[{},{}], _agePrev=[M.teamAge[0]|0,M.teamAge[1]|0];
 const bi=(z)=>Math.max(0,Math.min(NB-1,Math.floor((z+MAP.z)/BUCK)));
 const FRONT=40;
 let seen=[0,0];
@@ -113,7 +124,14 @@ const frames=Math.round(MIN*60*30);
 for(let f=0;f<frames;f++){
   M.setGameOver(false); M.tick();
   if(f%30)continue;
+  for(let i=0;i<_mk.length;i++){
+    const now=_mk[i].owner, was=_own[i];
+    if(now!==was){ if(was===0||was===1)_lost[i][was]++; if(now===0||now===1)_took[i][now]++; _own[i]=now; }
+    if(now===0||now===1)_held[i][now]++;
+  }
   for(const t of [0,1]){
+    const s2=M.stock[t].stone; if(s2>_stonePrev[t])_stoneIn[t]+=s2-_stonePrev[t]; _stonePrev[t]=s2;
+    const a2=M.teamAge[t]|0; if(a2>_agePrev[t]){for(let k=_agePrev[t]+1;k<=a2;k++)_ageAt[t][k]=M.getT();_agePrev[t]=a2;}
     const wallX=TCPOS[t][0]+(t===0?1:-1)*FRONT;
     for(const u of M.units){
       if(!u.alive||u.team===t||u.isKing||M.isWorker(u))continue;
@@ -183,3 +201,44 @@ for(const D of M.directors){
     " in a band, "+loose+" loose, "+orph.length+" ORPHANED · "+D.bands.length+" bands ("+mission+
     " mission): "+D.bands.map(b=>b.role+":"+b.members.length).join(", "));
 }
+
+// --- 10. THE SQUARES: TURNOVER, AND WHETHER THE STONE PAYS FOR TOWERS ON THEM ------------------
+console.log("");
+console.log("10. WHAT A SQUARE COSTS TO KEEP ("+MIN+" min)");
+const TOWER_STONE=(M.BLD.tower.cost&&M.BLD.tower.cost.stone)||250;
+for(let i=0;i<_mk.length;i++){
+  const m=_mk[i];
+  console.log("   "+(m.what||"?").padEnd(6)+" ("+fx(m.x)+","+fx(m.z)+")  lost by blue "+_lost[i][0]+
+    " / red "+_lost[i][1]+"   took blue "+_took[i][0]+" / red "+_took[i][1]+
+    "   held-seconds blue "+_held[i][0]+" / red "+_held[i][1]+"   owner now "+m.owner);
+}
+console.log("");
+let piles=0, left=0;
+for(const n of M.nodes)if(n.type==="stone"){piles++; left+=n.amount;}
+for(const t of [0,1]){
+  const towers=M.buildings.filter(b=>b.alive&&b.team===t&&b.type==="tower").length;
+  const cas=M.buildings.filter(b=>b.alive&&b.team===t&&b.type==="castle").length;
+  const wl=M.buildings.filter(b=>b.alive&&b.team===t&&b.def.wall).length;
+  const baz=M.buildings.filter(b=>b.alive&&b.team===t&&b.type==="tower"&&
+    (_mk||[]).some(m=>Math.hypot(b.x-m.x,b.z-m.z)<28)).length;
+  const _ages=Object.keys(_ageAt[t]).map(k=>"age "+k+" at "+Math.round(_ageAt[t][k]/60)+"min").join(", ")||"never left age "+(M.teamAge[t]||0);
+  console.log("      reached: "+_ages+"   (Guard Tower unlocks at age "+(M.BLD.tower.age||0)+")");
+  console.log("   team"+t+" [age "+(M.teamAge[t]||0)+"]: mined "+Math.round(_stoneIn[t])+" stone, "+Math.round(M.stock[t].stone)+
+    " in hand · "+towers+" Guard Towers ("+baz+" of them ringing a square) · "+cas+" castles · "+
+    wl+" wall segments   [stone spent on towers "+(towers*TOWER_STONE)+"]");
+  for(let i=0;i<_mk.length;i++){
+    const m=_mk[i];
+    const ring=M.buildings.filter(b=>b.alive&&b.team===t&&b.type==="tower"&&
+      Math.hypot(b.x-m.x,b.z-m.z)<28);
+    if(!ring.length&&m.owner!==t)continue;
+    const bearings=ring.map(b=>Math.round(Math.atan2(b.z-m.z,b.x-m.x)*180/Math.PI));
+    let worst=360;
+    if(bearings.length>1){for(let j=0;j<bearings.length;j++)for(let k=j+1;k<bearings.length;k++){
+      let g=Math.abs(bearings[j]-bearings[k]); if(g>180)g=360-g; if(g<worst)worst=g; }}
+    console.log("      "+(m.what||"?").padEnd(6)+" owner "+m.owner+"  lost by this team "+
+      ((m.lost&&m.lost[t])||0)+"  -> wants "+M.bazTowerWant(t,m)+
+      ", has "+ring.length+(bearings.length>1?("  bearings ["+bearings.join(",")+"] closest pair "+worst+"deg"):""));
+  }
+}
+console.log("   the map still holds "+Math.round(left)+" stone in "+piles+" piles"+
+  "   ·  BAZ_TOWERS is currently "+M.BAZ_TOWERS);

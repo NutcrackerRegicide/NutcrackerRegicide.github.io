@@ -626,7 +626,22 @@ for(const _k in BLD)if(BLD[_k].rBlock===undefined)BLD[_k].rBlock=BLD[_k].r;
 BLD.towncenter.fxA=[11.26,11.46,8.50,9.50,11.88,9.10]; BLD.towncenter.fzA=[10.75,8.56,7.75,10.80,11.90,9.10];
 BLD.house.fxA=[4.47,3.70,3.70,3.90,3.20,3.60]; BLD.house.fzA=[4.70,3.50,3.70,3.70,3.10,3.30];
 BLD.barracks.fxA=[6.90,6.80,6.70,10.00,6.90,9.95]; BLD.barracks.fzA=[5.50,5.40,5.30,5.80,5.50,8.55];
-BLD.tower.fxA=[4.20,4.20,4.20,4.20,4.00,8.96]; BLD.tower.fzA=[6.30,6.30,6.30,6.30,4.00,9.03];
+// v134.11 ⚠ THE ENLIGHTENMENT ENTRY WAS THE PENTAGON'S BOUNDING BOX, TURNED. The bastion is
+// CylinderGeometry(5.4,6.6,4.2,5) with rotation.y = PI/5 (03-buildings.js), so its five corners
+// stand at 6.6 and it measures 6.28 x 6.60 in the frame the collider works in. 8.96 x 9.03 is what
+// you get by taking that geometry's AXIS-ALIGNED box — x +-6.277, z -5.339..6.6 — and pushing its
+// CORNERS through the same 36 degrees: 6.277*cos36 + 6.6*sin36 = 8.957, and 6.277*sin36 +
+// 6.6*cos36 = 9.029. Both to the hundredth, which is not a coincidence you argue with.
+// So every Guard Tower past Industrial has stood inside 2.68 x 2.43 of wall that is not there — and
+// the collider (05-combat.js:2352) reads this table in the building's OWN frame, where a rotated
+// box is simply the wrong shape. It is the same mistake v131.19 exists to fix, surviving inside its
+// own fix: that note measured the over-block of one baked maximum and never asked whether the
+// maximum itself was real.
+// Re-measured every vertex with tools/towerbox.js, which is also the instrument saying the rest of
+// this table is honest. Two other entries over-block — towncenter age 4 by 1.73, watch_tower age 1
+// by 0.58 — and are deliberately NOT touched here: the town centre's number feeds bSurf, and bSurf
+// feeds the hauler's deposit stop, which the note above bStand says is on a knife edge.
+BLD.tower.fxA=[4.20,4.20,4.20,4.20,4.00,6.28]; BLD.tower.fzA=[6.30,6.30,6.30,6.30,4.00,6.60];
 BLD.storage_pit.fxA=[6.22,6.22,6.22,6.22,6.22,6.22]; BLD.storage_pit.fzA=[5.70,5.70,5.70,5.70,5.70,5.70];
 BLD.archery_range.fxA=[6.00,6.00,5.91,6.40,7.83,7.83]; BLD.archery_range.fzA=[6.24,6.24,6.24,6.24,11.80,11.91];
 BLD.stable.fxA=[6.86,6.86,6.86,7.00,6.86,6.86]; BLD.stable.fzA=[8.10,8.10,8.10,8.10,8.10,8.10];
@@ -640,7 +655,7 @@ BLD.castle.fxA=[20.50,20.50,20.50,20.50,20.50,24.00]; BLD.castle.fzA=[22.57,22.5
 BLD.towncenter.fx=11.88; BLD.towncenter.fz=11.90;
 BLD.house.fx=4.47;       BLD.house.fz=4.70;
 BLD.barracks.fx=10.00;   BLD.barracks.fz=8.55;
-BLD.tower.fx=8.96;       BLD.tower.fz=9.03;    // blocker was INSIDE the walls: 2.36 of walk-through
+BLD.tower.fx=6.28;       BLD.tower.fz=6.60;    // v134.11: the max over ages, and the max moved
 BLD.storage_pit.fx=6.22; BLD.storage_pit.fz=5.70;
 BLD.archery_range.fx=7.83; BLD.archery_range.fz=11.91; // the age 4-5 gallery
 BLD.stable.fx=7.00;      BLD.stable.fz=8.10;

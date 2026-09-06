@@ -65,7 +65,8 @@ bundle+="\n;global.__G={units,buildings,neutralMarkets,buildingMesh,makeBuilding
   "isWorker,OX_MAX,OX_MIN_VILLS,OX_MIN_CUTTERS,OX_WOOD_WANT,OX_WOOD_FULL,manageBands,"+ // v134.4 the ox
   "bazaarWorth,HOLD_TOUR,"+                            // v134.5 what the squares pay
   "bazTowerSpot,BAZ_TOWERS,BAZ_TOWER_GAP,BAZ_TOWER_OUT,BAZ_TOWER_STONE,"+ // v134.6 towers on them
-  "bazTowerWant,BAZ_TOWERS_MIN,BAZ_TOWERS_MAX,bazaarTaken,"+              // v134.10 the garrison
+  "bazTowerWant,BAZ_TOWERS_MIN,BAZ_TOWERS_MAX,bazaarTaken,"+
+  "doctrineGuardAt,bSpace,"+                                // v134.11 the doctrine, and placement spacing              // v134.10 the garrison
   "farmFacing,"+                                       // v134.8 which way a barn faces
   "roadZAt,countScreenTowers,countBld,"+               // v134.9 the road, and the town's OWN towers
   // the bench drives moveToward directly, outside tick(), and both the watchdog and a detour's
@@ -7809,6 +7810,13 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
   //        biggest plaza in the middle of the map — the hardest of the three to hold, same pay.
   {
     const team=G.BLUE;
+    // ⚠ AND THE LOSS LEDGER IS STAGED TOO, because since v134.11 the ORDER reads it: a square this
+    // doctrine has been thrown off is guarded ahead of one it could take. This bench staged
+    // ownership and nothing else, so on any seed where the campaign had already lost BLUE a square
+    // the posting correctly went to the held one and the gate called it a regression. Sixth time in
+    // three versions — name the population the RULE reads, and stage THAT.
+    const _lost0=NM.map(q=>(q.lost||[0,0]).slice());
+    for(const q of NM)q.lost=[0,0];                     // nobody is pressed: take-first, as before
     setOwn([-1,-1,-1]);
     const p=G.bandHoldPoint(team,0);
     const grand=NM.find(m=>m.grand);
@@ -8131,18 +8139,38 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
   {
     const m=NM[0], keep=(m.lost||[0,0]).slice();
     const row=[];
+    const _p0=G.directors[G.BLUE].pers, _p1=G.directors[G.RED].pers;
+    G.directors[G.BLUE].pers="rush"; G.directors[G.RED].pers="rush";   // floor 2, the plainest case
     for(let n=0;n<=4;n++){ m.lost=[n,0]; row.push(G.bazTowerWant(G.BLUE,m)); }
     m.lost=[3,0];
     const otherTeam=G.bazTowerWant(G.RED,m);   // blue's losses are not red's problem
+    // v134.11 …AND THE FLOOR IS THE DOCTRINE'S. P.towers already says how tower-minded each one is.
+    const floors={}, ramps={};
+    for(const k of Object.keys(G.PERSONALITIES)){
+      G.directors[G.BLUE].pers=k;
+      m.lost=[0,0]; floors[k]=G.bazTowerWant(G.BLUE,m);
+      m.lost=[3,0]; ramps[k]=G.bazTowerWant(G.BLUE,m);
+    }
+    G.directors[G.BLUE].pers=_p0; G.directors[G.RED].pers=_p1;
     m.lost=keep;
+    const floorsSay=Object.keys(floors).map(k=>k+" "+floors[k]).join(", ");
+    const capped=Object.keys(ramps).every(k=>ramps[k]===G.BAZ_TOWERS_MAX);
+    const tracksTable=Object.keys(floors).every(k=>
+      floors[k]===Math.max(G.BAZ_TOWERS_MIN,Math.min(G.BAZ_TOWERS_MAX,G.PERSONALITIES[k].towers)));
     check("v134.10 garrison: a square this team has lost 0/1/2/3/4 times wants ["+row.join(", ")+
-      "] towers — two on one you hold, one more for each time it has been taken off you, to "+
+      "] towers — the doctrine's floor, one more for each time it has been taken off you, to "+
       G.BAZ_TOWERS_MAX+". Measured over four seeded 20-minute campaigns a team loses a given square "+
       "0 to 3 times (the Grand is where the churn is), so the ramp is scaled over what the map "+
       "actually produces. And one side's losses do not size the other's garrison ("+otherTeam+
       " for the team that never lost it)",
-      row[0]===G.BAZ_TOWERS_MIN&&row[1]===3&&row[2]===4&&row[3]===4&&row[4]===4&&
-      otherTeam===G.BAZ_TOWERS_MIN&&G.BAZ_TOWERS_MIN===2&&G.BAZ_TOWERS_MAX===4);
+      row[0]===G.BAZ_TOWERS_MIN&&row[1]===3&&row[2]===4&&row[3]===5&&row[4]===5&&
+      otherTeam===G.BAZ_TOWERS_MIN&&G.BAZ_TOWERS_MIN===2&&G.BAZ_TOWERS_MAX===5);
+    check("v134.11 doctrine: the garrison FLOOR is the doctrine's own tower appetite, read off "+
+      "PERSONALITIES.towers rather than typed a second time ("+floorsSay+") — so a turtle opens "+
+      "with four round every square it holds and a rush with two ("+tracksTable+"), and three "+
+      "losses takes every doctrine to the ceiling of "+G.BAZ_TOWERS_MAX+" ("+capped+"). John: "+
+      "\"the turtle marshal would be more inclined to defend their bazaar\"",
+      tracksTable&&capped&&floors.turtle>floors.rush);
   }
 
   // --- 3. THE RING IS A RING, not a huddle on the home-facing arc.
@@ -8205,8 +8233,11 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
       if(d<plaza+G.BAZ_TOWER_GAP-0.01)offPlaza=false;
       if(d>rng-1.4)inReach=false;
     }
-    // …and the same ring at Enlightenment, where the tower is twice the building. The marshal must
-    // take what fits and not stall: bazTowerSpot returns null and the war room moves on.
+    // v134.11 …AND THE SAME RING AT ENLIGHTENMENT, WHICH NOW HOLDS THE SAME NUMBER. It held two
+    // before, and the reason was never the ring: the table recorded the bastion at 8.96 x 9.03,
+    // which is that pentagon's axis-aligned box turned PI/5, and the building is 6.28 x 6.60. With
+    // the blocker measured off the model and the slots cut for BAZ_TOWERS_MAX, five seat at every
+    // age the Guard Tower exists in — measured offline at 40 trials a cell, mean 5.0.
     for(const b of put)b.alive=false;
     G.teamAge[0]=5; G.teamAge[1]=5;
     const put5=[];
@@ -8216,28 +8247,162 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
       put5.push(G.makeBuilding(team,"tower",sp.x,sp.z,true));
     }
     const fit5=put5.length;
+    // ⚠ AND THEY ARE NOT ON TOP OF EACH OTHER. Seating the count is worth nothing if the ring is
+    // only legal because something upstream stopped asking; the closest pair is measured against
+    // the distance validFor ACTUALLY refuses at, probed rather than restated.
+    let closest5=1e9;
+    for(let i=0;i<put5.length;i++)for(let j=i+1;j<put5.length;j++)
+      closest5=Math.min(closest5,Math.hypot(put5[i].x-put5[j].x,put5[i].z-put5[j].z));
+    const _probeFrom=put5.length?put5[0]:null;
     for(const b of put5)b.alive=false;
+    // walk a second tower in from far away until validFor refuses: that distance is the rule.
+    let refuse=0;
+    if(_probeFrom){
+      const anchor=G.makeBuilding(team,"tower",m.x+60,m.z+60,true);
+      let lo=1,hi=40;
+      for(let it=0;it<24;it++){
+        const mid=(lo+hi)/2;
+        if(G.validFor("tower",anchor.x+mid,anchor.z,team))hi=mid; else lo=mid;
+      }
+      refuse=hi; anchor.alive=false;
+    }
+    // v134.11 …AND A RING BUILT FOR TWO CAN STILL GROW TO FIVE, which is the whole point of cutting
+    // the slots for the maximum. v134.10 put each tower in the middle of the widest gap, so two of
+    // them landed opposite each other and the square could never reach five however long the match
+    // ran: a 180-degree arc holds ONE more at 71.2 degrees when five want 72.
+    G.teamAge[0]=4; G.teamAge[1]=4;
+    const _gp=G.directors[team].pers;
+    G.directors[team].pers="rush";                       // floor two, so the ring opens small
+    m.lost=[0,0];
+    const grow=[];
+    for(let i=0;i<G.bazTowerWant(team,m);i++){
+      const sp=G.bazTowerSpot(team,m); if(!sp)break;
+      grow.push(G.makeBuilding(team,"tower",sp.x,sp.z,true));
+    }
+    const grewFrom=grow.length;
+    m.lost=[3,0];                                        // …then it is taken off them three times
+    for(let i=grow.length;i<G.bazTowerWant(team,m);i++){
+      const sp=G.bazTowerSpot(team,m); if(!sp)break;
+      grow.push(G.makeBuilding(team,"tower",sp.x,sp.z,true));
+    }
+    const grewTo=grow.length;
+    for(const b of grow)b.alive=false;
+    G.directors[team].pers=_gp;
     G.teamAge[0]=_age0[0]; G.teamAge[1]=_age0[1];
     for(const b of _hid)b.alive=true;
     for(let i=0;i<NM.length;i++){NM[i].owner=own0[i];NM[i].lost=lost0[i];}
     const spreads=ai4.indexOf("const score=sep-Math.sqrt(d)*0.0008;")>=0;
     const fallback=ai4.indexOf("return best||near;")>=0;
+    const lattice=ai4.indexOf("(i%BAZ_TOWERS_MAX)*_step")>=0;
     check("v134.10 ring: a square lost twice is given "+put.length+" of "+want+" towers ("+
       _hid.length+" buildings stood aside first) and they "+
       "stand ROUND it — closest pair "+sep.toFixed(0)+"deg against a bar of "+minSep.toFixed(0)+
       "deg, three quarters of an even share (the spacing rule alone gives 56)"+
       ", all off the plaza ("+offPlaza+") and inside a tower's own reach of "+rng+" ("+inReach+
-      "). Keeping the spot nearest home is right for ONE tower and would put four on the same "+
-      "home-facing arc; separation is MAXIMISED now — each tower goes in the middle of the widest "+
-      "gap — with home as the tie-break ("+spreads+"), and the old rule kept as the fallback so a "+
-      "marshal that cannot build tidily still builds ("+fallback+")",
-      put.length===want&&sep>=minSep&&offPlaza&&inReach&&spreads&&fallback);
-    check("v134.10 ring: …and at Enlightenment the same ring holds "+fit5+", not "+want+" — a Guard "+
-      "Tower's footprint goes from 4.20x6.30 to 8.96x9.03 at age 5 and validFor spaces buildings by "+
-      "0.75 of the smaller one's width, so a 12.1-to-16.5 ring runs out of room. Swept offline at "+
-      "720 bearings x 9 radii on clear ground: four fit at ages 3 and 4, two at age 5. The marshal "+
-      "takes what fits and does not stall — bazTowerSpot answers null and the war room moves on",
-      fit5>=1&&fit5<want);
+      "). Keeping the spot nearest home is right for ONE tower and would put them all on the same "+
+      "home-facing arc; the slots are cut for "+G.BAZ_TOWERS_MAX+" and filled by the emptiest ("+
+      lattice+"), with home as the tie-break ("+spreads+") and the old rule kept as the fallback "+
+      "so a marshal that cannot build tidily still builds ("+fallback+")",
+      put.length===want&&sep>=minSep&&offPlaza&&inReach&&spreads&&fallback&&lattice);
+    check("v134.11 ring: …and the ring holds the SAME "+fit5+" of "+want+" at Enlightenment, where "+
+      "it held two — closest pair "+closest5.toFixed(2)+" against the "+refuse.toFixed(2)+
+      " validFor actually refuses at, probed by walking a second tower in rather than by restating "+
+      "_gapFor. The bastion measures 6.28x6.60; the table said 8.96x9.03, which is that pentagon's "+
+      "own bounding box turned PI/5, so the ring was losing two towers to a wall that is not there",
+      fit5===want&&closest5>=refuse-0.05&&refuse>18&&refuse<21);
+    check("v134.11 ring: …and a ring opened at a rush's floor of "+grewFrom+" still grows to "+
+      grewTo+" when the square is taken off it three times. The slots are cut for the most it "+
+      "could ever earn and the garrison size decides how many are FILLED, never where they are — "+
+      "v134.10 seated each tower in the middle of the widest gap, which put the first two opposite "+
+      "each other and capped the square at four for the rest of the match",
+      grewFrom===G.BAZ_TOWERS_MIN&&grewTo===G.BAZ_TOWERS_MAX);
+  }
+
+
+  // --- v134.11 THE BLOCKER IS THE MODEL, MEASURED — not the model's box, turned. --------------
+  {
+    // Build the Guard Tower at each age it exists in and measure it in the frame the collider works
+    // in: 05-combat.js:2352 rotates the body into the building's OWN frame, so a world-axis box is
+    // the wrong shape to begin with. EVERY VERTEX — pushing a geometry's axis-aligned box through a
+    // rotation measures the ROTATED BOX, which is strictly larger than the rotated shape and wildly
+    // larger for a five-sided cylinder. That is the mistake this gate exists to catch.
+    const meas=(age)=>{
+      const g=G.buildingMesh("tower",0,age,0,0);
+      g.updateMatrixWorld(true);
+      let fx=0,fz=0;
+      g.traverse(o=>{
+        if(!o.isMesh||!o.geometry||!o.geometry.attributes||!o.geometry.attributes.position)return;
+        const pos=o.geometry.attributes.position, mw=o.matrixWorld, v=new G.THREE.Vector3();
+        for(let i=0;i<pos.count;i++){
+          v.fromBufferAttribute(pos,i).applyMatrix4(mw);
+          if(Math.abs(v.x)>fx)fx=Math.abs(v.x);
+          if(Math.abs(v.z)>fz)fz=Math.abs(v.z);
+        }
+      });
+      return {fx,fz};
+    };
+    const rows=[]; let over=0, worst=-9;
+    for(let a=(G.BLD.tower.age||0);a<=5;a++){
+      const mm=meas(a), tx=G.BLD.tower.fxA[a], tz=G.BLD.tower.fzA[a];
+      const ox=tx-mm.fx, oz=tz-mm.fz;
+      if(ox>0.15||oz>0.15)over++;
+      if(Math.max(ox,oz)>worst)worst=Math.max(ox,oz);
+      rows.push("a"+a+" "+tx.toFixed(2)+"x"+tz.toFixed(2)+" vs "+mm.fx.toFixed(2)+"x"+mm.fz.toFixed(2));
+    }
+    // …and the OLD number is reproducible as the mistake, which is what makes this a diagnosis and
+    // not a guess. The five-gon's own axis-aligned box is x +-6.6*sin72, z out to 6.6; turn its
+    // corners by PI/5 and you get 8.957 and 9.029 — the shipped pair, to the hundredth.
+    const c=Math.cos(Math.PI/5), s5=Math.sin(Math.PI/5);
+    const boxX=6.6*Math.sin(Math.PI*2/5), boxZ=6.6;
+    const rotX=boxX*c+boxZ*s5, rotZ=boxX*s5+boxZ*c;
+    const reproduces=Math.abs(rotX-8.96)<0.01&&Math.abs(rotZ-9.03)<0.01;
+    // the max-over-ages single box moves with the table, or bSurf and bSteer keep the old wall
+    const mx=Math.max.apply(null,G.BLD.tower.fxA), mz=Math.max.apply(null,G.BLD.tower.fzA);
+    const maxMoved=Math.abs(G.BLD.tower.fx-mx)<0.001&&Math.abs(G.BLD.tower.fz-mz)<0.001;
+    check("v134.11 footprint: the Guard Tower's blocker never stands past its own model at any age "+
+      "("+rows.join(" · ")+"; worst over-block "+worst.toFixed(2)+", bar 0.15), and the single "+
+      "max-over-ages box moved with it ("+maxMoved+"). The shipped 8.96x9.03 at age 5 is exactly "+
+      "the bastion pentagon's axis-aligned box turned PI/5 — "+rotX.toFixed(3)+" and "+
+      rotZ.toFixed(3)+" ("+reproduces+") — so a body was stopped by 2.7 units of nothing and the "+
+      "bazaar ring lost two towers to it. The blocker is measured off the mesh, not off its box",
+      over===0&&reproduces&&maxMoved);
+  }
+
+  // --- v134.11 THE DOCTRINE DECIDES WHETHER TO GUARD OR TO TAKE. -------------------------------
+  {
+    const team=G.BLUE;
+    const own0=NM.map(q=>q.owner), lost0=NM.map(q=>(q.lost||[0,0]).slice());
+    const _p0=G.directors[team].pers;
+    // the ladder itself, derived from raidAt rather than typed: the earliest raider guards last.
+    const rung={}; for(const k of Object.keys(G.PERSONALITIES))rung[k]=G.doctrineGuardAt(G.PERSONALITIES[k]);
+    // one board, two doctrines: BLUE holds the first square and has been thrown off it twice; the
+    // other two are up for grabs and worth exactly as much to take.
+    for(const q of NM){q.owner=-1;q.lost=[0,0];}
+    NM[0].owner=team; NM[0].lost=[2,0];
+    G.directors[team].pers="turtle"; const tGo=G.bandHoldPoint(team,0);
+    const tGuards=!!(tGo.baz===NM[0]&&tGo.why==="guard");
+    G.directors[team].pers="rush";   const rGo=G.bandHoldPoint(team,0);
+    // ⚠ READ THE VERDICT BEFORE PUTTING THE BOARD BACK — the warning three benches above this one,
+    // and this bench walked straight into it. `baz` is a LIVE reference to the market object, so
+    // `rGo.baz.owner` asked after the restore reports whatever the campaign left there, not what
+    // the posting was made against. It read "a rush guards" on a rush that had correctly gone to
+    // take. Identity survives the restore, which is why the turtle half passed and hid it.
+    const rTakes=!!(rGo.baz&&rGo.baz!==NM[0]&&rGo.baz.owner!==team);
+    // …and with nobody pressed, BOTH go and take: the bar is losses, not taste.
+    NM[0].lost=[0,0];
+    G.directors[team].pers="turtle"; const tCalm=G.bandHoldPoint(team,0);
+    const calmTakes=!!(tCalm.baz&&tCalm.baz!==NM[0]&&tCalm.baz.owner!==team);
+    G.directors[team].pers=_p0;
+    for(let i=0;i<NM.length;i++){NM[i].owner=own0[i];NM[i].lost=lost0[i];}
+    const ladder=Object.keys(rung).map(k=>k+" "+rung[k]).join(", ");
+    check("v134.11 doctrine: on ONE board — a square held and lost twice, two more up for grabs — "+
+      "a turtle posts its first band to the square it has bled for ("+tGuards+") and a rush walks "+
+      "past it to take one of theirs ("+rTakes+"). Take-before-guard was UNCONDITIONAL for all "+
+      "four doctrines, so the personality reached the bazaars through nothing at all; bazaarWorth "+
+      "could not have carried it either, because it only sorts WITHIN each group. The bar is "+
+      "losses and not taste, so an unpressed turtle still goes and takes ("+calmTakes+"). "+
+      "Losses before a doctrine guards, off raidAt: "+ladder,
+      tGuards&&rTakes&&calmTakes&&rung.turtle===1&&rung.rush===4&&rung.turtle<rung.rush);
   }
 
   // --- 4. THE RESERVE IS THE KEEP'S OWN PRICE.
@@ -8601,19 +8766,40 @@ function OX_SHORT(){return Math.max(0,global.__G.OX_WOOD_WANT-200);}
   {
     const fs2=require("fs"), path2=require("path");
     const inp=fs2.readFileSync(path2.join(__dirname,"..","js","06-input.js"),"utf8");
-    // In updateGhostFollow, so it re-aims as he walks around the town; guarded by rotManual, so R
-    // takes it back; and R must SET that flag or the ghost snaps home the moment he lets go.
-    const inGhost=inp.indexOf('if(placing.type==="farm"&&!placing.rotManual)placing.rot=farmFacing(MYTEAM,')>=0;
-    const rKey=/placing\.rot=\(\(placing\.rot\|\|0\)\+Math\.PI\/4\)[\s\S]{0,400}?placing\.rotManual=true/.test(inp);
+    // ⚠ COMMENTS STRIPPED FIRST, and this gate is the reason the rule exists. Two of the reads
+    // below ask whether a form is GONE, and the comment that explains WHY it is gone names it —
+    // so the first cut went red on its own explanation, exactly as the v134.9 map gate did. A
+    // line-comment strip is the honest instrument: a read a comment can satisfy is a read a
+    // comment can also defeat. (Checked: no "//" inside a string literal on any line these
+    // searches touch, in either file.)
+    const _strip=(t)=>t.split(String.fromCharCode(10))
+      .map(l=>{const c=l.indexOf("//");return c<0?l:l.slice(0,c);}).join(String.fromCharCode(10));
+    // …and 07-ai.js is read HERE rather than borrowed from the block above: `ai4` is scoped to
+    // the v134.10 garrison gate, and reaching for it crashed the whole suite on load.
+    const aiSrc=fs2.readFileSync(path2.join(__dirname,"..","js","07-ai.js"),"utf8");
+    const inpC=_strip(inp), aiC=_strip(aiSrc);
+    const RKEY_RE=new RegExp("if\\(placing&&k===.r.\\)\\{[\\s\\S]{0,600}?placing\\.rot=\\(\\(placing\\.rot\\|\\|0\\)\\+Math\\.PI/4\\)");
+    // v134.12 THE GHOST DOES NOT AIM ITSELF, and this gate now says so from the other side. It
+    // asserted the auto-facing was PRESENT; the claim is that it is ABSENT, that R still turns the
+    // foundation, and that the rot still reaches the two places a rotation has to reach.
+    const inGhost=inpC.indexOf('placing.rot=farmFacing(MYTEAM,')>=0;      // must be GONE
+    const dead=inpC.indexOf('rotManual')>=0;                              // …and so must its flag
+    const rKey=RKEY_RE.test(inpC);
     // …and the value has to land in placing.rot rather than straight on the mesh, because that is
-    // the field the commit and the guest's build request both read (06-input.js:850/856).
-    const commits=inp.indexOf('makeBuilding(MYTEAM,placing.type,x,z,false,placing.rot||0)')>=0;
-    const guest=inp.indexOf('NET.guestAct({act:"build",type:placing.type,x:x,z:z,rot:placing.rot||0})')>=0;
-    check("v134.8 ghost: a player's farm turns itself the same way the AI's do — in "+
-      "updateGhostFollow ("+inGhost+"), overridable with R ("+rKey+"), and carried on placing.rot "+
-      "so the host's own commit ("+commits+") and a guest's build request ("+guest+") both ship "+
-      "the rotation without a second code path",
-      inGhost&&rKey&&commits&&guest);
+    // the field the commit and the guest's build request both read (06-input.js:850/856) — which is
+    // what makes R work for a farm at all, and for a guest. That plumbing is v134.8's and it stays.
+    const commits=inpC.indexOf('makeBuilding(MYTEAM,placing.type,x,z,false,placing.rot||0)')>=0;
+    const guest=inpC.indexOf('NET.guestAct({act:"build",type:placing.type,x:x,z:z,rot:placing.rot||0})')>=0;
+    // …and the AI's own farms still turn, because that is the half that was fixing a real overlap.
+    const aiTurns=aiC.indexOf('makeBuilding(team,"farm",fs.x,fs.z,false,farmFacing(team,fs.x,fs.z))')>=0;
+    check("v134.12 ghost: a player's farm does NOT aim itself — the per-frame auto-facing is gone "+
+      "("+(!inGhost)+") and so is the rotManual flag that only existed to hold it off ("+(!dead)+
+      "). R turns the foundation ("+rKey+") and the value still travels on placing.rot, so the "+
+      "host's commit ("+commits+") and a guest's build request ("+guest+") both carry it. THE AI "+
+      "STILL TURNS ITS OWN ("+aiTurns+"): unattended placement laps the Town Center box 104 times "+
+      "a campaign without it. John, playtesting: \"not a fan of how the farms rotate ... can we "+
+      "revert them back to where I can manually rotate them if I want to\"",
+      !inGhost&&!dead&&rKey&&commits&&guest&&aiTurns);
   }
 }
 

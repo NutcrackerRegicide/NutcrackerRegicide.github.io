@@ -202,10 +202,10 @@ addEventListener("keydown",e=>{
   }
   if(placing&&k==="r"){ // rotate the foundation
     placing.rot=((placing.rot||0)+Math.PI/4)%(Math.PI*2);
-    // v134.8: and from here on this placement is HIS. A farm's ghost turns its barn outward on
-    // every frame (updateGhostFollow), which without this flag would snap back the instant he let
-    // go of the key — an auto-orientation that cannot be overridden is a bug, not a convenience.
-    placing.rotManual=true;
+    // v134.12 rotManual is GONE with the thing it guarded. It existed only to stop the per-frame
+    // auto-facing snapping the ghost back the instant the key was released; with no auto-facing
+    // there is nothing to hold off, and a flag that guards nothing is a trap for whoever reads it
+    // next. Every placement is manual now, which is what it was before v134.8.
     if(ghost)ghost.rotation.y=placing.rot;
     return;
   }
@@ -701,13 +701,18 @@ function updateGhostFollow(){ // shared by host frame and guest frame
     return;
   }
   // stage-0 marker and every ordinary building: the classic follow
-  // v134.8 …and a FARM turns its barn away from whatever it is ringing, exactly as the AI's do.
-  // The ring binds the player identically — validFor is the one choke point — so his barns lap the
-  // same Town Center box, and a field he plants beside the AI's should not be the one facing the
-  // wrong way. Recomputed per frame because the anchor changes as he walks around the town; R
-  // stops it (rotManual), and the value lands in placing.rot so the commit and the guest's
-  // build request both carry it without a second code path.
-  if(placing.type==="farm"&&!placing.rotManual)placing.rot=farmFacing(MYTEAM,a.x,a.z);
+  // v134.12 THE PLAYER'S FIELDS DO NOT TURN THEMSELVES. v134.8 gave the ghost the AI's own facing
+  // rule, recomputed every frame, on the reasoning that "a field he plants beside the AI's should
+  // not be the one facing the wrong way". John playtested it: "not a fan of how the farms rotate
+  // around town center, storage pits etc — can we revert them back to where I can manually rotate
+  // them if I want to?" A convenience that re-aims a building under the cursor while you are
+  // trying to line it up is not a convenience, whatever it is optimising.
+  // So the ghost places square-on and R turns it, exactly as every other building has always
+  // worked. THE AI KEEPS ITS FACING — John's call, and the measured one: without it the marshals'
+  // barns lapped the Town Center and pit boxes 104 times a campaign, up to 0.47 deep. What was
+  // wrong was applying a rule about a bot's unattended placement to a man with a mouse.
+  // The rot PLUMBING stays: placing.rot still reaches makeBuilding and guestAct, which is what
+  // makes R work for a farm at all, and for a guest.
   ghost.position.set(a.x,terrainHeight(a.x,a.z),a.z);
   ghost.rotation.y=placing.rot||0;
   const ok=placementValid(a.x,a.z);

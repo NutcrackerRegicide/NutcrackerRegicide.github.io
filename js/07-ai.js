@@ -969,6 +969,20 @@ function bandCampTarget(D,team){
 // ⚠ IT IS NOT A PROPERTY OF THE BUILDING. The Grand's premium ended at v132.27; what survived it
 // was a Grand-first sort in the posting, which spent most of this AI's square-seconds on the
 // hardest square of the three (11.4 of plaza, in the middle of the map) for identical pay.
+// v134.11 HOW MANY TIMES A SQUARE HAS TO BE TAKEN OFF A DOCTRINE BEFORE IT GUARDS ONE AHEAD OF
+// TAKING ONE. Derived from raidAt — the hour a marshal first goes at the enemy, and the plainest
+// statement of aggression in PERSONALITIES: rush 80, expand 280, boom 400, turtle 600. The ends are
+// read off the table itself so a fifth doctrine cannot silently fall off either end of a pair of
+// typed constants. Against a measured 0..3 losses a square that puts turtle at 1 — it guards the
+// first time it is thrown off one — boom at 2, expand at 3, and rush at 4, which is to say never:
+// a rush would rather take yours than sit on its own, which is the whole of what John asked for.
+const _RAID_AT=Object.keys(PERSONALITIES).map(k=>PERSONALITIES[k].raidAt||0);
+const _RAID_LO=Math.min.apply(null,_RAID_AT), _RAID_HI=Math.max.apply(null,_RAID_AT);
+function doctrineGuardAt(P){
+  const r=(P&&P.raidAt)||_RAID_HI;
+  const aggr=(_RAID_HI>_RAID_LO)?(_RAID_HI-r)/(_RAID_HI-_RAID_LO):0;
+  return 1+Math.round(aggr*3);
+}
 function bazaarWorth(team,m){
   if(!m)return 0;
   const B=BAZ_YIELD_BY_HELD, cap=B.length-1;
@@ -996,7 +1010,12 @@ function bazaarWorth(team,m){
 // protect it." Measured over four seeded 20-minute campaigns, a team loses a given square 0 to 3
 // times — the Grand is where the churn is — so the ramp is scaled over that and not over a guess:
 // two on a square you hold, and one more for each time you have had it taken off you, to four.
-const BAZ_TOWERS_MIN=2, BAZ_TOWERS_MAX=4;
+// v134.11 …TO FIVE. John: "I would actually say two to 5 towers." The ceiling was four because the
+// ring held four; it holds five at every age the Guard Tower exists in once the Enlightenment
+// footprint is measured off the model instead of off its own bounding box (see 00-data.js) and the
+// slots are cut for five from the first tower onward. Measured, 40 trials a cell on cleared ground:
+// five seated at ages 3, 4 and 5, on the Grand and on both Viking squares, mean 5.0.
+const BAZ_TOWERS_MIN=2, BAZ_TOWERS_MAX=5;
 // …and the reserve moves with it. 150 was set when the whole feature was one tower a square; a
 // garrison that can want twelve would eat the keep behind it, and a CASTLE is 500 stone. Derived
 // from the castle rather than typed, so the two cannot drift apart.
@@ -1005,51 +1024,87 @@ const BAZ_TOWER_STONE=(BLD.castle.cost&&BLD.castle.cost.stone)||500;
 // kept for the exporter and the older gates: the FLOOR is what "how many towers a square gets"
 // meant when it was one number.
 const BAZ_TOWERS=BAZ_TOWERS_MIN;
+// v134.11 …AND THE DOCTRINE SETS THE FLOOR. John: "how a marshal handles the guard towers at the
+// bazaar should be in alignment with the marshal personality. For example the turtle marshal would
+// be more inclined to defend their bazaar while the rushing marshal is going to be more inclined to
+// capture the enemies bazaar vs defending their own."
+// THE FLOOR IS P.towers, WHICH THE TABLE ALREADY SAYS — rush 2, boom 2, expand 3, turtle 4. A second
+// per-personality number would be a copy of the first that nothing keeps in step; this is the same
+// statement ("how tower-minded is this doctrine") spent on a different budget, and the budgets have
+// been separate since v134.9, when countScreenTowers stopped counting bazaar towers against the
+// town's screen. So a turtle opens with four round every square it holds and reaches five the first
+// time one is taken off it; a rush opens with two and only reaches five if it is losing badly.
 function bazTowerWant(team,m){ // how big a garrison this square has earned
+  const P=(typeof directors!=="undefined"&&directors[team]&&PERSONALITIES[directors[team].pers])||null;
+  const floor=Math.max(BAZ_TOWERS_MIN,Math.min(BAZ_TOWERS_MAX,(P&&P.towers)||BAZ_TOWERS_MIN));
   const lost=(m&&m.lost&&m.lost[team])||0;
-  return Math.max(BAZ_TOWERS_MIN,Math.min(BAZ_TOWERS_MAX,BAZ_TOWERS_MIN+lost));
+  return Math.min(BAZ_TOWERS_MAX,floor+lost);
 }
+
 function bazTowerSpot(team,m){
   // a legal plot in the ring, preferring the side this throne is on: the villagers who build it
   // walk from home, and a tower on the far face is a two-minute march through the enemy's half.
   const tc=TCPOS[team], plaza=(m.plaza||8.6);
-  // ⚠ AND THE OUTER EDGE IS THE TOWER'S OWN REACH, not a fixed distance from the plaza. The Grand's
+  // AND THE OUTER EDGE IS THE TOWER'S OWN REACH, not a fixed distance from the plaza. The Grand's
   // plaza is 11.4 against 8.6 for the pair on the Viking roads, so plaza+3.5+7 puts a tower 21.9
   // out — past the 18 it can shoot, guarding the square by standing near it and watching. Caught by
   // the gate the moment it was written: "nearest 12.1, furthest 21.7 ... and a range of 18".
   const inner=plaza+BAZ_TOWER_GAP;
   const outer=Math.max(inner+1,Math.min(inner+BAZ_TOWER_OUT,(BLD.tower.atk.rng||18)-1.5));
-  // v134.10 …AND ROUND THE SQUARE, NOT IN A HUDDLE. Keeping the spot nearest home is right for ONE
-  // tower and wrong for four: they would all land on the same home-facing arc and leave the far
-  // face of the plaza covered by nothing. Each tower wants its share of the ring and will accept
-  // 0.6 of it; home stays the TIE-BREAK among the spots that clear that bar, so the v134.6 reason
-  // for preferring home — the villagers walk out from there — still decides between equals.
-  const want=bazTowerWant(team,m);
+  // v134.11 THE RING IS A LATTICE, AND IT IS LAID OUT FOR THE MOST THE SQUARE COULD EVER HOLD.
+  // v134.10 swept the ring and put each new tower in the middle of the widest gap, which is right
+  // for the tower being placed and wrong for the one after it: two towers seated opposite each
+  // other can NEVER grow into five, because each 180-degree arc then takes exactly one more. That
+  // is why the sweep topped out at four however the radius was sampled, and it is arithmetic rather
+  // than luck: five towers want 72 degrees between neighbours and a 180-degree arc holds one at
+  // 71.2.
+  // So the slots are cut once, for BAZ_TOWERS_MAX, and the garrison size decides how many are
+  // FILLED — never where they are. A square that earns its fifth tower in the twentieth minute puts
+  // it in a slot that was left standing empty for it in the third.
+  // THE RADIUS IS THE ONE THE SPACING NEEDS AT THAT SLOT COUNT, AT THE LARGEST THIS BUILDING EVER
+  // GETS. A lattice laid at the Classical footprint (6.30, so 18.6 between centres) stops accepting
+  // towers the moment the town reaches Enlightenment, where the bastion wants 19.2 — so the ring
+  // would quietly shrink by one at the age it is needed most. Reading every age costs one loop at
+  // placement time and makes the ring age-proof by construction.
+  let _w=0;
+  for(let a=(BLD.tower.age||0);a<=5;a++)
+    _w=Math.max(_w,2*Math.max(BLD.tower.fxA[a],BLD.tower.fzA[a]));
+  // validFor's own arithmetic for a tower against a tower (06-input.js _gapFor): the two footprints
+  // plus 0.75 of the smaller width, floored at 2.2 and capped at 6.0. Restated rather than shared
+  // because _gapFor is a closure inside validFor — so the gate PROBES validFor for the real refusal
+  // distance instead of replaying this sum, which is the only way the two can be held together.
+  const _need=_w+Math.max(2.2,Math.min(6.0,0.75*_w));
+  const _rLat=Math.max(inner,Math.min(outer,_need/(2*Math.sin(Math.PI/BAZ_TOWERS_MAX))));
+  const _step=Math.PI*2/BAZ_TOWERS_MAX;
   const held=[];
   for(const b of buildings)
     if(b.alive&&b.team===team&&b.type==="tower"&&dist2(b.x,b.z,m.x,m.z)<Math.pow(outer+3,2))
       held.push(Math.atan2(b.z-m.z,b.x-m.x));
-  // MAXIMISE the separation rather than threshold it. A pass/fail bar ("at least 0.6 of your
-  // share") has a failure mode with teeth: three towers land at 112/124/124 degrees, the fourth
-  // needs a 62-degree slot, the bar refuses everything and the square gets three. Scoring by
-  // separation puts each new tower in the MIDDLE of the widest gap, which is where four fit.
-  // Home is the tie-break, weighted so it decides between equals and never overrides the ring:
-  // a throne is ~200 units away, so 0.0008 rad a unit is about nine degrees of pull.
+  // the pattern is anchored on the FIRST tower that stood, so it never shifts under itself; with an
+  // empty ring it is anchored on the bearing home, which is where the first one wanted to be anyway.
+  const _anchor=held.length?held[0]:Math.atan2(tc[1]-m.z,tc[0]-m.x);
+  // how far a candidate may wander off its slot and still leave both neighbours their room. At the
+  // Enlightenment footprint this is nearly zero and the bearings are held exact; at the Medieval
+  // drum it is about seventeen degrees, and the ring looks placed rather than stamped.
+  const _slack=Math.max(0,_step-2*Math.asin(Math.min(1,_need/(2*_rLat))));
+  const _jit=_slack*0.8;
+  // AND THE RADIUS ONLY EVER WANDERS OUTWARD. _rLat is the radius at which the slot count EXACTLY
+  // fits, so a candidate half a unit inside it has a shorter chord than the spacing needs and the
+  // last tower is refused. Measured: a symmetric wobble of +-0.085 cost the fifth tower at age 5 on
+  // both squares, and the same sampler biased outward seats five at every age.
+  const _rj=Math.max(0,outer-_rLat);
   let best=null,bs=-1e12, near=null,nd=1e12;
-  // ⚠ AND THE RING IS SWEPT, NOT SPRINKLED. 36 independent random bearings cover a ring the way
-  // buckshot covers a wall, and once one tower stands, validFor refuses everything within 14 of it
-  // (r 4 + r 4 + the 6.0 spacing cap) — so the second call would look at 36 lucky-dip bearings and
-  // come back empty. The gate caught it on its first run: "1 of 4 towers". A swept bearing with a
-  // one-slot jitter visits every part of the ring exactly once. Two draws an iteration either way,
-  // so the count is unchanged.
   for(let i=0;i<36;i++){
-    const a=(i/36)*Math.PI*2+(Math.random()-0.5)*(Math.PI*2/36);
-    const r=inner+Math.random()*(outer-inner);
+    const a=_anchor+(i%BAZ_TOWERS_MAX)*_step+(Math.random()-0.5)*_jit;
+    const r=Math.max(inner,Math.min(outer,_rLat+Math.random()*_rj));
     const x=m.x+Math.cos(a)*r, z=m.z+Math.sin(a)*r;
     if(Math.abs(x)>MAP.x-6||Math.abs(z)>MAP.z-6)continue;
     if(!validFor("tower",x,z,team))continue;
     const d=dist2(x,z,tc[0],tc[1]);
     if(d<nd){nd=d;near={x,z};}                       // …the old rule, kept as the fallback
+    // the emptiest slot wins. Home is the tie-break, weighted so it decides between equals and
+    // never overrides the ring: a throne is ~200 units away, so 0.0008 rad a unit is about nine
+    // degrees of pull, against slots that stand 72 apart.
     let sep=Math.PI;
     for(const t of held){
       const g=Math.abs(((a-t+Math.PI*3)%(Math.PI*2))-Math.PI);
@@ -1092,9 +1147,21 @@ function bandHoldPoint(team,idx){ // the square that pays most, held or not, the
       dist2(a.x,a.z,TCPOS[team][0],TCPOS[team][1])-dist2(b.x,b.z,TCPOS[team][0],TCPOS[team][1]);
     // …and the ones we do NOT hold are spoken for first: a band that takes a square earns more than
     // a band that stands on one we already have. Guarding is what the spare bands are for.
+    // v134.11 …EXCEPT A SQUARE THIS DOCTRINE HAS ALREADY BEEN THROWN OFF. John: "the turtle marshal
+    // would be more inclined to defend their bazaar while the rushing marshal is going to be more
+    // inclined to capture the enemies bazaar vs defending their own." THIS LINE IS WHERE THAT LIVES
+    // and nothing was reading it: take-before-guard was unconditional, for all four doctrines, so a
+    // turtle sent its first bands at the enemy's squares exactly like a rush. bazaarWorth could not
+    // have carried it either — it only sorts WITHIN each group, and the groups are hard-ordered
+    // here, above it.
+    // The bar is LOSSES, not taste, so a doctrine nobody is pressing still goes and takes: sitting
+    // on a square that pays nothing extra while the enemy sweeps the board is not defence.
+    const _guardAt=doctrineGuardAt(directors[team]&&PERSONALITIES[directors[team].pers]);
+    const _pressed=(q)=>(((q.lost&&q.lost[team])||0)>=_guardAt);
     const want=neutralMarkets.filter(m=>m.owner!==team).sort(_rank);
     const mine=neutralMarkets.filter(m=>m.owner===team).sort(_rank);
-    const order=want.concat(mine);
+    const _bled=mine.filter(_pressed), _calm=mine.filter(q=>!_pressed(q));
+    const order=_bled.concat(want,_calm);
     const m=order[idx%order.length];
     return {x:m.x,z:m.z,why:m.owner===team?"guard":"bazaar",baz:m};
   }
